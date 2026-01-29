@@ -1,0 +1,17 @@
+# Makefile.local - Private overrides (not tracked in git)
+# Copy this file to Makefile.local and customize as needed
+#
+# Example custom targets:
+
+.PHONY: lfg dev-tunnel
+
+# Quick start: start + attach in one command
+lfg: ## Start dashboard and drop into cockpit
+	@$(MAKE) ensure
+	@$(MAKE) attach
+
+# Example: start with cloudflare tunnel for remote access
+dev-tunnel: ## Start with tunnel for remote access
+	@$(MAKE) ensure
+	@echo "Starting tunnel..."
+	# cloudflared tunnel --url http://localhost:$(PORT)
