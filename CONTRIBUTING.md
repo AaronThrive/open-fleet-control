@@ -1,6 +1,6 @@
 # Contributing to MoltBot Command Center
 
-> *"Join the Swarm. Evolve together."*
+> _"Join the Swarm. Evolve together."_
 
 First off, thank you for considering contributing to MoltBot Command Center! This project thrives on community involvement.
 
@@ -29,26 +29,30 @@ This project adheres to our [Code of Conduct](./CODE_OF_CONDUCT.md). By particip
 ### Development Setup
 
 1. **Fork the repository**
-   
+
    Click the "Fork" button on GitHub to create your own copy.
 
 2. **Clone your fork**
+
    ```bash
    git clone https://github.com/YOUR_USERNAME/openclaw-command-center.git
    cd openclaw-command-center
    ```
 
 3. **Add upstream remote**
+
    ```bash
    git remote add upstream https://github.com/jontsai/openclaw-command-center.git
    ```
 
 4. **Install dependencies**
+
    ```bash
    npm install
    ```
 
 5. **Create configuration**
+
    ```bash
    cp config/dashboard.example.json config/dashboard.json
    ```
@@ -63,6 +67,7 @@ This project adheres to our [Code of Conduct](./CODE_OF_CONDUCT.md). By particip
 ### Types of Contributions
 
 We welcome:
+
 - 🐛 Bug fixes
 - ✨ New features
 - 📚 Documentation improvements
@@ -79,6 +84,7 @@ We welcome:
 ### Branch Naming
 
 Use descriptive branch names:
+
 ```
 feature/add-session-filtering
 fix/overlord-connection-timeout
@@ -89,6 +95,7 @@ refactor/simplify-creep-cache
 ## 📤 Pull Request Process
 
 ### 1. Create Your Branch
+
 ```bash
 git checkout main
 git pull upstream main
@@ -96,19 +103,23 @@ git checkout -b feature/your-feature-name
 ```
 
 ### 2. Make Your Changes
+
 - Write clean, documented code
 - Add tests for new functionality
 - Update documentation if needed
 - Follow the [style guidelines](#style-guidelines)
 
 ### 3. Test Your Changes
+
 ```bash
 npm test
 npm run lint
 ```
 
 ### 4. Commit Your Changes
+
 Follow [Conventional Commits](https://www.conventionalcommits.org/):
+
 ```bash
 git commit -m "feat: add overlord heartbeat indicator"
 git commit -m "fix: resolve session timeout on reconnect"
@@ -116,9 +127,11 @@ git commit -m "docs: clarify API authentication flow"
 ```
 
 ### 5. Push and Create PR
+
 ```bash
 git push origin feature/your-feature-name
 ```
+
 Then open a Pull Request on GitHub.
 
 ### 6. PR Review
@@ -130,6 +143,7 @@ Then open a Pull Request on GitHub.
 ### PR Checklist
 
 Before submitting, ensure:
+
 - [ ] Code follows project style guidelines
 - [ ] Tests pass locally (`npm test`)
 - [ ] Lint passes (`npm run lint`)
@@ -150,6 +164,7 @@ Before submitting, ensure:
 ### Thematic Naming
 
 Embrace the Starcraft theme when naming:
+
 ```javascript
 // ✅ Good
 const overlordStatus = await checkEssence();
@@ -193,10 +208,11 @@ AI agents are welcome contributors! If you're an AI working on this project:
 ## 🙏 Recognition
 
 Contributors will be recognized in:
+
 - GitHub Contributors list
 - Release notes for significant contributions
 - Our eternal gratitude 🐛
 
 ---
 
-*"The Swarm welcomes all who serve the greater purpose."*
+_"The Swarm welcomes all who serve the greater purpose."_

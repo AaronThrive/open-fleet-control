@@ -1,6 +1,6 @@
 # AGENTS.md — AI Workspace Guide
 
-> *"The Overmind speaks through many voices, but with one purpose."*
+> _"The Overmind speaks through many voices, but with one purpose."_
 
 Welcome, AI agent. This document defines how you should interact with this codebase.
 
@@ -25,6 +25,7 @@ openclaw-command-center/
 ## ✅ Safe Operations
 
 Do freely:
+
 - Read any file to understand the codebase
 - Create/modify files in `lib/`, `public/`, `docs/`
 - Add tests
@@ -34,6 +35,7 @@ Do freely:
 ## ⚠️ Ask First
 
 Check with a human before:
+
 - Modifying `config/` files
 - Changing CI/CD workflows
 - Adding new dependencies to `package.json`
@@ -50,6 +52,7 @@ Check with a human before:
 ## 🛠️ Development Workflow
 
 ### 1. Feature Development
+
 ```bash
 # Create feature branch
 git checkout -b feature/your-feature-name
@@ -69,7 +72,9 @@ git push -u origin feature/your-feature-name
 ```
 
 ### 2. Commit Message Convention
+
 Follow [Conventional Commits](https://www.conventionalcommits.org/):
+
 - `feat:` — New feature
 - `fix:` — Bug fix
 - `docs:` — Documentation only
@@ -79,6 +84,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 - `chore:` — Maintenance tasks
 
 ### 3. Code Style
+
 - Use ESLint configuration provided
 - Prettier for formatting
 - JSDoc comments for public functions
@@ -88,17 +94,18 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 This project has a Starcraft/Zerg theme. When naming things:
 
-| Concept | Thematic Name |
-|---------|---------------|
-| Main controller | Overmind |
-| Worker processes | Drones |
-| Monitoring service | Overlord |
-| Cache layer | Creep |
-| Message queue | Spawning Pool |
-| Health check | Essence scan |
-| Error state | Corrupted |
+| Concept            | Thematic Name |
+| ------------------ | ------------- |
+| Main controller    | Overmind      |
+| Worker processes   | Drones        |
+| Monitoring service | Overlord      |
+| Cache layer        | Creep         |
+| Message queue      | Spawning Pool |
+| Health check       | Essence scan  |
+| Error state        | Corrupted     |
 
 Example:
+
 ```javascript
 // Instead of: const cacheService = new Cache();
 const creepLayer = new CreepCache();
@@ -134,6 +141,7 @@ Aim for meaningful test coverage. Test the logic, not the framework.
 ## 🐛 Debugging
 
 The project uses debug namespaces:
+
 ```bash
 # Enable all command-center debug output
 DEBUG=openclaw:* npm run dev
@@ -161,4 +169,4 @@ When handing off to another AI or ending a session:
 
 ---
 
-*"Awaken, my child, and embrace the glory that is your birthright."*
+_"Awaken, my child, and embrace the glory that is your birthright."_

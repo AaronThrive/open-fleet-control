@@ -1,6 +1,6 @@
 # Code of Conduct
 
-> *"The Swarm is united. Division is corruption."*
+> _"The Swarm is united. Division is corruption."_
 
 ## Our Pledge
 
@@ -14,26 +14,27 @@ We pledge to act and interact in ways that contribute to an open, welcoming, div
 
 Examples of behavior that contributes to a positive environment:
 
-* **Being respectful** — Treating all contributors with dignity
-* **Being constructive** — Providing helpful feedback focused on improvement
-* **Being empathetic** — Understanding different perspectives and experiences
-* **Being collaborative** — Working together toward shared goals
-* **Being graceful** — Accepting responsibility and apologizing when we make mistakes
-* **Focusing on the work** — Prioritizing what's best for the community and project
+- **Being respectful** — Treating all contributors with dignity
+- **Being constructive** — Providing helpful feedback focused on improvement
+- **Being empathetic** — Understanding different perspectives and experiences
+- **Being collaborative** — Working together toward shared goals
+- **Being graceful** — Accepting responsibility and apologizing when we make mistakes
+- **Focusing on the work** — Prioritizing what's best for the community and project
 
 ### Unacceptable Behaviors
 
 Examples of unacceptable behavior:
 
-* Trolling, insulting/derogatory comments, and personal or political attacks
-* Public or private harassment
-* Publishing others' private information without explicit permission
-* Sexual language, imagery, or unwelcome advances
-* Other conduct which could reasonably be considered inappropriate in a professional setting
+- Trolling, insulting/derogatory comments, and personal or political attacks
+- Public or private harassment
+- Publishing others' private information without explicit permission
+- Sexual language, imagery, or unwelcome advances
+- Other conduct which could reasonably be considered inappropriate in a professional setting
 
 ## Scope
 
 This Code of Conduct applies within all community spaces, including:
+
 - GitHub repository (issues, PRs, discussions)
 - Any associated chat channels
 - Project events or meetups
@@ -54,18 +55,22 @@ All reporters will be protected. We will maintain confidentiality regarding the 
 Community leaders will follow these guidelines in determining consequences:
 
 #### 1. Correction
+
 **Impact:** Minor unprofessional behavior.
 **Consequence:** Private written warning with clarity around the violation. A public apology may be requested.
 
 #### 2. Warning
+
 **Impact:** A violation through a single incident or series of actions.
 **Consequence:** Warning with consequences for continued behavior. No interaction with the people involved for a specified period. This includes avoiding interactions in community spaces as well as external channels.
 
 #### 3. Temporary Ban
+
 **Impact:** A serious violation of community standards.
 **Consequence:** Temporary ban from any sort of interaction or public communication with the community for a specified period.
 
 #### 4. Permanent Ban
+
 **Impact:** Demonstrating a pattern of violation of community standards.
 **Consequence:** Permanent ban from any sort of public interaction within the community.
 
@@ -79,4 +84,4 @@ This Code of Conduct is adapted from the [Contributor Covenant](https://www.cont
 
 ---
 
-*"In unity, the Swarm finds strength."*
+_"In unity, the Swarm finds strength."_

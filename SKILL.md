@@ -60,12 +60,12 @@ Edit `config/dashboard.json`:
 
 ### Auth Modes
 
-| Mode | Description |
-|------|-------------|
-| `none` | No authentication (local only) |
-| `tailscale` | Tailscale identity headers |
-| `cloudflare` | Cloudflare Access headers |
-| `token` | Bearer token (`DASHBOARD_TOKEN` env var) |
+| Mode         | Description                              |
+| ------------ | ---------------------------------------- |
+| `none`       | No authentication (local only)           |
+| `tailscale`  | Tailscale identity headers               |
+| `cloudflare` | Cloudflare Access headers                |
+| `token`      | Bearer token (`DASHBOARD_TOKEN` env var) |
 
 ## Makefile Commands
 
@@ -80,13 +80,13 @@ make attach   # Attach to tmux session
 
 ## Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | Server port | 3333 |
-| `DASHBOARD_AUTH_MODE` | Auth mode | tailscale |
-| `DASHBOARD_TOKEN` | Bearer token (if mode=token) | — |
-| `DASHBOARD_ALLOWED_USERS` | Comma-separated allowed users | — |
-| `LINEAR_API_KEY` | Linear API key for integration | — |
+| Variable                  | Description                    | Default   |
+| ------------------------- | ------------------------------ | --------- |
+| `PORT`                    | Server port                    | 3333      |
+| `DASHBOARD_AUTH_MODE`     | Auth mode                      | tailscale |
+| `DASHBOARD_TOKEN`         | Bearer token (if mode=token)   | —         |
+| `DASHBOARD_ALLOWED_USERS` | Comma-separated allowed users  | —         |
+| `LINEAR_API_KEY`          | Linear API key for integration | —         |
 
 ## Standalone Installation
 

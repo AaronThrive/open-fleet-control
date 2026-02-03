@@ -35,6 +35,7 @@ Dashboard runs at http://localhost:3333
 ### Zero-Config Experience
 
 The dashboard **auto-detects** your OpenClaw workspace by checking:
+
 1. `$OPENCLAW_WORKSPACE` environment variable
 2. `~/openclaw-workspace` or `~/.openclaw-workspace`
 3. `~/molty`, `~/clawd`, `~/moltbot` (common names)
@@ -45,29 +46,29 @@ If you have an existing workspace with `memory/` or `state/` directories, it wil
 
 ### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | Server port | `3333` |
-| `OPENCLAW_WORKSPACE` | Workspace root directory | `~/.openclaw-workspace` |
-| `OPENCLAW_MEMORY_DIR` | Memory/logs directory | `$WORKSPACE/memory` |
-| `OPENCLAW_STATE_DIR` | State files directory | `$WORKSPACE/state` |
-| `OPENCLAW_CEREBRO_DIR` | Cerebro topic directory | `$WORKSPACE/cerebro` |
-| `OPENCLAW_JOBS_DIR` | Jobs definitions directory | `$WORKSPACE/jobs` |
-| `OPENCLAW_SKILLS_DIR` | Skills directory | `$WORKSPACE/skills` |
+| Variable               | Description                | Default                 |
+| ---------------------- | -------------------------- | ----------------------- |
+| `PORT`                 | Server port                | `3333`                  |
+| `OPENCLAW_WORKSPACE`   | Workspace root directory   | `~/.openclaw-workspace` |
+| `OPENCLAW_MEMORY_DIR`  | Memory/logs directory      | `$WORKSPACE/memory`     |
+| `OPENCLAW_STATE_DIR`   | State files directory      | `$WORKSPACE/state`      |
+| `OPENCLAW_CEREBRO_DIR` | Cerebro topic directory    | `$WORKSPACE/cerebro`    |
+| `OPENCLAW_JOBS_DIR`    | Jobs definitions directory | `$WORKSPACE/jobs`       |
+| `OPENCLAW_SKILLS_DIR`  | Skills directory           | `$WORKSPACE/skills`     |
 
 ### Authentication
 
-| Variable | Description |
-|----------|-------------|
-| `DASHBOARD_AUTH_MODE` | Auth mode: `none`, `token`, `tailscale`, `cloudflare`, `allowlist` |
-| `DASHBOARD_TOKEN` | Bearer token (when mode=`token`) |
-| `DASHBOARD_ALLOWED_USERS` | Comma-separated allowed users |
-| `DASHBOARD_ALLOWED_IPS` | Comma-separated allowed IPs (when mode=`allowlist`) |
+| Variable                  | Description                                                        |
+| ------------------------- | ------------------------------------------------------------------ |
+| `DASHBOARD_AUTH_MODE`     | Auth mode: `none`, `token`, `tailscale`, `cloudflare`, `allowlist` |
+| `DASHBOARD_TOKEN`         | Bearer token (when mode=`token`)                                   |
+| `DASHBOARD_ALLOWED_USERS` | Comma-separated allowed users                                      |
+| `DASHBOARD_ALLOWED_IPS`   | Comma-separated allowed IPs (when mode=`allowlist`)                |
 
 ### Integration
 
-| Variable | Description |
-|----------|-------------|
+| Variable         | Description                          |
+| ---------------- | ------------------------------------ |
 | `LINEAR_API_KEY` | Linear API key for issue integration |
 
 ## Using with Makefile
