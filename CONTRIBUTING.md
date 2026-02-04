@@ -1,8 +1,8 @@
-# Contributing to MoltBot Command Center
+# Contributing to OpenClaw Command Center
 
 > _"Join the Swarm. Evolve together."_
 
-First off, thank you for considering contributing to MoltBot Command Center! This project thrives on community involvement.
+First off, thank you for considering contributing to OpenClaw Command Center! This project thrives on community involvement.
 
 ## 📋 Table of Contents
 
@@ -12,6 +12,7 @@ First off, thank you for considering contributing to MoltBot Command Center! Thi
 - [Making Contributions](#making-contributions)
 - [Pull Request Process](#pull-request-process)
 - [Style Guidelines](#style-guidelines)
+- [Publishing to ClawHub](#publishing-to-clawhub)
 - [For AI Contributors](#for-ai-contributors)
 
 ## 📜 Code of Conduct
@@ -86,7 +87,7 @@ We welcome:
 Use descriptive branch names:
 
 ```
-feature/add-session-filtering
+feat/add-session-filtering
 fix/overlord-connection-timeout
 docs/update-api-reference
 refactor/simplify-creep-cache
@@ -99,7 +100,7 @@ refactor/simplify-creep-cache
 ```bash
 git checkout main
 git pull upstream main
-git checkout -b feature/your-feature-name
+git checkout -b feat/your-feature-name
 ```
 
 ### 2. Make Your Changes
@@ -129,7 +130,7 @@ git commit -m "docs: clarify API authentication flow"
 ### 5. Push and Create PR
 
 ```bash
-git push origin feature/your-feature-name
+git push origin feat/your-feature-name
 ```
 
 Then open a Pull Request on GitHub.
@@ -166,16 +167,14 @@ Before submitting, ensure:
 Embrace the Starcraft theme when naming:
 
 ```javascript
-// ✅ Good
+// Good
 const overlordStatus = await checkEssence();
 const creepCache = new CreepLayer();
 
-// ❌ Less thematic
+// Less thematic
 const monitorStatus = await healthCheck();
 const cacheLayer = new CacheService();
 ```
-
-See [SOUL.md](./SOUL.md) for the full thematic guide.
 
 ### Documentation
 
@@ -184,14 +183,75 @@ See [SOUL.md](./SOUL.md) for the full thematic guide.
 - Keep README and docs in sync with code
 - Add inline comments for complex logic
 
+## 📦 Publishing to ClawHub
+
+This skill is distributed via [ClawHub](https://clawhub.ai). After changes are merged to `main`, maintainers publish updates to the registry.
+
+### Prerequisites
+
+```bash
+# Install clawhub CLI (if not already installed)
+# See https://clawhub.ai for installation instructions
+
+# Authenticate
+clawhub login
+clawhub whoami   # verify
+```
+
+> **Registry URL workaround:** If you encounter connection or redirect issues
+> (e.g. during login, publish, or install), override the registry URL:
+>
+> ```bash
+> export CLAWHUB_REGISTRY=https://www.clawhub.ai
+> # or pass inline:
+> clawhub --registry https://www.clawhub.ai publish ...
+> ```
+>
+> This is needed until the upstream `.well-known` redirect is fixed.
+
+### Publishing a New Version
+
+1. **Bump the version** in `package.json`
+2. **Publish:**
+
+   ```bash
+   clawhub publish . --slug command-center --version <new-version> \
+     --changelog "Description of changes"
+   ```
+
+   Or use auto-sync to detect and bump automatically:
+
+   ```bash
+   clawhub sync --bump patch --changelog "Description of changes"
+   ```
+
+### Version Bumping
+
+Follow [semver](https://semver.org/):
+
+| Change type                   | Bump    | Example         |
+| ----------------------------- | ------- | --------------- |
+| Bug fixes, minor tweaks       | `patch` | `0.1.0 → 0.1.1` |
+| New features, backward compat | `minor` | `0.1.0 → 0.2.0` |
+| Breaking changes              | `major` | `0.1.0 → 1.0.0` |
+
+### Verifying a Publish
+
+```bash
+# Check the published version
+clawhub inspect command-center
+
+# Install into a workspace to test
+clawhub install command-center
+```
+
 ## 🤖 For AI Contributors
 
 AI agents are welcome contributors! If you're an AI working on this project:
 
 1. **Read the context files first**
    - [AGENTS.md](./AGENTS.md) — Your workspace guide
-   - [SOUL.md](./SOUL.md) — Project personality
-   - [USER.md](./USER.md) — Human operator context
+   - [SKILL.md](./SKILL.md) — ClawHub skill metadata
 
 2. **Follow the same PR process** as human contributors
 

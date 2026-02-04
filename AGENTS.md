@@ -6,20 +6,32 @@ Welcome, AI agent. This document defines how you should interact with this codeb
 
 ## 🎯 Mission
 
-MoltBot Command Center is the central dashboard for AI assistant management. Your mission is to help build, maintain, and improve this system while maintaining the Starcraft/Zerg thematic elements that make it unique.
+OpenClaw Command Center is the central dashboard for AI assistant management. Your mission is to help build, maintain, and improve this system while maintaining the Starcraft/Zerg thematic elements that make it unique.
 
 ## 📁 Workspace Structure
 
 ```
 openclaw-command-center/
-├── lib/                    # YOUR DOMAIN — Core logic lives here
-│   ├── api/               # Express routes
-│   ├── services/          # Business logic
-│   └── utils/             # Helpers
+├── lib/                    # Core server logic
+│   ├── server.js           # Main HTTP server and API routes
+│   ├── config.js           # Configuration loader with auto-detection
+│   ├── jobs.js             # Jobs/scheduler API integration
+│   ├── linear-sync.js      # Linear issue tracker integration
+│   └── topic-classifier.js # NLP-based topic classification
 ├── public/                 # Frontend assets
-├── docs/                   # Documentation
+│   ├── index.html          # Main dashboard UI
+│   └── jobs.html           # Jobs management UI
+├── scripts/                # Operational scripts
+│   ├── setup.sh            # First-time setup
+│   ├── start.sh            # Start server (with optional tunnel)
+│   ├── stop.sh             # Stop server
+│   └── tmux-dashboard.sh   # Multi-pane tmux layout
 ├── config/                 # Configuration (be careful!)
-└── .github/               # CI/CD and templates
+│   └── dashboard.example.json
+├── docs/                   # Documentation
+├── tests/                  # Test files
+├── SKILL.md                # ClawHub skill metadata
+└── package.json            # Version and dependencies
 ```
 
 ## ✅ Safe Operations
@@ -27,7 +39,7 @@ openclaw-command-center/
 Do freely:
 
 - Read any file to understand the codebase
-- Create/modify files in `lib/`, `public/`, `docs/`
+- Create/modify files in `lib/`, `public/`, `docs/`, `tests/`
 - Add tests
 - Update documentation
 - Create feature branches
@@ -55,12 +67,9 @@ Check with a human before:
 
 ```bash
 # Create feature branch
-git checkout -b feature/your-feature-name
+git checkout -b feat/your-feature-name
 
-# Make changes
-# ...
-
-# Test locally
+# Make changes, then test locally
 npm test
 npm run lint
 
@@ -68,7 +77,7 @@ npm run lint
 git commit -m "feat: add overlord status indicator"
 
 # Push and create PR
-git push -u origin feature/your-feature-name
+git push -u origin feat/your-feature-name
 ```
 
 ### 2. Commit Message Convention
@@ -89,6 +98,66 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 - Prettier for formatting
 - JSDoc comments for public functions
 - Meaningful variable names (thematic names encouraged!)
+
+## 📦 ClawHub Skill Workflow
+
+This project is distributed as a ClawHub skill. After changes are merged to `main`, they need to be published to the registry so users can install/update via `clawhub install command-center`.
+
+### Understanding Skill Metadata
+
+Two files control the skill identity:
+
+- **`SKILL.md`** — Frontmatter (`name`, `description`) used by ClawHub for discovery and search
+- **`package.json`** — `version` field is the source of truth for the published version
+
+### Publishing Updates
+
+```bash
+# 1. Authenticate (one-time)
+clawhub login
+clawhub whoami
+
+# 2. Bump version in package.json (follow semver)
+#    patch: bug fixes         (0.1.0 → 0.1.1)
+#    minor: new features      (0.1.0 → 0.2.0)
+#    major: breaking changes  (0.1.0 → 1.0.0)
+
+# 3. Publish
+clawhub publish . --slug command-center --version <new-version> \
+  --changelog "Description of what changed"
+
+# Or auto-detect changes and bump:
+clawhub sync --bump patch --changelog "Description of what changed"
+```
+
+> **Registry URL workaround:** If you hit connection or redirect errors,
+> override the registry:
+>
+> ```bash
+> export CLAWHUB_REGISTRY=https://www.clawhub.ai
+> ```
+>
+> This is needed until the upstream `.well-known` redirect is fixed.
+
+### Verifying a Publish
+
+```bash
+# Check published metadata
+clawhub inspect command-center
+
+# Test install into a workspace
+clawhub install command-center --workdir /path/to/workspace
+```
+
+### Updating an Installed Skill
+
+Users update with:
+
+```bash
+clawhub update command-center
+```
+
+The installed version is tracked in `.clawhub/origin.json` within the skill directory.
 
 ## 🎨 Thematic Guidelines
 
@@ -129,9 +198,6 @@ When you add features, document them:
 # Run all tests
 npm test
 
-# Run specific test file
-npm test -- lib/services/overlord.test.js
-
 # Coverage report
 npm run test:coverage
 ```
@@ -139,8 +205,6 @@ npm run test:coverage
 Aim for meaningful test coverage. Test the logic, not the framework.
 
 ## 🐛 Debugging
-
-The project uses debug namespaces:
 
 ```bash
 # Enable all command-center debug output
@@ -162,8 +226,7 @@ When handing off to another AI or ending a session:
 
 ## 📚 Key Resources
 
-- [SOUL.md](./SOUL.md) — Project personality and values
-- [USER.md](./USER.md) — Human operator context
+- [SKILL.md](./SKILL.md) — ClawHub skill metadata
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — Contribution guidelines
 - [docs/](./docs/) — Detailed documentation
 
