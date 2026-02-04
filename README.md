@@ -100,7 +100,9 @@ lfg: ## Start and attach in one command
 	@$(MAKE) attach
 ```
 
-## ClawHub Installation
+## ClawHub
+
+**Registry:** https://www.clawhub.ai/jontsai/command-center
 
 ```bash
 clawhub install command-center
