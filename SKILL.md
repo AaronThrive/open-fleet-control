@@ -1,6 +1,6 @@
 ---
 name: command-center
-version: 1.0.1
+version: 1.0.4
 description: Mission control dashboard for OpenClaw - real-time session monitoring, LLM usage tracking, cost intelligence, and system vitals. View all your AI agents in one place.
 metadata:
   openclaw:
@@ -46,11 +46,11 @@ The dashboard auto-detects your OpenClaw workspace. Set `OPENCLAW_WORKSPACE` to 
 
 ### Authentication
 
-| Mode | Use Case |
-|------|----------|
-| `none` | Local development |
-| `token` | Remote access |
-| `tailscale` | Team VPN |
+| Mode         | Use Case          |
+| ------------ | ----------------- |
+| `none`       | Local development |
+| `token`      | Remote access     |
+| `tailscale`  | Team VPN          |
 | `cloudflare` | Public deployment |
 
 ```bash
@@ -59,13 +59,14 @@ DASHBOARD_AUTH_MODE=tailscale node lib/server.js
 
 ## API
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/state` | All dashboard data (unified) |
-| `GET /api/events` | SSE stream for live updates |
-| `GET /api/health` | Health check |
+| Endpoint          | Description                  |
+| ----------------- | ---------------------------- |
+| `GET /api/state`  | All dashboard data (unified) |
+| `GET /api/events` | SSE stream for live updates  |
+| `GET /api/health` | Health check                 |
 
 ## Links
 
 - [GitHub](https://github.com/jontsai/openclaw-command-center)
+- [ClawHub](https://www.clawhub.ai/jontsai/command-center)
 - [Documentation](https://github.com/jontsai/openclaw-command-center#readme)

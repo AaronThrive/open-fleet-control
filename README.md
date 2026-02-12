@@ -4,8 +4,11 @@
 
 **Mission control for your AI agents**
 
+[![CI](https://github.com/jontsai/openclaw-command-center/actions/workflows/ci.yml/badge.svg)](https://github.com/jontsai/openclaw-command-center/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![ClawHub](https://img.shields.io/badge/ClawHub-command--center-blue)](https://www.clawhub.ai/jontsai/command-center)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/jontsai/openclaw-command-center/pulls)
 
 [Features](#features) • [Quick Start](#quick-start) • [Security](#-security) • [Configuration](#configuration)
 
@@ -51,14 +54,14 @@ Command Center gives you **real-time visibility** into your OpenClaw deployment 
 
 Command Center takes security seriously:
 
-| Feature | Description |
-|---------|-------------|
-| **Auth Modes** | Token, Tailscale, Cloudflare Access, IP allowlist |
-| **No external calls** | Dashboard runs 100% locally — no telemetry, no CDNs |
-| **Localhost default** | Binds to `127.0.0.1` by default |
-| **Read-only by default** | View your agents without exposing control |
-| **No secrets in UI** | API keys, tokens never displayed |
-| **Audit logging** | Know who accessed what, when |
+| Feature                  | Description                                         |
+| ------------------------ | --------------------------------------------------- |
+| **Auth Modes**           | Token, Tailscale, Cloudflare Access, IP allowlist   |
+| **No external calls**    | Dashboard runs 100% locally — no telemetry, no CDNs |
+| **Localhost default**    | Binds to `127.0.0.1` by default                     |
+| **Read-only by default** | View your agents without exposing control           |
+| **No secrets in UI**     | API keys, tokens never displayed                    |
+| **Audit logging**        | Know who accessed what, when                        |
 
 ```bash
 # Secure deployment example (Tailscale)
@@ -70,18 +73,18 @@ DASHBOARD_AUTH_MODE=tailscale node lib/server.js
 
 ## Features
 
-| Feature | Description |
-|---------|-------------|
-| 📊 **Session Monitoring** | Real-time view of active AI sessions |
-| ⛽ **LLM Fuel Gauges** | Token usage, costs, quota remaining |
-| 💻 **System Vitals** | CPU, memory, disk, temperature |
-| ⏰ **Cron Jobs** | View and manage scheduled tasks |
-| 🧠 **Cerebro Topics** | Automatic conversation tagging |
-| 👥 **Operators** | Who's talking to your agents |
-| 📝 **Memory Browser** | View agent memory files |
-| 🔒 **Privacy Controls** | Hide sensitive topics for demos/screenshots |
-| 💰 **Cost Breakdown** | Detailed per-model cost analysis |
-| 📈 **Savings Projections** | Monthly cost vs. manual estimates |
+| Feature                    | Description                                 |
+| -------------------------- | ------------------------------------------- |
+| 📊 **Session Monitoring**  | Real-time view of active AI sessions        |
+| ⛽ **LLM Fuel Gauges**     | Token usage, costs, quota remaining         |
+| 💻 **System Vitals**       | CPU, memory, disk, temperature              |
+| ⏰ **Cron Jobs**           | View and manage scheduled tasks             |
+| 🧠 **Cerebro Topics**      | Automatic conversation tagging              |
+| 👥 **Operators**           | Who's talking to your agents                |
+| 📝 **Memory Browser**      | View agent memory files                     |
+| 🔒 **Privacy Controls**    | Hide sensitive topics for demos/screenshots |
+| 💰 **Cost Breakdown**      | Detailed per-model cost analysis            |
+| 📈 **Savings Projections** | Monthly cost vs. manual estimates           |
 
 ---
 
@@ -130,21 +133,21 @@ If you have `memory/` or `state/` directories, you're good to go.
 
 ### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | Server port | `3333` |
+| Variable             | Description    | Default     |
+| -------------------- | -------------- | ----------- |
+| `PORT`               | Server port    | `3333`      |
 | `OPENCLAW_WORKSPACE` | Workspace root | Auto-detect |
-| `OPENCLAW_PROFILE` | Profile name | (none) |
+| `OPENCLAW_PROFILE`   | Profile name   | (none)      |
 
 ### 🔒 Authentication
 
-| Mode | Use Case | Config |
-|------|----------|--------|
-| `none` | Local dev | `DASHBOARD_AUTH_MODE=none` |
-| `token` | API access | `DASHBOARD_AUTH_MODE=token DASHBOARD_TOKEN=secret` |
-| `tailscale` | Team access | `DASHBOARD_AUTH_MODE=tailscale` |
-| `cloudflare` | Public deploy | `DASHBOARD_AUTH_MODE=cloudflare` |
-| `allowlist` | IP whitelist | `DASHBOARD_AUTH_MODE=allowlist DASHBOARD_ALLOWED_IPS=...` |
+| Mode         | Use Case      | Config                                                    |
+| ------------ | ------------- | --------------------------------------------------------- |
+| `none`       | Local dev     | `DASHBOARD_AUTH_MODE=none`                                |
+| `token`      | API access    | `DASHBOARD_AUTH_MODE=token DASHBOARD_TOKEN=secret`        |
+| `tailscale`  | Team access   | `DASHBOARD_AUTH_MODE=tailscale`                           |
+| `cloudflare` | Public deploy | `DASHBOARD_AUTH_MODE=cloudflare`                          |
+| `allowlist`  | IP whitelist  | `DASHBOARD_AUTH_MODE=allowlist DASHBOARD_ALLOWED_IPS=...` |
 
 ### 📋 Recommended OpenClaw Settings
 
@@ -158,7 +161,7 @@ Enable threading for all messages to get proper topic tracking:
 # In your OpenClaw config (gateway.yaml or via openclaw gateway config)
 slack:
   capabilities:
-    threading: all  # Options: all, dm, group, none
+    threading: all # Options: all, dm, group, none
 ```
 
 **Why this matters:** Without threading, the dashboard can't track conversation topics properly. Each thread becomes a trackable unit of work.
@@ -169,7 +172,7 @@ Use descriptive session labels for better dashboard visibility:
 
 ```yaml
 sessions:
-  labelFormat: "{channel}:{topic}"  # Customize as needed
+  labelFormat: "{channel}:{topic}" # Customize as needed
 ```
 
 #### Cerebro (Topic Tracking)
@@ -194,7 +197,7 @@ Running multiple OpenClaw instances?
 # Production dashboard
 node lib/server.js --profile production --port 3333
 
-# Development dashboard  
+# Development dashboard
 node lib/server.js --profile dev --port 3334
 ```
 
@@ -204,13 +207,13 @@ node lib/server.js --profile dev --port 3334
 
 Command Center exposes a REST API:
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/state` | **Unified state** — all dashboard data in one call |
-| `GET /api/health` | Health check |
-| `GET /api/vitals` | System metrics |
-| `GET /api/sessions` | Active sessions |
-| `GET /api/events` | SSE stream for real-time updates |
+| Endpoint            | Description                                        |
+| ------------------- | -------------------------------------------------- |
+| `GET /api/state`    | **Unified state** — all dashboard data in one call |
+| `GET /api/health`   | Health check                                       |
+| `GET /api/vitals`   | System metrics                                     |
+| `GET /api/sessions` | Active sessions                                    |
+| `GET /api/events`   | SSE stream for real-time updates                   |
 
 ---
 
@@ -238,13 +241,13 @@ command-center/
 
 Building on OpenClaw's native cron system with intelligent scheduling primitives:
 
-| Primitive | Description |
-|-----------|-------------|
-| **run-if-not** | Skip if job already running (dedupe) |
-| **run-if-idle** | Only execute when system capacity available |
-| **run-after** | Dependency chains between jobs |
-| **run-with-backoff** | Exponential retry on failure |
-| **priority-queue** | Critical vs. background work prioritization |
+| Primitive            | Description                                 |
+| -------------------- | ------------------------------------------- |
+| **run-if-not**       | Skip if job already running (dedupe)        |
+| **run-if-idle**      | Only execute when system capacity available |
+| **run-after**        | Dependency chains between jobs              |
+| **run-with-backoff** | Exponential retry on failure                |
+| **priority-queue**   | Critical vs. background work prioritization |
 
 ### Multi-Agent Orchestration
 
@@ -381,6 +384,6 @@ MIT © [Jonathan Tsai](https://github.com/jontsai)
 
 <div align="center">
 
-**[ClawHub](https://clawhub.ai)** · **[OpenClaw](https://github.com/openclaw/openclaw)** · **[Discord](https://discord.gg/clawd)**
+**[Install from ClawHub](https://www.clawhub.ai/jontsai/command-center)** · **[OpenClaw](https://github.com/openclaw/openclaw)** · **[Discord](https://discord.gg/clawd)**
 
 </div>

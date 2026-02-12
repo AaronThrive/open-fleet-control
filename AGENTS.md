@@ -4,6 +4,19 @@
 
 Welcome, AI agent. This document defines how you should interact with this codebase.
 
+## ⚠️ CRITICAL: Pull Request Workflow
+
+**All changes to this repository MUST go through pull requests.**
+
+This is a public open source project. Even maintainers (including AI agents working on behalf of maintainers) must:
+
+1. Create a feature branch (`git checkout -b type/description`)
+2. Make changes and commit
+3. Push branch and open a PR
+4. Get approval before merging
+
+**Never push directly to `main`.** This applies to everyone, including the repo owner.
+
 ## 🎯 Mission
 
 OpenClaw Command Center is the central dashboard for AI assistant management. Your mission is to help build, maintain, and improve this system while maintaining the Starcraft/Zerg thematic elements that make it unique.
@@ -13,6 +26,7 @@ OpenClaw Command Center is the central dashboard for AI assistant management. Yo
 **Read First**: [`docs/architecture/OVERVIEW.md`](docs/architecture/OVERVIEW.md)
 
 Key architectural principles:
+
 1. **DRY** — Don't Repeat Yourself. Extract shared code to partials/modules.
 2. **Zero Build Step** — Plain HTML/CSS/JS, no compilation needed.
 3. **Real-Time First** — SSE for live updates, polling as fallback.
@@ -70,12 +84,26 @@ Check with a human before:
 
 ## 🚫 Never
 
+- **Push directly to `main` branch** — ALL changes require PRs
 - Commit secrets, API keys, or credentials
+- Commit user-specific data files (see `public/data/AGENTS.md`)
 - Delete files without confirmation
-- Push directly to `main` branch
 - Expose internal endpoints publicly
 
 ## 🛠️ Development Workflow
+
+### 0. First-Time Setup
+
+```bash
+# Install pre-commit hooks (required for all contributors)
+make install-hooks
+
+# Or manually:
+cp scripts/pre-commit .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+The pre-commit hook enforces rules from this file automatically.
 
 ### 1. Feature Development
 
@@ -86,6 +114,7 @@ git checkout -b feat/your-feature-name
 # Make changes, then test locally
 npm test
 npm run lint
+make check  # Run pre-commit checks manually
 
 # Commit with descriptive message
 git commit -m "feat: add overlord status indicator"
@@ -121,8 +150,20 @@ This project is distributed as a ClawHub skill. After changes are merged to `mai
 
 Two files control the skill identity:
 
-- **`SKILL.md`** — Frontmatter (`name`, `description`) used by ClawHub for discovery and search
-- **`package.json`** — `version` field is the source of truth for the published version
+- **`SKILL.md`** — Frontmatter (`name`, `version`, `description`) used by ClawHub for discovery and search
+- **`package.json`** — `version` field for npm compatibility
+
+⚠️ **CRITICAL: Version Sync Required**
+
+Both `package.json` and `SKILL.md` **MUST have the same version number**. This is enforced by pre-commit hooks.
+
+```bash
+# If you change version in one file, change it in both:
+# package.json:  "version": "1.0.4"
+# SKILL.md:      version: 1.0.4
+```
+
+The pre-commit hook will block commits if versions are out of sync.
 
 ### Publishing Updates
 
@@ -165,6 +206,27 @@ clawhub update command-center
 ```
 
 The installed version is tracked in `.clawhub/origin.json` within the skill directory.
+
+### Who Can Publish?
+
+Only maintainers with ClawHub credentials for `jontsai/command-center` can publish. Currently:
+
+- @jontsai (owner)
+
+Contributors: Submit PRs. After merge, a maintainer will handle the ClawHub publish.
+
+### Release Checklist
+
+Before publishing a new version:
+
+1. [ ] All PRs for the release are merged to `main`
+2. [ ] Version bumped in both `package.json` and `SKILL.md` frontmatter
+3. [ ] CHANGELOG updated (if maintained)
+4. [ ] Tests pass: `npm test`
+5. [ ] Lint passes: `npm run lint`
+6. [ ] Git tag created: `git tag -a v<version> -m "v<version>"`
+7. [ ] Tag pushed: `git push origin --tags`
+8. [ ] Published to ClawHub with changelog
 
 ## 🎨 Thematic Guidelines
 
@@ -234,31 +296,37 @@ When handing off to another AI or ending a session:
 ## 📖 Lessons Learned
 
 ### DRY is Non-Negotiable
+
 **Problem**: Sidebar was duplicated across `index.html` and `jobs.html`, causing inconsistencies.
 **Solution**: Extract to `/partials/sidebar.html` + `/js/sidebar.js` for loading.
 **Lesson**: When you see similar code in multiple places, stop and extract it. The cost of extraction is always lower than maintaining duplicates.
 
 ### Naming Consistency Matters
+
 **Problem**: "Scheduled Jobs" vs "Cron Jobs" vs "Jobs" caused confusion.
 **Solution**: Established naming convention: "Cron Jobs" for OpenClaw scheduled tasks, "AI Jobs" for advanced agent jobs.
 **Lesson**: Agree on terminology early. Document it. Enforce it.
 
 ### Zero-Build Architecture Has Trade-offs
+
 **Context**: No build step keeps things simple but limits some patterns.
 **Solution**: Use `fetch()` to load partials dynamically, `<script>` for shared JS.
 **Lesson**: This works well for dashboards. Evaluate trade-offs for your use case.
 
 ### SSE Connection Per Component = Wasteful
+
 **Problem**: Multiple components each opening SSE connections.
 **Solution**: Single SSE connection in `sidebar.js`, shared state management.
 **Lesson**: Centralize real-time connections. Components subscribe to state, not sources.
 
 ### Test After Every Significant Change
+
 **Problem**: Easy to break things when refactoring HTML structure.
 **Solution**: `make restart` + browser check after each change.
 **Lesson**: Keep feedback loops tight. Visual changes need visual verification.
 
 ### Document Architectural Decisions
+
 **Problem**: Future agents (or humans) don't know why things are the way they are.
 **Solution**: Create `docs/architecture/OVERVIEW.md` and ADRs.
 **Lesson**: Write down the "why", not just the "what".
