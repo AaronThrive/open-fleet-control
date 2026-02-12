@@ -42,9 +42,10 @@ config/dashboard.json
 config/local.json
 !config/*.example.json
 
-# Operator data (keep example)
+# User-specific data (keep examples)
 public/data/operators.json
-!public/data/operators.json.example
+public/data/privacy-settings.json
+!public/data/*.example
 
 # Local Makefile overrides
 Makefile.local
