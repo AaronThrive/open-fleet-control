@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "operators": [
+    {
+      "id": "U00000000",
+      "name": "example-user",
+      "username": "example",
+      "source": "slack",
+      "firstSeen": "2026-01-01T00:00:00.000Z",
+      "lastSeen": null,
+      "sessionCount": 100
+    }
+  ],
+  "roles": {},
+  "lastRefreshed": 0
+}
