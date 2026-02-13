@@ -20,11 +20,8 @@ Mission control for your AI workforce.
 ## Quick Start
 
 ```bash
-# Install from ClawHub
-clawhub install command-center
-
-# Start the dashboard
-cd ~/.openclaw/skills/command-center
+npx clawhub@latest install command-center
+cd skills/command-center
 node lib/server.js
 ```
 

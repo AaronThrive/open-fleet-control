@@ -90,30 +90,24 @@ DASHBOARD_AUTH_MODE=tailscale node lib/server.js
 
 ## Quick Start
 
-### Option 1: ClawHub (Recommended)
-
 ```bash
-clawhub install command-center
+npx clawhub@latest install command-center
 cd skills/command-center
 node lib/server.js
 ```
 
-### Option 2: Git Clone
+**Dashboard runs at http://localhost:3333** 🎉
+
+<details>
+<summary>Alternative: Git clone</summary>
 
 ```bash
 git clone https://github.com/jontsai/openclaw-command-center
 cd openclaw-command-center
-npm install  # Optional: only for dev tools
 node lib/server.js
 ```
 
-### Option 3: One-liner
-
-```bash
-npx degit jontsai/openclaw-command-center dashboard && cd dashboard && node lib/server.js
-```
-
-**Dashboard runs at http://localhost:3333** 🎉
+</details>
 
 ---
 
