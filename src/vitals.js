@@ -332,8 +332,110 @@ function getSystemVitals() {
   };
 }
 
+/**
+ * Check for optional system dependencies.
+ * Returns structured results and logs hints once at startup.
+ */
+let cachedDeps = null;
+
+async function checkOptionalDeps() {
+  const isLinux = process.platform === "linux";
+  const isMacOS = process.platform === "darwin";
+  const platform = isLinux ? "linux" : isMacOS ? "darwin" : null;
+  const results = [];
+
+  if (!platform) {
+    cachedDeps = results;
+    return results;
+  }
+
+  const fs = require("fs");
+  const path = require("path");
+  const depsFile = path.join(__dirname, "..", "config", "system-deps.json");
+  let depsConfig;
+  try {
+    depsConfig = JSON.parse(fs.readFileSync(depsFile, "utf8"));
+  } catch {
+    cachedDeps = results;
+    return results;
+  }
+
+  const deps = depsConfig[platform] || [];
+  const home = require("os").homedir();
+
+  // Detect package manager
+  let pkgManager = null;
+  if (isLinux) {
+    for (const pm of ["apt", "dnf", "yum", "pacman", "apk"]) {
+      const has = await runCmd(`which ${pm}`, { fallback: "" });
+      if (has) {
+        pkgManager = pm;
+        break;
+      }
+    }
+  } else if (isMacOS) {
+    const hasBrew = await runCmd("which brew", { fallback: "" });
+    if (hasBrew) pkgManager = "brew";
+  }
+
+  // Detect chip for condition filtering
+  let isAppleSilicon = false;
+  if (isMacOS) {
+    const chip = await runCmd("sysctl -n machdep.cpu.brand_string", { fallback: "" });
+    isAppleSilicon = /apple/i.test(chip);
+  }
+
+  for (const dep of deps) {
+    // Skip deps that don't apply to this hardware
+    if (dep.condition === "intel" && isAppleSilicon) continue;
+
+    let installed = false;
+    const hasBinary = await runCmd(`which ${dep.binary} 2>/dev/null`, { fallback: "" });
+    if (hasBinary) {
+      installed = true;
+    } else if (isMacOS && dep.binary === "osx-cpu-temp") {
+      const homebin = await runCmd(`test -x ${home}/bin/osx-cpu-temp && echo ok`, {
+        fallback: "",
+      });
+      if (homebin) installed = true;
+    }
+
+    const installCmd = dep.install[pkgManager] || null;
+
+    results.push({
+      id: dep.id,
+      name: dep.name,
+      purpose: dep.purpose,
+      affects: dep.affects,
+      installed,
+      installCmd,
+      url: dep.url || null,
+    });
+  }
+
+  cachedDeps = results;
+
+  // Log hints for missing deps
+  const missing = results.filter((d) => !d.installed);
+  if (missing.length > 0) {
+    console.log("[Startup] Optional dependencies for enhanced vitals:");
+    for (const dep of missing) {
+      const action = dep.installCmd || dep.url || "see docs";
+      console.log(`   \u{1F4A1} ${dep.name} \u2014 ${dep.purpose}: ${action}`);
+    }
+  }
+
+  return results;
+}
+
+function getOptionalDeps() {
+  return cachedDeps;
+}
+
 module.exports = {
   refreshVitalsAsync,
   getSystemVitals,
+  checkOptionalDeps,
+  getOptionalDeps,
   VITALS_CACHE_TTL,
 };
