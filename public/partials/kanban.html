@@ -596,7 +596,7 @@
       </div>
     </div>
 
-    <div class="kb-loading" id="kb-loading">Loading board...</div>
+    <div class="kb-loading" id="kb-loading" data-i18n="views.kanban.loading">Loading board...</div>
 
     <div class="empty-state" id="kanban-empty-state" hidden>
       <div class="empty-state-icon">📋</div>
@@ -612,8 +612,11 @@
     <div class="kb-board" id="kanban-board" hidden></div>
     <div class="kb-move-hint" id="kb-move-hint" hidden></div>
     <div class="kb-kbd-hint" id="kb-kbd-hint" hidden>
-      <kbd>Tab</kbd>: navigate · <kbd>M</kbd>: move mode · <kbd>Arrows</kbd>: move ·
-      <kbd>Enter</kbd>: confirm · <kbd>Esc</kbd>: cancel
+      <kbd>Tab</kbd><span data-i18n="views.kanban.kbdNavigate">: navigate</span> · <kbd>M</kbd
+      ><span data-i18n="views.kanban.kbdMoveMode">: move mode</span> · <kbd>Arrows</kbd
+      ><span data-i18n="views.kanban.kbdMove">: move</span> · <kbd>Enter</kbd
+      ><span data-i18n="views.kanban.kbdConfirm">: confirm</span> · <kbd>Esc</kbd
+      ><span data-i18n="views.kanban.kbdCancel">: cancel</span>
     </div>
     <div class="kb-visually-hidden" id="kb-live" aria-live="polite" role="status"></div>
   </section>
@@ -625,23 +628,31 @@
     role="dialog"
     aria-modal="true"
     aria-label="Task details"
+    data-i18n-aria-label="views.kanban.drawerAria"
     hidden
   >
     <div class="kb-drawer-head">
       <span class="kb-drawer-id" id="kb-drawer-id"></span>
-      <button class="kb-drawer-close" id="kb-drawer-close" title="Close">✕</button>
+      <button
+        class="kb-drawer-close"
+        id="kb-drawer-close"
+        title="Close"
+        data-i18n-title="views.kanban.close"
+      >
+        ✕
+      </button>
     </div>
 
     <div class="kb-field">
-      <label for="kb-f-title">Title</label>
+      <label for="kb-f-title" data-i18n="views.kanban.fieldTitle">Title</label>
       <input id="kb-f-title" data-field="title" type="text" maxlength="200" />
     </div>
     <div class="kb-field">
-      <label for="kb-f-description">Description</label>
+      <label for="kb-f-description" data-i18n="views.kanban.fieldDescription">Description</label>
       <textarea id="kb-f-description" data-field="description"></textarea>
     </div>
     <div class="kb-field">
-      <label id="kb-move-row-label">Move to column</label>
+      <label id="kb-move-row-label" data-i18n="views.kanban.moveToColumn">Move to column</label>
       <div
         class="kb-move-row"
         id="kb-move-row"
@@ -651,53 +662,69 @@
     </div>
     <div class="kb-field-grid">
       <div class="kb-field">
-        <label for="kb-f-status">Status</label>
+        <label for="kb-f-status" data-i18n="views.kanban.fieldStatus">Status</label>
         <select id="kb-f-status" data-field="status">
-          <option value="inbox">Inbox</option>
-          <option value="assigned">Assigned</option>
-          <option value="inprogress">In Progress</option>
-          <option value="review">Review</option>
-          <option value="done">Done</option>
-          <option value="failed">Failed</option>
+          <option value="inbox" data-i18n="views.kanban.columns.inbox">Inbox</option>
+          <option value="assigned" data-i18n="views.kanban.columns.assigned">Assigned</option>
+          <option value="inprogress" data-i18n="views.kanban.columns.inprogress">
+            In Progress
+          </option>
+          <option value="review" data-i18n="views.kanban.columns.review">Review</option>
+          <option value="done" data-i18n="views.kanban.columns.done">Done</option>
+          <option value="failed" data-i18n="views.kanban.columns.failed">Failed</option>
         </select>
       </div>
       <div class="kb-field">
-        <label for="kb-f-priority">Priority</label>
+        <label for="kb-f-priority" data-i18n="views.kanban.fieldPriority">Priority</label>
         <select id="kb-f-priority" data-field="priority">
-          <option value="1">P1 — Critical</option>
-          <option value="2">P2 — Normal</option>
-          <option value="3">P3 — Low</option>
+          <option value="1" data-i18n="views.kanban.prio1">P1 — Critical</option>
+          <option value="2" data-i18n="views.kanban.prio2">P2 — Normal</option>
+          <option value="3" data-i18n="views.kanban.prio3">P3 — Low</option>
         </select>
       </div>
       <div class="kb-field">
-        <label for="kb-f-assignee">Assignee</label>
+        <label for="kb-f-assignee" data-i18n="views.kanban.fieldAssignee">Assignee</label>
         <input id="kb-f-assignee" data-field="assignee" type="text" maxlength="128" />
       </div>
       <div class="kb-field">
-        <label for="kb-f-node">Node</label>
+        <label for="kb-f-node" data-i18n="views.kanban.fieldNode">Node</label>
         <input id="kb-f-node" data-field="node" type="text" maxlength="128" />
       </div>
       <div class="kb-field">
-        <label for="kb-f-due">Due</label>
+        <label for="kb-f-due" data-i18n="views.kanban.fieldDue">Due</label>
         <input id="kb-f-due" data-field="due" type="date" />
       </div>
       <div class="kb-field">
-        <label for="kb-f-progress">Progress %</label>
+        <label for="kb-f-progress" data-i18n="views.kanban.fieldProgress">Progress %</label>
         <input id="kb-f-progress" data-field="progress" type="number" min="0" max="100" step="1" />
       </div>
     </div>
 
-    <div class="kb-section-title">Attempts</div>
+    <div class="kb-section-title" data-i18n="views.kanban.attempts">Attempts</div>
     <div class="kb-attempts" id="kb-attempts"></div>
 
-    <div class="kb-section-title">Comments</div>
+    <div class="kb-section-title" data-i18n="views.kanban.comments">Comments</div>
     <div class="kb-comments" id="kb-comments"></div>
     <div class="kb-comment-form">
-      <input id="kb-comment-author" type="text" placeholder="Author" value="operator" />
-      <textarea id="kb-comment-text" placeholder="Add a comment..."></textarea>
-      <button class="kb-comment-submit" id="kb-comment-submit">Add Comment</button>
+      <input
+        id="kb-comment-author"
+        type="text"
+        placeholder="Author"
+        data-i18n-placeholder="views.kanban.authorPlaceholder"
+        value="operator"
+      />
+      <textarea
+        id="kb-comment-text"
+        placeholder="Add a comment..."
+        data-i18n-placeholder="views.kanban.commentPlaceholder"
+      ></textarea>
+      <button class="kb-comment-submit" id="kb-comment-submit" data-i18n="views.kanban.addComment">
+        Add Comment
+      </button>
     </div>
 
-    <button class="kb-delete-btn" id="kb-delete">Delete Task</button>
+    <button class="kb-delete-btn" id="kb-delete" data-i18n="views.kanban.deleteTask">
+      Delete Task
+    </button>
   </aside>
 </div>

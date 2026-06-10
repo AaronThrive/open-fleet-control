@@ -57,8 +57,31 @@
     });
   }
 
+  /**
+   * Runtime translation helper — the contract for ALL JS-generated strings.
+   *
+   *   t(key, params?, fallback?)
+   *
+   * - `key`      dot path into the active locale file (e.g. "views.mesh.lastSeen").
+   * - `params`   interpolation values for `{name}`-style placeholders, matching
+   *              the convention already used by the locale files
+   *              (e.g. t("app.stale", { time: "12:00" }) → "STALE — last update 12:00").
+   * - `fallback` the English default, interpolated with the same params.
+   *
+   * Lookup order: active locale → English locale → `fallback` → raw key.
+   * Because the English bundle is preloaded and the call sites pass their
+   * English default as `fallback`, a missing/late key can never render as a
+   * raw key path — worst case the English string is shown.
+   *
+   * Exposed both as `window.I18N.t` and as the `window.t` shorthand so the
+   * ES-module view files (public/js/views/*.js) can call it without imports.
+   */
   function t(key, params = {}, fallback = undefined) {
-    const value = getByPath(activeMessages, key);
+    let value = getByPath(activeMessages, key);
+    if (value === undefined || value === null) {
+      const enMessages = loadedMessages.get(DEFAULT_LOCALE);
+      if (enMessages) value = getByPath(enMessages, key);
+    }
     if (value === undefined || value === null) {
       if (fallback !== undefined) return interpolate(fallback, params);
       return String(key);
@@ -377,6 +400,9 @@
     getLocale: () => currentLocale,
     translateSubtree,
   };
+
+  // Global shorthand for runtime strings generated from JS (see t() docs above).
+  window.t = t;
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init, { once: true });

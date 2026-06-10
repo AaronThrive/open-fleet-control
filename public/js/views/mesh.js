@@ -15,6 +15,8 @@
  *   SSE    /api/events  (event "fleet.mesh") — node status transitions
  */
 
+import { t } from "../utils.js";
+
 const REFRESH_INTERVAL_MS = 30000;
 const SSE_REFETCH_DEBOUNCE_MS = 300;
 
@@ -24,9 +26,6 @@ const PLATFORM_BADGES = {
   macos: "🍎 macos",
   unknown: "❓ unknown",
 };
-
-const UNREACHABLE_TOOLTIP =
-  "Peer online but health endpoint unreachable — check tailscale serve config";
 
 // --- Module-level lifecycle state (persists across visits) -----------------
 
@@ -185,7 +184,11 @@ async function refreshAll({ initial }) {
 function renderFetchError(initial, err) {
   refs.loading.hidden = true;
   refs.fetchError.hidden = false;
-  refs.fetchError.textContent = `Failed to load mesh state: ${err.message}. Retrying automatically...`;
+  refs.fetchError.textContent = t(
+    "views.mesh.loadError",
+    { message: err.message },
+    "Failed to load mesh state: {message}. Retrying automatically...",
+  );
   // Keep showing the last good render (if any) under the error banner.
   if (initial) refs.body.hidden = true;
 }
@@ -282,9 +285,13 @@ function buildNodeCard(node, hasSkew) {
   const head = el("div", "mesh-node-head");
   const dot = el("span", `mesh-status-dot ${health.status}`);
   if (health.status === "unreachable") {
-    dot.title = UNREACHABLE_TOOLTIP;
+    dot.title = t(
+      "views.mesh.unreachableTooltip",
+      {},
+      "Peer online but health endpoint unreachable — check tailscale serve config",
+    );
   } else {
-    dot.title = `Status: ${health.status}`;
+    dot.title = t("views.mesh.statusTooltip", { status: health.status }, "Status: {status}");
   }
   head.appendChild(dot);
 
@@ -315,13 +322,27 @@ function buildNodeCard(node, hasSkew) {
     const chip = el("span", "mesh-version-chip", `v${health.version}`);
     if (hasSkew) {
       chip.classList.add("skew");
-      chip.title = "Version skew detected — nodes in this fleet run different versions";
+      chip.title = t(
+        "views.mesh.versionSkew",
+        {},
+        "Version skew detected — nodes in this fleet run different versions",
+      );
     }
     foot.appendChild(chip);
   }
-  foot.appendChild(el("span", "mesh-last-seen", `Last seen: ${formatLastSeen(health)}`));
+  foot.appendChild(
+    el(
+      "span",
+      "mesh-last-seen",
+      t("views.mesh.lastSeen", { value: formatLastSeen(health) }, "Last seen: {value}"),
+    ),
+  );
 
-  const removeBtn = el("button", "mesh-unregister-btn", "Unregister");
+  const removeBtn = el(
+    "button",
+    "mesh-unregister-btn",
+    t("views.mesh.unregister", {}, "Unregister"),
+  );
   removeBtn.type = "button";
   removeBtn.addEventListener("click", () => unregisterNode(node, removeBtn));
   foot.appendChild(removeBtn);
@@ -333,7 +354,12 @@ function buildNodeCard(node, hasSkew) {
 async function unregisterNode(node, button) {
   const name =
     node.label && node.label !== node.hostname ? `${node.hostname} (${node.label})` : node.hostname;
-  if (!window.confirm(`Unregister node "${name}" from the mesh?`)) return;
+  const confirmText = t(
+    "views.mesh.confirmUnregister",
+    { name },
+    'Unregister node "{name}" from the mesh?',
+  );
+  if (!window.confirm(confirmText)) return;
   button.disabled = true;
   try {
     await fetchJson(`/api/fleet/mesh/nodes/${encodeURIComponent(node.id || node.hostname)}`, {
@@ -342,7 +368,13 @@ async function unregisterNode(node, button) {
     await refreshAll({ initial: false });
   } catch (err) {
     button.disabled = false;
-    window.alert(`Failed to unregister node: ${err.message}`);
+    window.alert(
+      t(
+        "views.mesh.unregisterFailed",
+        { message: err.message },
+        "Failed to unregister node: {message}",
+      ),
+    );
   }
 }
 
@@ -379,7 +411,11 @@ function buildSparkline(samples) {
   svg.appendChild(polyline);
 
   const title = document.createElementNS(SVG_NS, "title");
-  title.textContent = `Latency last ${data.length} checks: min ${Math.round(min)} ms, max ${Math.round(max)} ms`;
+  title.textContent = t(
+    "views.mesh.sparklineTitle",
+    { count: data.length, min: Math.round(min), max: Math.round(max) },
+    "Latency last {count} checks: min {min} ms, max {max} ms",
+  );
   svg.insertBefore(title, polyline);
 
   return svg;
@@ -391,8 +427,10 @@ async function runDiscovery() {
   if (!refs) return;
   const btn = refs.discoverBtn;
   btn.disabled = true;
-  btn.textContent = "Discovering...";
-  refs.peerList.replaceChildren(el("div", "mesh-muted", "Scanning tailnet peers..."));
+  btn.textContent = t("views.mesh.discovering", {}, "Discovering...");
+  refs.peerList.replaceChildren(
+    el("div", "mesh-muted", t("views.mesh.scanning", {}, "Scanning tailnet peers...")),
+  );
   scrollDiscoveryIntoView();
 
   try {
@@ -401,11 +439,17 @@ async function runDiscovery() {
     renderDiscovery(result);
   } catch (err) {
     if (!refs) return;
-    refs.peerList.replaceChildren(el("div", "mesh-error", `Discovery failed: ${err.message}`));
+    refs.peerList.replaceChildren(
+      el(
+        "div",
+        "mesh-error",
+        t("views.mesh.discoveryFailed", { message: err.message }, "Discovery failed: {message}"),
+      ),
+    );
   } finally {
     if (refs) {
       btn.disabled = false;
-      btn.textContent = "Discover nodes";
+      btn.textContent = t("views.mesh.discoverBtn", {}, "Discover nodes");
     }
   }
 }
@@ -423,7 +467,11 @@ function renderDiscovery(result) {
       el(
         "div",
         "mesh-warning",
-        `Tailscale unavailable — cannot discover peers. ${result.error || ""}`,
+        t(
+          "views.mesh.tailscaleUnavailable",
+          { error: result.error || "" },
+          "Tailscale unavailable — cannot discover peers. {error}",
+        ),
       ),
     );
     return;
@@ -438,8 +486,8 @@ function renderDiscovery(result) {
         "div",
         "mesh-muted",
         candidates.length > 0
-          ? "All tailnet peers are already registered."
-          : "No peers found on the tailnet.",
+          ? t("views.mesh.allRegistered", {}, "All tailnet peers are already registered.")
+          : t("views.mesh.noPeers", {}, "No peers found on the tailnet."),
       ),
     );
     return;
@@ -454,7 +502,9 @@ function buildPeerRow(peer) {
   const row = el("div", "mesh-peer-row");
 
   const dot = el("span", `mesh-status-dot ${peer.online ? "online" : "offline"}`);
-  dot.title = peer.online ? "Peer online" : "Peer offline";
+  dot.title = peer.online
+    ? t("views.mesh.peerOnline", {}, "Peer online")
+    : t("views.mesh.peerOffline", {}, "Peer offline");
   row.appendChild(dot);
 
   const id = el("div", "mesh-peer-id");
@@ -478,11 +528,11 @@ function buildRegisterForm(peer) {
   portInput.placeholder = "443";
   portInput.min = "1";
   portInput.max = "65535";
-  portInput.title = "Port (default 443)";
+  portInput.title = t("views.mesh.portTitle", {}, "Port (default 443)");
   form.appendChild(portInput);
 
   const platformSelect = document.createElement("select");
-  platformSelect.title = "Platform";
+  platformSelect.title = t("views.mesh.platformTitle", {}, "Platform");
   for (const value of ["linux", "windows-wsl", "macos", "unknown"]) {
     const option = document.createElement("option");
     option.value = value;
@@ -495,18 +545,18 @@ function buildRegisterForm(peer) {
   const labelInput = document.createElement("input");
   labelInput.type = "text";
   labelInput.className = "mesh-label-input";
-  labelInput.placeholder = "Label (optional)";
+  labelInput.placeholder = t("views.mesh.labelPlaceholder", {}, "Label (optional)");
   labelInput.maxLength = 120;
   form.appendChild(labelInput);
 
-  const submit = el("button", "mesh-register-btn", "Register");
+  const submit = el("button", "mesh-register-btn", t("views.mesh.register", {}, "Register"));
   submit.type = "submit";
   form.appendChild(submit);
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     submit.disabled = true;
-    submit.textContent = "Registering...";
+    submit.textContent = t("views.mesh.registering", {}, "Registering...");
 
     const body = {
       hostname: normalizeHostname(peer.hostname),
@@ -527,8 +577,14 @@ function buildRegisterForm(peer) {
       if (refs) await runDiscovery();
     } catch (err) {
       submit.disabled = false;
-      submit.textContent = "Register";
-      window.alert(`Failed to register node: ${err.message}`);
+      submit.textContent = t("views.mesh.register", {}, "Register");
+      window.alert(
+        t(
+          "views.mesh.registerFailed",
+          { message: err.message },
+          "Failed to register node: {message}",
+        ),
+      );
     }
   });
 
@@ -568,15 +624,18 @@ function formatCost(value) {
 
 function formatLastSeen(health) {
   const stamp = health.lastOnline ?? health.lastChecked;
-  if (!stamp) return "never";
+  if (!stamp) return t("time.never", {}, "never");
   const time = typeof stamp === "number" ? stamp : Date.parse(stamp);
-  if (!isFiniteNumber(time)) return "never";
+  if (!isFiniteNumber(time)) return t("time.never", {}, "never");
 
   const deltaSec = Math.max(0, Math.floor((Date.now() - time) / 1000));
-  const prefix = health.lastOnline ? "" : "checked ";
-  if (deltaSec < 10) return `${prefix}just now`;
-  if (deltaSec < 60) return `${prefix}${deltaSec}s ago`;
-  if (deltaSec < 3600) return `${prefix}${Math.floor(deltaSec / 60)}m ago`;
-  if (deltaSec < 86400) return `${prefix}${Math.floor(deltaSec / 3600)}h ago`;
-  return `${prefix}${new Date(time).toLocaleDateString()}`;
+  let rel;
+  if (deltaSec < 10) rel = t("time.relJustNow", {}, "just now");
+  else if (deltaSec < 60) rel = t("time.agoSeconds", { n: deltaSec }, "{n}s ago");
+  else if (deltaSec < 3600)
+    rel = t("time.agoMinutes", { n: Math.floor(deltaSec / 60) }, "{n}m ago");
+  else if (deltaSec < 86400)
+    rel = t("time.agoHours", { n: Math.floor(deltaSec / 3600) }, "{n}h ago");
+  else rel = new Date(time).toLocaleDateString();
+  return health.lastOnline ? rel : t("time.checked", { value: rel }, "checked {value}");
 }

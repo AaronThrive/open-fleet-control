@@ -7,7 +7,7 @@
  * from the shared SSE EventSource), with a 30s polling fallback.
  */
 
-import { escapeHtml } from "../utils.js";
+import { escapeHtml, t } from "../utils.js";
 
 const REFRESH_INTERVAL_MS = 30000;
 const STATUSES = ["pending", "approved", "rejected"];
@@ -32,14 +32,14 @@ function toast(message, type = "success") {
 }
 
 function relativeTime(ts) {
-  const t = Date.parse(ts);
-  if (Number.isNaN(t)) return "unknown time";
-  const diffMs = Date.now() - t;
+  const parsed = Date.parse(ts);
+  if (Number.isNaN(parsed)) return t("time.unknown", {}, "unknown time");
+  const diffMs = Date.now() - parsed;
   const mins = Math.round(diffMs / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  if (mins < 1440) return `${Math.round(mins / 60)}h ago`;
-  return `${Math.round(mins / 1440)}d ago`;
+  if (mins < 1) return t("time.relJustNow", {}, "just now");
+  if (mins < 60) return t("time.agoMinutes", { n: mins }, "{n}m ago");
+  if (mins < 1440) return t("time.agoHours", { n: Math.round(mins / 60) }, "{n}h ago");
+  return t("time.agoDays", { n: Math.round(mins / 1440) }, "{n}d ago");
 }
 
 async function fetchEvolution() {
@@ -75,21 +75,27 @@ function renderGateBanner(refs, gate) {
   banner.hidden = false;
   banner.classList.toggle("on", gate);
   banner.classList.toggle("off", !gate);
-  refs.gateText.innerHTML = gate
-    ? "🛡️ <strong>Validation gate ON</strong> — new lessons require approval before merging."
-    : "⚡ <strong>Validation gate OFF</strong> — autonomous merge: lessons auto-approve.";
-  refs.gateToggle.textContent = gate ? "Turn gate OFF" : "Turn gate ON";
+  const gateTitle = gate
+    ? t("views.evolution.gateOnTitle", {}, "Validation gate ON")
+    : t("views.evolution.gateOffTitle", {}, "Validation gate OFF");
+  const gateDesc = gate
+    ? t("views.evolution.gateOnDesc", {}, "new lessons require approval before merging.")
+    : t("views.evolution.gateOffDesc", {}, "autonomous merge: lessons auto-approve.");
+  refs.gateText.innerHTML = `${gate ? "🛡️" : "⚡"} <strong>${escapeHtml(gateTitle)}</strong> — ${escapeHtml(gateDesc)}`;
+  refs.gateToggle.textContent = gate
+    ? t("views.evolution.gateTurnOff", {}, "Turn gate OFF")
+    : t("views.evolution.gateTurnOn", {}, "Turn gate ON");
   refs.gateToggle.title = gate
-    ? "Switch to autonomous merge (lessons auto-approve)"
-    : "Require approval for new lessons";
+    ? t("views.evolution.gateTitleOn", {}, "Switch to autonomous merge (lessons auto-approve)")
+    : t("views.evolution.gateTitleOff", {}, "Require approval for new lessons");
 }
 
 function lessonCard(lesson) {
   const isPending = lesson.status === "pending";
   const actions = isPending
     ? `<div class="evo-card-actions">
-         <button class="evo-btn approve" type="button" data-action="approve" data-id="${escapeHtml(lesson.id)}">✓ Approve</button>
-         <button class="evo-btn reject" type="button" data-action="reject" data-id="${escapeHtml(lesson.id)}">✗ Reject</button>
+         <button class="evo-btn approve" type="button" data-action="approve" data-id="${escapeHtml(lesson.id)}">✓ ${escapeHtml(t("views.evolution.approve", {}, "Approve"))}</button>
+         <button class="evo-btn reject" type="button" data-action="reject" data-id="${escapeHtml(lesson.id)}">✗ ${escapeHtml(t("views.evolution.reject", {}, "Reject"))}</button>
        </div>`
     : "";
   return `<div class="evo-card" data-lesson-id="${escapeHtml(lesson.id)}">
@@ -106,9 +112,15 @@ function lessonCard(lesson) {
 }
 
 function malformedCard(entry) {
+  const label = t(
+    "views.evolution.malformed",
+    {},
+    "⚠️ Malformed lesson entry — could not be parsed",
+  );
+  const fallbackBody = t("views.evolution.unparseable", {}, "Unparseable section");
   return `<div class="evo-card malformed">
-    <div class="evo-malformed-label">⚠️ Malformed lesson entry — could not be parsed</div>
-    <pre class="evo-card-body">${escapeHtml(entry.raw || entry.parseError || "Unparseable section")}</pre>
+    <div class="evo-malformed-label">${escapeHtml(label)}</div>
+    <pre class="evo-card-body">${escapeHtml(entry.raw || entry.parseError || fallbackBody)}</pre>
   </div>`;
 }
 
@@ -135,14 +147,25 @@ function renderBoard(refs, state) {
   // Malformed entries need operator attention — surface them on the Pending tab.
   if (activeTab === "pending") parts.push(...malformed.map(malformedCard));
 
+  const emptyByTab = {
+    pending: t("views.evolution.noPending", {}, "No pending lessons."),
+    approved: t("views.evolution.noApproved", {}, "No approved lessons."),
+    rejected: t("views.evolution.noRejected", {}, "No rejected lessons."),
+  };
   refs.lessonsEl.innerHTML =
-    parts.length > 0 ? parts.join("") : `<div class="evo-tab-empty">No ${activeTab} lessons.</div>`;
+    parts.length > 0
+      ? parts.join("")
+      : `<div class="evo-tab-empty">${escapeHtml(emptyByTab[activeTab] || emptyByTab.pending)}</div>`;
 }
 
 function showError(refs, message) {
   if (!refs.errorEl) return;
   refs.errorEl.hidden = false;
-  refs.errorEl.textContent = `Failed to load evolution data: ${message}`;
+  refs.errorEl.textContent = t(
+    "views.evolution.loadError",
+    { message },
+    "Failed to load evolution data: {message}",
+  );
 }
 
 function clearError(refs) {
@@ -209,8 +232,8 @@ export function init(container) {
       await putGate(next);
       toast(
         next
-          ? "Validation gate ON — lessons require approval"
-          : "Validation gate OFF — autonomous merge",
+          ? t("gate.toastOn", {}, "Validation gate ON — lessons require approval")
+          : t("gate.toastOff", {}, "Validation gate OFF — autonomous merge"),
       );
       window.dispatchEvent(
         new CustomEvent("fleet:evolution", { detail: { type: "gate.toggle", gate: next } }),
@@ -218,7 +241,10 @@ export function init(container) {
     } catch (e) {
       state = { ...state, gate: previous }; // revert
       renderGateBanner(refs, previous);
-      toast(`Gate update failed: ${e.message}`, "error");
+      toast(
+        t("gate.updateFailed", { message: e.message }, "Gate update failed: {message}"),
+        "error",
+      );
     } finally {
       refs.gateToggle.disabled = false;
     }
@@ -249,11 +275,28 @@ export function init(container) {
 
     try {
       await postLessonAction(id, action);
-      toast(action === "approve" ? "Lesson approved" : "Lesson rejected");
+      toast(
+        action === "approve"
+          ? t("views.evolution.toastApproved", {}, "Lesson approved")
+          : t("views.evolution.toastRejected", {}, "Lesson rejected"),
+      );
     } catch (err) {
       state = snapshot; // rollback
       renderBoard(refs, state);
-      toast(`Failed to ${action} lesson: ${err.message}`, "error");
+      toast(
+        action === "approve"
+          ? t(
+              "views.evolution.toastApproveFailed",
+              { message: err.message },
+              "Failed to approve lesson: {message}",
+            )
+          : t(
+              "views.evolution.toastRejectFailed",
+              { message: err.message },
+              "Failed to reject lesson: {message}",
+            ),
+        "error",
+      );
     }
   });
 

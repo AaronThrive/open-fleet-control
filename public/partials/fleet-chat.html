@@ -255,7 +255,7 @@
 
     <!-- Alerts ribbon (populated by fleet-chat.js) -->
     <div class="fc-alerts" id="fc-alerts" hidden>
-      <span class="fc-alerts-label">Alerts</span>
+      <span class="fc-alerts-label" data-i18n="views.fleetChat.alertsLabel">Alerts</span>
       <span id="fc-alerts-items"></span>
     </div>
 
@@ -266,6 +266,7 @@
         class="fc-filter-sender"
         id="fc-filter-sender"
         placeholder="Sender"
+        data-i18n-placeholder="views.fleetChat.senderPlaceholder"
         autocomplete="off"
         spellcheck="false"
       />
@@ -274,6 +275,7 @@
         class="fc-filter-receiver"
         id="fc-filter-receiver"
         placeholder="Receiver"
+        data-i18n-placeholder="views.fleetChat.receiverPlaceholder"
         autocomplete="off"
         spellcheck="false"
       />
@@ -282,10 +284,15 @@
         class="fc-filter-text"
         id="fc-filter-text"
         placeholder="Search message text…"
+        data-i18n-placeholder="views.fleetChat.searchPlaceholder"
         autocomplete="off"
         spellcheck="false"
       />
-      <select id="fc-limit" title="Max messages to load">
+      <select
+        id="fc-limit"
+        title="Max messages to load"
+        data-i18n-title="views.fleetChat.limitTitle"
+      >
         <option value="25">25</option>
         <option value="50" selected>50</option>
         <option value="100">100</option>

@@ -9,6 +9,22 @@ export function formatTimeAgo(mins) {
   return `${Math.round(mins / 1440)}d`;
 }
 
+/**
+ * Translation helper for ES-module view files.
+ *
+ * Thin lazy wrapper around the runtime translator installed by js/i18n.js
+ * (`window.t`) — see the contract documented there: t(key, params, fallback)
+ * with `{name}`-style interpolation. Call sites pass their English default as
+ * `fallback`, so even if i18n.js has not loaded yet the English string renders.
+ */
+export function t(key, params = {}, fallback = undefined) {
+  if (typeof window.t === "function") return window.t(key, params, fallback);
+  if (fallback === undefined) return String(key);
+  return String(fallback).replace(/\{(\w+)\}/g, (match, name) =>
+    Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match,
+  );
+}
+
 export function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text;

@@ -218,13 +218,13 @@
 
     <div class="logs-filter-bar" id="logs-filter-bar">
       <div class="logs-filter-field">
-        <label for="logs-filter-user">User</label>
+        <label for="logs-filter-user" data-i18n="views.logs.filterUser">User</label>
         <input type="text" id="logs-filter-user" placeholder="user@tailnet" autocomplete="off" />
       </div>
       <div class="logs-filter-field">
-        <label for="logs-filter-action">Action</label>
+        <label for="logs-filter-action" data-i18n="views.logs.filterAction">Action</label>
         <select id="logs-filter-action">
-          <option value="">All actions</option>
+          <option value="" data-i18n="views.logs.allActions">All actions</option>
           <optgroup label="Tasks">
             <option value="task.create">task.create</option>
             <option value="task.move">task.move</option>
@@ -257,15 +257,15 @@
         </select>
       </div>
       <div class="logs-filter-field">
-        <label for="logs-filter-since">Since</label>
+        <label for="logs-filter-since" data-i18n="views.logs.filterSince">Since</label>
         <input type="date" id="logs-filter-since" />
       </div>
       <div class="logs-filter-field">
-        <label for="logs-filter-until">Until</label>
+        <label for="logs-filter-until" data-i18n="views.logs.filterUntil">Until</label>
         <input type="date" id="logs-filter-until" />
       </div>
       <div class="logs-filter-field">
-        <label for="logs-filter-limit">Limit</label>
+        <label for="logs-filter-limit" data-i18n="views.logs.filterLimit">Limit</label>
         <select id="logs-filter-limit">
           <option value="50">50</option>
           <option value="200" selected>200</option>
@@ -274,22 +274,37 @@
         </select>
       </div>
       <div class="logs-filter-actions">
-        <button class="btn-secondary" id="logs-export-btn" type="button">Export view</button>
-        <button class="btn-primary" id="logs-refresh-btn" type="button">Refresh</button>
+        <button
+          class="btn-secondary"
+          id="logs-export-btn"
+          type="button"
+          data-i18n="views.logs.exportBtn"
+        >
+          Export view
+        </button>
+        <button
+          class="btn-primary"
+          id="logs-refresh-btn"
+          type="button"
+          data-i18n="views.logs.refreshBtn"
+        >
+          Refresh
+        </button>
       </div>
     </div>
 
     <div class="logs-meta-row">
+      <!-- count line is owned by logs.js (views.logs.countOne/countMany) -->
       <span id="logs-count-line">0 entries shown</span>
       <span class="logs-error" id="logs-error" hidden></span>
     </div>
 
     <div class="logs-table" id="logs-table" hidden>
       <div class="logs-table-head">
-        <span>Time</span>
-        <span>User</span>
-        <span>Action</span>
-        <span>Target</span>
+        <span data-i18n="views.logs.colTime">Time</span>
+        <span data-i18n="views.logs.colUser">User</span>
+        <span data-i18n="views.logs.colAction">Action</span>
+        <span data-i18n="views.logs.colTarget">Target</span>
         <span></span>
       </div>
       <div id="logs-rows"></div>

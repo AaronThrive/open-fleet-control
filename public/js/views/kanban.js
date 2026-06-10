@@ -10,6 +10,10 @@
  * /api/events, with a 30s polling fallback.
  */
 
+import { t } from "../utils.js";
+
+// Default (English) labels; columnLabel() resolves the localized label at
+// render time via views.kanban.columns.<status>.
 const COLUMNS = [
   { status: "inbox", label: "Inbox" },
   { status: "assigned", label: "Assigned" },
@@ -142,7 +146,9 @@ function sortedColumn(status) {
 }
 
 function columnLabel(status) {
-  return COLUMNS.find((c) => c.status === status)?.label || status;
+  const column = COLUMNS.find((c) => c.status === status);
+  if (!column) return status;
+  return t(`views.kanban.columns.${column.status}`, {}, column.label);
 }
 
 /** Screen-reader announcement via the aria-live region (cleared first to re-trigger). */
@@ -186,7 +192,7 @@ function buildColumnSkeleton(boardEl) {
 
     const name = document.createElement("span");
     name.className = "kb-col-name";
-    name.textContent = col.label;
+    name.textContent = columnLabel(col.status);
 
     const count = document.createElement("span");
     count.className = "kb-count";
@@ -195,8 +201,12 @@ function buildColumnSkeleton(boardEl) {
     const addBtn = document.createElement("button");
     addBtn.className = "kb-add-btn";
     addBtn.type = "button";
-    addBtn.textContent = "+ New";
-    addBtn.title = `New task in ${col.label}`;
+    addBtn.textContent = t("views.kanban.newBtn", {}, "+ New");
+    addBtn.title = t(
+      "views.kanban.newTaskIn",
+      { column: columnLabel(col.status) },
+      "New task in {column}",
+    );
     addBtn.addEventListener("click", () => toggleNewForm(col.status, true));
 
     header.append(name, count, addBtn);
@@ -208,7 +218,7 @@ function buildColumnSkeleton(boardEl) {
     const input = document.createElement("input");
     input.type = "text";
     input.maxLength = 200;
-    input.placeholder = "Task title";
+    input.placeholder = t("views.kanban.titlePlaceholder", {}, "Task title");
 
     const actions = document.createElement("div");
     actions.className = "kb-newform-actions";
@@ -216,13 +226,13 @@ function buildColumnSkeleton(boardEl) {
     const addAction = document.createElement("button");
     addAction.type = "button";
     addAction.className = "kb-newform-add";
-    addAction.textContent = "Add";
+    addAction.textContent = t("views.kanban.add", {}, "Add");
     addAction.addEventListener("click", () => submitNewTask(col.status));
 
     const cancelAction = document.createElement("button");
     cancelAction.type = "button";
     cancelAction.className = "kb-newform-cancel";
-    cancelAction.textContent = "Cancel";
+    cancelAction.textContent = t("views.kanban.cancel", {}, "Cancel");
     cancelAction.addEventListener("click", () => toggleNewForm(col.status, false));
 
     input.addEventListener("keydown", (e) => {
@@ -237,7 +247,10 @@ function buildColumnSkeleton(boardEl) {
     list.className = "kb-list";
     list.dataset.status = col.status;
     list.setAttribute("role", "list");
-    list.setAttribute("aria-label", `${col.label} column`);
+    list.setAttribute(
+      "aria-label",
+      t("views.kanban.columnAria", { column: columnLabel(col.status) }, "{column} column"),
+    );
 
     colEl.append(header, form, list);
     boardEl.appendChild(colEl);
@@ -257,7 +270,14 @@ function buildCard(task) {
   card.dataset.id = task.id;
   card.tabIndex = 0;
   card.setAttribute("role", "listitem");
-  card.setAttribute("aria-label", `${task.title} — ${columnLabel(task.status)}`);
+  card.setAttribute(
+    "aria-label",
+    t(
+      "views.kanban.cardAria",
+      { title: task.title, column: columnLabel(task.status) },
+      "{title} — {column}",
+    ),
+  );
   if (task.id === state.moveModeTaskId) card.classList.add("kb-move-mode");
 
   const title = document.createElement("div");
@@ -275,12 +295,14 @@ function buildCard(task) {
 
   if (task.assignee) badges.appendChild(buildBadge("kb-badge-assignee", task.assignee));
   if (task.node) badges.appendChild(buildBadge("kb-badge-node", task.node));
-  if (task.stale) badges.appendChild(buildBadge("kb-badge-stale", "STALE"));
+  if (task.stale) {
+    badges.appendChild(buildBadge("kb-badge-stale", t("views.kanban.staleBadge", {}, "STALE")));
+  }
 
   if (task.due) {
     const due = document.createElement("span");
     due.className = isOverdue(task) ? "kb-due kb-overdue" : "kb-due";
-    due.textContent = `Due ${task.due.slice(0, 10)}`;
+    due.textContent = t("views.kanban.due", { date: task.due.slice(0, 10) }, "Due {date}");
     badges.appendChild(due);
   }
   card.appendChild(badges);
@@ -383,7 +405,11 @@ async function refreshBoard() {
   } catch (err) {
     console.error("[Kanban] Failed to fetch board:", err);
     if (state.refs.loading && !state.refs.loading.hidden) {
-      state.refs.loading.textContent = "Failed to load board — retrying shortly.";
+      state.refs.loading.textContent = t(
+        "views.kanban.loadError",
+        {},
+        "Failed to load board — retrying shortly.",
+      );
     }
   }
 }
@@ -478,7 +504,7 @@ async function handleDragEnd(evt) {
     });
     if (result?.task) upsertTask(result.task);
   } catch (err) {
-    toast(`Move failed: ${err.message}`);
+    toast(t("views.kanban.moveFailed", { message: err.message }, "Move failed: {message}"));
     await refreshBoard(); // rollback to server truth
     return;
   }
@@ -529,8 +555,13 @@ async function persistMove(taskId, toStatus, toIndex) {
     if (result?.task) upsertTask(result.task);
     return true;
   } catch (err) {
-    toast(`Move failed: ${err.message}`);
-    announce(`Move failed: ${err.message}`);
+    const message = t(
+      "views.kanban.moveFailed",
+      { message: err.message },
+      "Move failed: {message}",
+    );
+    toast(message);
+    announce(message);
     await refreshBoard(); // rollback to server truth
     return false;
   }
@@ -545,9 +576,11 @@ function updateMoveHint(task) {
     return;
   }
   hint.hidden = false;
-  hint.textContent =
-    `Move mode: "${task.title}" — ` +
-    "←/→ change column, ↑/↓ change position, Enter confirm, Esc cancel";
+  hint.textContent = t(
+    "views.kanban.moveHint",
+    { title: task.title },
+    'Move mode: "{title}" — ←/→ change column, ↑/↓ change position, Enter confirm, Esc cancel',
+  );
 }
 
 function enterMoveMode(taskId) {
@@ -559,8 +592,11 @@ function enterMoveMode(taskId) {
   cardEl(taskId)?.classList.add("kb-move-mode");
   updateMoveHint(task);
   announce(
-    `Move mode on for task "${task.title}". Use arrow keys to move, ` +
-      "Enter to confirm, Escape to cancel.",
+    t(
+      "views.kanban.moveModeOn",
+      { title: task.title },
+      'Move mode on for task "{title}". Use arrow keys to move, Enter to confirm, Escape to cancel.',
+    ),
   );
 }
 
@@ -576,7 +612,13 @@ function confirmMoveMode(taskId) {
   const task = getTask(taskId);
   exitMoveMode();
   if (task) {
-    announce(`Move confirmed: task "${task.title}" is in ${columnLabel(task.status)}.`);
+    announce(
+      t(
+        "views.kanban.moveConfirmed",
+        { title: task.title, column: columnLabel(task.status) },
+        'Move confirmed: task "{title}" is in {column}.',
+      ),
+    );
   }
   cardEl(taskId)?.focus();
 }
@@ -600,11 +642,23 @@ async function cancelMoveMode(taskId) {
         order: origin.index,
       });
     } catch (err) {
-      toast(`Cancel restore failed: ${err.message}`);
+      toast(
+        t(
+          "views.kanban.cancelRestoreFailed",
+          { message: err.message },
+          "Cancel restore failed: {message}",
+        ),
+      );
     }
     await refreshBoard();
   }
-  announce(`Move cancelled: task "${task ? task.title : taskId}" restored.`);
+  announce(
+    t(
+      "views.kanban.moveCancelled",
+      { title: task ? task.title : taskId },
+      'Move cancelled: task "{title}" restored.',
+    ),
+  );
   cardEl(taskId)?.focus();
 }
 
@@ -615,7 +669,19 @@ async function keyboardMoveAcross(taskId, delta) {
   const colIdx = COLUMNS.findIndex((c) => c.status === task.status);
   const nextIdx = colIdx + delta;
   if (nextIdx < 0 || nextIdx >= COLUMNS.length) {
-    announce(`Task "${task.title}" is already in the ${delta < 0 ? "first" : "last"} column.`);
+    announce(
+      delta < 0
+        ? t(
+            "views.kanban.alreadyFirstColumn",
+            { title: task.title },
+            'Task "{title}" is already in the first column.',
+          )
+        : t(
+            "views.kanban.alreadyLastColumn",
+            { title: task.title },
+            'Task "{title}" is already in the last column.',
+          ),
+    );
     return;
   }
   const toStatus = COLUMNS[nextIdx].status;
@@ -623,7 +689,13 @@ async function keyboardMoveAcross(taskId, delta) {
   applyLocalMove(taskId, toStatus, toIndex);
   renderBoard();
   cardEl(taskId)?.focus();
-  announce(`Task "${task.title}" moved to ${COLUMNS[nextIdx].label}.`);
+  announce(
+    t(
+      "views.kanban.movedToColumn",
+      { title: task.title, column: columnLabel(toStatus) },
+      'Task "{title}" moved to {column}.',
+    ),
+  );
   await persistMove(taskId, toStatus, toIndex);
 }
 
@@ -636,8 +708,17 @@ async function keyboardReorder(taskId, delta) {
   const toIndex = fromIndex + delta;
   if (toIndex < 0 || toIndex >= column.length) {
     announce(
-      `Task "${task.title}" is already at the ${delta < 0 ? "top" : "bottom"} of ` +
-        `${columnLabel(task.status)}.`,
+      delta < 0
+        ? t(
+            "views.kanban.alreadyTop",
+            { title: task.title, column: columnLabel(task.status) },
+            'Task "{title}" is already at the top of {column}.',
+          )
+        : t(
+            "views.kanban.alreadyBottom",
+            { title: task.title, column: columnLabel(task.status) },
+            'Task "{title}" is already at the bottom of {column}.',
+          ),
     );
     return;
   }
@@ -645,8 +726,16 @@ async function keyboardReorder(taskId, delta) {
   renderBoard();
   cardEl(taskId)?.focus();
   announce(
-    `Task "${task.title}" moved to position ${toIndex + 1} of ${column.length} in ` +
-      `${columnLabel(task.status)}.`,
+    t(
+      "views.kanban.movedToPosition",
+      {
+        title: task.title,
+        position: toIndex + 1,
+        total: column.length,
+        column: columnLabel(task.status),
+      },
+      'Task "{title}" moved to position {position} of {total} in {column}.',
+    ),
   );
   await persistMove(taskId, task.status, toIndex);
 }
@@ -728,7 +817,7 @@ async function submitNewTask(status) {
     colEl.querySelector(".kb-newform").hidden = true;
     renderBoard();
   } catch (err) {
-    toast(`Create failed: ${err.message}`);
+    toast(t("views.kanban.createFailed", { message: err.message }, "Create failed: {message}"));
   }
 }
 
@@ -798,12 +887,22 @@ function renderMoveButtons(task) {
     btn.type = "button";
     btn.className = "kb-move-btn";
     btn.dataset.status = col.status;
-    btn.textContent = col.label;
+    btn.textContent = columnLabel(col.status);
     if (col.status === task.status) {
       btn.disabled = true;
-      btn.setAttribute("aria-label", `${col.label} (current column)`);
+      btn.setAttribute(
+        "aria-label",
+        t(
+          "views.kanban.currentColumnAria",
+          { column: columnLabel(col.status) },
+          "{column} (current column)",
+        ),
+      );
     } else {
-      btn.setAttribute("aria-label", `Move to ${col.label}`);
+      btn.setAttribute(
+        "aria-label",
+        t("views.kanban.moveToAria", { column: columnLabel(col.status) }, "Move to {column}"),
+      );
       btn.addEventListener("click", () => moveOpenTaskTo(col.status));
     }
     host.appendChild(btn);
@@ -824,7 +923,13 @@ async function moveOpenTaskTo(toStatus) {
   const toIndex = sortedColumn(toStatus).length;
   applyLocalMove(taskId, toStatus, toIndex);
   renderBoard(); // refreshes the board and the open drawer (incl. these buttons)
-  announce(`Task "${task.title}" moved to ${columnLabel(toStatus)}.`);
+  announce(
+    t(
+      "views.kanban.movedToColumn",
+      { title: task.title, column: columnLabel(toStatus) },
+      'Task "{title}" moved to {column}.',
+    ),
+  );
   await persistMove(taskId, toStatus, toIndex);
 }
 
@@ -859,7 +964,7 @@ function renderAttempts(task) {
   if (attempts.length === 0) {
     const none = document.createElement("div");
     none.className = "kb-muted";
-    none.textContent = "No attempts yet.";
+    none.textContent = t("views.kanban.noAttempts", {}, "No attempts yet.");
     host.appendChild(none);
     return;
   }
@@ -911,7 +1016,7 @@ function renderComments(task) {
   if (comments.length === 0) {
     const none = document.createElement("div");
     none.className = "kb-muted";
-    none.textContent = "No comments yet.";
+    none.textContent = t("views.kanban.noComments", {}, "No comments yet.");
     host.appendChild(none);
     return;
   }
@@ -945,7 +1050,7 @@ async function patchOpenTask(field, rawValue) {
   if (field === "priority" || field === "progress") {
     value = parseInt(rawValue, 10);
     if (Number.isNaN(value)) {
-      toast(`${field} must be a number`);
+      toast(t("views.kanban.mustBeNumber", { field }, "{field} must be a number"));
       const task = getTask(taskId);
       if (task) renderDrawer(task, { preserveEdits: false });
       return;
@@ -962,7 +1067,7 @@ async function patchOpenTask(field, rawValue) {
       renderBoard();
     }
   } catch (err) {
-    toast(`Update failed: ${err.message}`);
+    toast(t("views.kanban.updateFailed", { message: err.message }, "Update failed: {message}"));
     await refreshBoard(); // restore server truth, incl. the drawer fields
   }
 }
@@ -990,7 +1095,7 @@ async function submitComment() {
       renderBoard();
     }
   } catch (err) {
-    toast(`Comment failed: ${err.message}`);
+    toast(t("views.kanban.commentFailed", { message: err.message }, "Comment failed: {message}"));
   }
 }
 
@@ -999,14 +1104,19 @@ async function deleteOpenTask() {
   if (!taskId) return;
   const task = getTask(taskId);
   const label = task ? `"${task.title}"` : taskId;
-  if (!window.confirm(`Delete task ${label}? This cannot be undone.`)) return;
+  const confirmText = t(
+    "views.kanban.confirmDelete",
+    { title: label },
+    "Delete task {title}? This cannot be undone.",
+  );
+  if (!window.confirm(confirmText)) return;
   try {
     await api("DELETE", `/tasks/${encodeURIComponent(taskId)}`);
     removeTask(taskId);
     closeDrawer();
     renderBoard();
   } catch (err) {
-    toast(`Delete failed: ${err.message}`);
+    toast(t("views.kanban.deleteFailed", { message: err.message }, "Delete failed: {message}"));
   }
 }
 
@@ -1079,6 +1189,8 @@ export function init(containerEl) {
   refreshBoard();
   createSortables().catch((err) => {
     console.error("[Kanban] Drag & drop unavailable:", err);
-    toast("Drag & drop unavailable: failed to load SortableJS");
+    toast(
+      t("views.kanban.sortableFailed", {}, "Drag & drop unavailable: failed to load SortableJS"),
+    );
   });
 }
