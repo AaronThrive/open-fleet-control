@@ -274,6 +274,110 @@
     font-size: 0.78rem;
     color: var(--text-muted);
   }
+
+  /* Write-actions badge / toggle (per-remote opt-in) */
+  #federation-view-section .fed-writes-badge {
+    flex-shrink: 0;
+    font-size: 0.64rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+  #federation-view-section .fed-writes-badge.on {
+    background: rgba(var(--accent-rgb), 0.14);
+    border-color: rgba(var(--accent-rgb), 0.65);
+    color: var(--accent);
+    box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.45);
+  }
+  #federation-view-section .fed-writes-badge:hover:not(:disabled) {
+    border-color: rgba(var(--accent-rgb), 0.6);
+    color: var(--accent);
+  }
+  #federation-view-section .fed-writes-badge:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  /* Remote write controls (gate toggle + pending lessons) */
+  #federation-view-section .fed-write-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--bg);
+    border: 1px dashed rgba(var(--accent-rgb), 0.35);
+  }
+  #federation-view-section .fed-write-controls-title {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--accent);
+  }
+  #federation-view-section .fed-gate-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.74rem;
+    color: var(--text-muted);
+  }
+  #federation-view-section .fed-action-btn {
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 2px 9px;
+    font-size: 0.68rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  #federation-view-section .fed-action-btn:hover:not(:disabled) {
+    border-color: rgba(var(--accent-rgb), 0.6);
+    color: var(--accent);
+  }
+  #federation-view-section .fed-action-btn.approve:hover:not(:disabled) {
+    border-color: var(--green);
+    color: var(--green);
+  }
+  #federation-view-section .fed-action-btn.reject:hover:not(:disabled) {
+    border-color: var(--red);
+    color: var(--red);
+  }
+  #federation-view-section .fed-action-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  #federation-view-section .fed-lessons {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  #federation-view-section .fed-lesson-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.74rem;
+    color: var(--text);
+  }
+  #federation-view-section .fed-lesson-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #federation-view-section .fed-lesson-author {
+    flex-shrink: 0;
+    font-size: 0.66rem;
+    color: var(--text-muted);
+  }
 </style>
 <div class="section" id="federation-view-section">
   <section class="view-panel">
@@ -292,12 +396,15 @@
     <div class="fed-error" id="fed-fetch-error" hidden></div>
 
     <div class="fed-body" id="fed-body" hidden>
-      <!-- v1 scope + cross-tailnet hint -->
+      <!-- Scope + cross-tailnet hint. NOTE: deliberately not bound to the
+           views.federation.readOnlyNote i18n key — that key still describes
+           the v1 read-only-only behavior, superseded by per-remote opt-in
+           write actions in v1.6. -->
       <div class="fed-note">
         <span>🔭</span>
-        <span data-i18n="views.federation.readOnlyNote">
-          v1 is read-only monitoring — this dashboard never issues write operations against
-          federated remotes.
+        <span>
+          Remotes are read-only by default. Write actions (lesson approve/reject, gate, task move)
+          are a per-remote opt-in via the WRITES badge on each card.
         </span>
         <span>
           Cross-tailnet access works via Tailscale node sharing — see
