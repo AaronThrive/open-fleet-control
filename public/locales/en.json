@@ -773,7 +773,8 @@
     "statusFailed": "Failed",
     "statusRunning": "Running",
     "libraryNotInstalled": "Jobs library not installed",
-    "libraryNotInstalledHint": "Install the jobs library and set paths.jobs to enable this page."
+    "libraryNotInstalledHint": "Install the jobs library and set paths.jobs to enable this page.",
+    "manageInCron": "⏰ Manage in Cron"
   },
   "gate": {
     "label": "VALIDATION GATE",

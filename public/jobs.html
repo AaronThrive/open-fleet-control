@@ -578,6 +578,7 @@
         color: var(--text);
         cursor: pointer;
         transition: all 0.15s;
+        text-decoration: none;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -1093,6 +1094,10 @@
                     </div>
                     
                     <div class="job-actions">
+                        ${
+                          job.readOnly
+                            ? `<a class="job-action-btn" href="/#view-cron">${t("jobs.manageInCron", {}, "⏰ Manage in Cron")}</a>`
+                            : `
                         <button class="job-action-btn primary" onclick="runJob('${job.id}')" ${job.paused ? "disabled" : ""}>
                             ${t("jobs.run", {}, "▶️ Run")}
                         </button>
@@ -1103,7 +1108,8 @@
                         }
                         <button class="job-action-btn" onclick="showHistory('${job.id}', '${escapeHtml(job.name)}')">
                             ${t("jobs.history", {}, "📜 History")}
-                        </button>
+                        </button>`
+                        }
                     </div>
                 </div>
             `;

@@ -1,6 +1,10 @@
 <!-- Sessions View Partial -->
 <div class="section" id="sessions-view-section">
   <style>
+    /* Explicit display rules below would defeat the `hidden` attribute */
+    #sessions-view-section [hidden] {
+      display: none !important;
+    }
     #sessions-view-section .sessions-subagent-strip {
       display: flex;
       gap: 10px;

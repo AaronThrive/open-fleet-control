@@ -60,7 +60,7 @@ if (cliPort) {
 // ============================================================================
 const { getVersion } = require("./utils");
 const { CONFIG, getOpenClawDir } = require("./config");
-const { handleJobsRequest, isJobsRoute } = require("./jobs");
+const { handleJobsRequest, isJobsRoute, setCronFallback } = require("./jobs");
 const { runOpenClaw, runOpenClawAsync, extractJSON } = require("./openclaw");
 const {
   getSystemVitals,
@@ -157,6 +157,10 @@ const OPENCLAW_SOURCES = CONFIG.fleet.openclawSources !== false;
 // (cron list / status --usage are openclaw CLI calls under the hood).
 const getCronJobsSafe = () => (OPENCLAW_SOURCES ? getCronJobs(getOpenClawDir) : []);
 const getLlmUsageSafe = (statePath) => getLlmUsage(statePath, { allowSpawn: OPENCLAW_SOURCES });
+
+// When the optional jobs library is absent, /api/jobs serves the cron
+// dual-source read-only instead of degrading to available:false.
+setCronFallback(getCronJobsSafe);
 
 // Sessions module (factory pattern with dependency injection)
 const sessions = createSessionsModule({

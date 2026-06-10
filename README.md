@@ -200,7 +200,7 @@ Fleet Control slots into the `openclaw-stack` appliance as two extra Compose con
 
 ---
 
-## 🚀 Roadmap (v1.7 ideas)
+## 🚀 Roadmap
 
 - **Federation remote-node drill-down** — click through a federated card into the remote's mesh/kanban detail, not just the summary tiles.
 - **Graph edge extraction scheduling** — periodic gbrain edge extraction runs managed (and visualized) from the Cortex panel.
