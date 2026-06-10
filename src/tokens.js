@@ -22,6 +22,23 @@ function emptyUsageBucket() {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, requests: 0 };
 }
 
+// Accumulate one usage entry into a bucket (mutates the bucket accumulator)
+function addUsageToBucket(bucket, usage) {
+  bucket.input += usage.input || 0;
+  bucket.output += usage.output || 0;
+  bucket.cacheRead += usage.cacheRead || 0;
+  bucket.cacheWrite += usage.cacheWrite || 0;
+  bucket.cost += usage.cost?.total || 0;
+  bucket.requests++;
+}
+
+// Accumulate one usage entry into a per-model map (keyed by model id)
+function addUsageToModelMap(modelMap, model, usage) {
+  const key = model || "unknown";
+  if (!modelMap[key]) modelMap[key] = emptyUsageBucket();
+  addUsageToBucket(modelMap[key], usage);
+}
+
 // Async token usage refresh - runs in background, doesn't block
 async function refreshTokenUsageAsync(getOpenClawDir) {
   if (tokenUsageCache.refreshing) return;
@@ -41,6 +58,11 @@ async function refreshTokenUsageAsync(getOpenClawDir) {
     const usage24h = emptyUsageBucket();
     const usage3d = emptyUsageBucket();
     const usage7d = emptyUsageBucket();
+
+    // Track usage per model for each time window
+    const byModel24h = {};
+    const byModel3d = {};
+    const byModel7d = {};
 
     // Process files in batches to avoid overwhelming the system
     const batchSize = 50;
@@ -69,36 +91,20 @@ async function refreshTokenUsageAsync(getOpenClawDir) {
 
                 if (entry.message?.usage) {
                   const u = entry.message.usage;
-                  const input = u.input || 0;
-                  const output = u.output || 0;
-                  const cacheRead = u.cacheRead || 0;
-                  const cacheWrite = u.cacheWrite || 0;
-                  const cost = u.cost?.total || 0;
+                  const model = entry.message.model || "unknown";
 
                   // Add to appropriate buckets (cumulative - 24h is subset of 3d is subset of 7d)
                   if (entryTime >= oneDayAgo) {
-                    usage24h.input += input;
-                    usage24h.output += output;
-                    usage24h.cacheRead += cacheRead;
-                    usage24h.cacheWrite += cacheWrite;
-                    usage24h.cost += cost;
-                    usage24h.requests++;
+                    addUsageToBucket(usage24h, u);
+                    addUsageToModelMap(byModel24h, model, u);
                   }
                   if (entryTime >= threeDaysAgo) {
-                    usage3d.input += input;
-                    usage3d.output += output;
-                    usage3d.cacheRead += cacheRead;
-                    usage3d.cacheWrite += cacheWrite;
-                    usage3d.cost += cost;
-                    usage3d.requests++;
+                    addUsageToBucket(usage3d, u);
+                    addUsageToModelMap(byModel3d, model, u);
                   }
                   // Always add to 7d (already filtered above)
-                  usage7d.input += input;
-                  usage7d.output += output;
-                  usage7d.cacheRead += cacheRead;
-                  usage7d.cacheWrite += cacheWrite;
-                  usage7d.cost += cost;
-                  usage7d.requests++;
+                  addUsageToBucket(usage7d, u);
+                  addUsageToModelMap(byModel7d, model, u);
                 }
               } catch (e) {
                 // Skip invalid lines
@@ -115,20 +121,21 @@ async function refreshTokenUsageAsync(getOpenClawDir) {
     }
 
     // Helper to finalize bucket with computed fields
-    const finalizeBucket = (bucket) => ({
+    const finalizeBucket = (bucket, byModel) => ({
       ...bucket,
       tokensNoCache: bucket.input + bucket.output,
       tokensWithCache: bucket.input + bucket.output + bucket.cacheRead + bucket.cacheWrite,
+      ...(byModel ? { byModel } : {}),
     });
 
     const result = {
       // Primary (24h) for backward compatibility
       ...finalizeBucket(usage24h),
-      // All three windows
+      // All three windows (with per-model breakdowns)
       windows: {
-        "24h": finalizeBucket(usage24h),
-        "3d": finalizeBucket(usage3d),
-        "7d": finalizeBucket(usage7d),
+        "24h": finalizeBucket(usage24h, byModel24h),
+        "3d": finalizeBucket(usage3d, byModel3d),
+        "7d": finalizeBucket(usage7d, byModel7d),
       },
     };
 
@@ -214,6 +221,29 @@ function calculateCostForBucket(bucket, rates = TOKEN_RATES) {
   };
 }
 
+// Summarize a per-model usage map into a sorted array with honest costs.
+// `reportedCost` is the provider-reported spend (preferred when present);
+// `estCost` is estimated from the default rates as a fallback.
+function summarizeModelUsage(byModel = {}, rates = TOKEN_RATES) {
+  return Object.entries(byModel)
+    .map(([model, bucket]) => {
+      const estCost = calculateCostForBucket(bucket, rates).totalCost;
+      const reportedCost = bucket.cost || 0;
+      return {
+        model,
+        input: bucket.input,
+        output: bucket.output,
+        cacheRead: bucket.cacheRead,
+        cacheWrite: bucket.cacheWrite,
+        requests: bucket.requests,
+        reportedCost,
+        estCost,
+        cost: reportedCost > 0 ? reportedCost : estCost,
+      };
+    })
+    .sort((a, b) => b.cost - a.cost);
+}
+
 // Get detailed cost breakdown for the modal
 function getCostBreakdown(config, getSessions, getOpenClawDir) {
   const usage = getDailyTokenUsage(getOpenClawDir);
@@ -259,6 +289,7 @@ function getCostBreakdown(config, getSessions, getOpenClawDir) {
         cacheRead: bucket.cacheRead,
         cacheWrite: bucket.cacheWrite,
       },
+      byModel: summarizeModelUsage(bucket.byModel),
     };
   }
 
@@ -448,6 +479,9 @@ function startTokenUsageRefresh(getOpenClawDir) {
 module.exports = {
   TOKEN_RATES,
   emptyUsageBucket,
+  addUsageToBucket,
+  addUsageToModelMap,
+  summarizeModelUsage,
   refreshTokenUsageAsync,
   getDailyTokenUsage,
   calculateCostForBucket,

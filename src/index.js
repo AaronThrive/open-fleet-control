@@ -301,7 +301,7 @@ const server = http.createServer((req, res) => {
 
   if (pathname === "/api/status") {
     handleApi(req, res);
-  } else if (pathname === "/api/session") {
+  } else if (pathname === "/api/session" || pathname === "/api/sessions/detail") {
     const sessionKey = query.get("key");
     if (!sessionKey) {
       res.writeHead(400, { "Content-Type": "application/json" });

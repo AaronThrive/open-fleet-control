@@ -63,6 +63,40 @@ describe("server", () => {
     );
   });
 
+  it("responds to /api/cost-breakdown with the expected shape", async () => {
+    const { statusCode, body } = await httpGet(`http://localhost:${TEST_PORT}/api/cost-breakdown`);
+    assert.strictEqual(statusCode, 200);
+    const data = JSON.parse(body);
+    assert.ok(data.rates, "should include pricing rates");
+    assert.ok(data.windows, "should include 24h/3d/7d windows");
+    for (const key of ["24h", "3d", "7d"]) {
+      assert.ok(data.windows[key], `should include the ${key} window`);
+      assert.ok(data.windows[key].tokens, `${key} window should include token counts`);
+      assert.ok(
+        Array.isArray(data.windows[key].byModel),
+        `${key} window should include a per-model breakdown array`,
+      );
+    }
+    assert.ok("cacheRead" in data && "cacheWrite" in data, "cache tokens reported distinctly");
+  });
+
+  it("responds 400 to /api/sessions/detail without a key", async () => {
+    const { statusCode, body } = await httpGet(`http://localhost:${TEST_PORT}/api/sessions/detail`);
+    assert.strictEqual(statusCode, 400);
+    const data = JSON.parse(body);
+    assert.ok(data.error, "should include an error message");
+  });
+
+  it("responds to /api/sessions/detail with JSON for an unknown key", async () => {
+    const { statusCode, body } = await httpGet(
+      `http://localhost:${TEST_PORT}/api/sessions/detail?key=${encodeURIComponent("agent:nope:nope")}`,
+    );
+    assert.strictEqual(statusCode, 200);
+    const data = JSON.parse(body);
+    // Unknown keys resolve to a structured error payload, never a crash
+    assert.ok(data.error || data.key, "should return a structured payload");
+  });
+
   it("serves static files for root path", async () => {
     const { statusCode } = await httpGet(`http://localhost:${TEST_PORT}/`);
     // Should return 200 (index.html) or similar

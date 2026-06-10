@@ -6,6 +6,11 @@ const {
   stripTrailingDot,
   deriveMagicDnsSuffix,
   DEFAULT_LOCAL_API_ENDPOINT,
+  STATUS_CACHE_TTL,
+  NEGATIVE_STATUS_CACHE_TTL,
+  EXEC_TIMEOUT_MS,
+  LOCALAPI_MAX_CONSECUTIVE_FAILURES,
+  LOCALAPI_REPROBE_INTERVAL_MS,
 } = require("../src/tailscale");
 
 // Representative tailscale status JSON (same shape from CLI and LocalAPI).
@@ -226,6 +231,271 @@ describe("tailscale module", () => {
 
       const status = await adapter.getStatus();
       assert.strictEqual(status.available, false);
+    });
+  });
+
+  describe("constants", () => {
+    it("uses a 10s exec timeout", () => {
+      assert.strictEqual(EXEC_TIMEOUT_MS, 10000);
+    });
+
+    it("caches negatives for a shorter TTL than positives", () => {
+      assert.strictEqual(STATUS_CACHE_TTL, 10000);
+      assert.strictEqual(NEGATIVE_STATUS_CACHE_TTL, 3000);
+      assert.ok(NEGATIVE_STATUS_CACHE_TTL < STATUS_CACHE_TTL);
+    });
+  });
+
+  describe("getStatus() — unavailability logging", () => {
+    it("warns once on the transition to unavailable, not on every poll", async () => {
+      const warnings = [];
+      let fakeNow = 1000000;
+      const adapter = createTailscaleAdapter({
+        execFn: async () => {
+          throw new Error("no cli");
+        },
+        fetchFn: async () => {
+          throw new Error("refused");
+        },
+        nowFn: () => fakeNow,
+        warnFn: (msg) => warnings.push(msg),
+      });
+
+      await adapter.getStatus();
+      fakeNow += NEGATIVE_STATUS_CACHE_TTL + 1;
+      await adapter.getStatus();
+      fakeNow += NEGATIVE_STATUS_CACHE_TTL + 1;
+      await adapter.getStatus();
+
+      const transitionWarnings = warnings.filter((w) => w.includes("mesh status unavailable"));
+      assert.strictEqual(transitionWarnings.length, 1, "exactly one transition warning expected");
+      assert.ok(transitionWarnings[0].includes("no cli"), "warning carries the underlying error");
+    });
+
+    it("warns again after a recovery followed by a new failure", async () => {
+      const warnings = [];
+      let fakeNow = 1000000;
+      let cliWorks = false;
+      const adapter = createTailscaleAdapter({
+        execFn: async () => {
+          if (cliWorks) return JSON.stringify(rawStatus());
+          throw new Error("no cli");
+        },
+        fetchFn: async () => {
+          throw new Error("refused");
+        },
+        nowFn: () => fakeNow,
+        warnFn: (msg) => warnings.push(msg),
+      });
+
+      await adapter.getStatus(); // unavailable -> warn #1
+      cliWorks = true;
+      fakeNow += NEGATIVE_STATUS_CACHE_TTL + 1;
+      await adapter.getStatus(); // recovered
+      cliWorks = false;
+      fakeNow += STATUS_CACHE_TTL + 1;
+      await adapter.getStatus(); // unavailable again -> warn #2
+
+      const transitionWarnings = warnings.filter((w) => w.includes("mesh status unavailable"));
+      assert.strictEqual(transitionWarnings.length, 2);
+    });
+  });
+
+  describe("getStatus() — negative caching", () => {
+    it("caches a failure for the shorter negative TTL", async () => {
+      let execCalls = 0;
+      let fakeNow = 1000000;
+      const adapter = createTailscaleAdapter({
+        execFn: async () => {
+          execCalls++;
+          throw new Error("no cli");
+        },
+        fetchFn: async () => {
+          throw new Error("refused");
+        },
+        nowFn: () => fakeNow,
+        warnFn: () => {},
+      });
+
+      await adapter.getStatus();
+      assert.strictEqual(execCalls, 1);
+
+      // Within the negative TTL: served from cache.
+      fakeNow += NEGATIVE_STATUS_CACHE_TTL - 1;
+      await adapter.getStatus();
+      assert.strictEqual(execCalls, 1, "negative result must be cached within 3s");
+
+      // Past the negative TTL (but well within the positive TTL): refreshed.
+      fakeNow += 2;
+      await adapter.getStatus();
+      assert.strictEqual(execCalls, 2, "negative result must be retried after 3s");
+    });
+  });
+
+  describe("getStatus() — preferred path memory", () => {
+    it("tries the LocalAPI first after it was the last path to succeed", async () => {
+      let execCalls = 0;
+      let fetchCalls = 0;
+      let fakeNow = 1000000;
+      const adapter = createTailscaleAdapter({
+        execFn: async () => {
+          execCalls++;
+          throw new Error("no cli");
+        },
+        fetchFn: async () => {
+          fetchCalls++;
+          return okResponse(rawStatus());
+        },
+        nowFn: () => fakeNow,
+        warnFn: () => {},
+      });
+
+      // First refresh: CLI fails, LocalAPI succeeds.
+      const first = await adapter.getStatus();
+      assert.strictEqual(first.available, true);
+      assert.strictEqual(execCalls, 1);
+      assert.strictEqual(fetchCalls, 1);
+
+      // Second refresh: LocalAPI is preferred — the CLI is not retried.
+      fakeNow += STATUS_CACHE_TTL + 1;
+      const second = await adapter.getStatus();
+      assert.strictEqual(second.available, true);
+      assert.strictEqual(fetchCalls, 2);
+      assert.strictEqual(execCalls, 1, "CLI must not be retried while LocalAPI is preferred");
+    });
+
+    it("returns to preferring the CLI after the CLI succeeds again", async () => {
+      let cliWorks = false;
+      let fetchWorks = true;
+      let fetchCalls = 0;
+      let fakeNow = 1000000;
+      const adapter = createTailscaleAdapter({
+        execFn: async () => {
+          if (cliWorks) return JSON.stringify(rawStatus());
+          throw new Error("no cli");
+        },
+        fetchFn: async () => {
+          fetchCalls++;
+          if (fetchWorks) return okResponse(rawStatus());
+          throw new Error("refused");
+        },
+        nowFn: () => fakeNow,
+        warnFn: () => {},
+      });
+
+      await adapter.getStatus(); // CLI fails, LocalAPI succeeds -> preferred
+      assert.strictEqual(fetchCalls, 1);
+
+      // LocalAPI dies, CLI recovers: LocalAPI tried first (preferred), CLI rescues.
+      cliWorks = true;
+      fetchWorks = false;
+      fakeNow += STATUS_CACHE_TTL + 1;
+      const rescued = await adapter.getStatus();
+      assert.strictEqual(rescued.available, true);
+      assert.strictEqual(fetchCalls, 2);
+
+      // CLI is now preferred: the LocalAPI is not touched while CLI works.
+      fakeNow += STATUS_CACHE_TTL + 1;
+      const next = await adapter.getStatus();
+      assert.strictEqual(next.available, true);
+      assert.strictEqual(fetchCalls, 2, "LocalAPI must not be hit once CLI is preferred again");
+    });
+  });
+
+  describe("getStatus() — LocalAPI circuit breaker", () => {
+    it("skips the LocalAPI fallback after 3 consecutive failures", async () => {
+      let fetchCalls = 0;
+      let fakeNow = 1000000;
+      const warnings = [];
+      const adapter = createTailscaleAdapter({
+        execFn: async () => {
+          throw new Error("no cli");
+        },
+        fetchFn: async () => {
+          fetchCalls++;
+          throw new Error("connection refused");
+        },
+        nowFn: () => fakeNow,
+        warnFn: (msg) => warnings.push(msg),
+      });
+
+      for (let i = 0; i < LOCALAPI_MAX_CONSECUTIVE_FAILURES; i++) {
+        await adapter.getStatus();
+        fakeNow += NEGATIVE_STATUS_CACHE_TTL + 1;
+      }
+      assert.strictEqual(fetchCalls, LOCALAPI_MAX_CONSECUTIVE_FAILURES);
+
+      // Subsequent refreshes must not touch the LocalAPI.
+      const status = await adapter.getStatus();
+      assert.strictEqual(fetchCalls, LOCALAPI_MAX_CONSECUTIVE_FAILURES, "fallback must be skipped");
+      assert.strictEqual(status.available, false);
+      assert.ok(status.error.includes("circuit open"), "error explains the skipped fallback");
+      assert.ok(
+        warnings.some((w) => w.includes("LocalAPI fallback disabled")),
+        "circuit-open event is logged",
+      );
+    });
+
+    it("re-probes the LocalAPI after the hourly re-probe interval", async () => {
+      let fetchCalls = 0;
+      let fakeNow = 1000000;
+      const adapter = createTailscaleAdapter({
+        execFn: async () => {
+          throw new Error("no cli");
+        },
+        fetchFn: async () => {
+          fetchCalls++;
+          throw new Error("connection refused");
+        },
+        nowFn: () => fakeNow,
+        warnFn: () => {},
+      });
+
+      for (let i = 0; i < LOCALAPI_MAX_CONSECUTIVE_FAILURES; i++) {
+        await adapter.getStatus();
+        fakeNow += NEGATIVE_STATUS_CACHE_TTL + 1;
+      }
+      await adapter.getStatus(); // circuit open: skipped
+      assert.strictEqual(fetchCalls, LOCALAPI_MAX_CONSECUTIVE_FAILURES);
+
+      // After the re-probe interval the LocalAPI is attempted again.
+      fakeNow += LOCALAPI_REPROBE_INTERVAL_MS + 1;
+      await adapter.getStatus();
+      assert.strictEqual(fetchCalls, LOCALAPI_MAX_CONSECUTIVE_FAILURES + 1, "hourly re-probe");
+    });
+
+    it("closes the circuit once the LocalAPI succeeds on a re-probe", async () => {
+      let fetchFails = true;
+      let fetchCalls = 0;
+      let fakeNow = 1000000;
+      const adapter = createTailscaleAdapter({
+        execFn: async () => {
+          throw new Error("no cli");
+        },
+        fetchFn: async () => {
+          fetchCalls++;
+          if (fetchFails) throw new Error("connection refused");
+          return okResponse(rawStatus());
+        },
+        nowFn: () => fakeNow,
+        warnFn: () => {},
+      });
+
+      for (let i = 0; i < LOCALAPI_MAX_CONSECUTIVE_FAILURES; i++) {
+        await adapter.getStatus();
+        fakeNow += NEGATIVE_STATUS_CACHE_TTL + 1;
+      }
+
+      fetchFails = false;
+      fakeNow += LOCALAPI_REPROBE_INTERVAL_MS + 1;
+      const recovered = await adapter.getStatus();
+      assert.strictEqual(recovered.available, true);
+
+      // Circuit is closed and LocalAPI is now the preferred path.
+      fakeNow += STATUS_CACHE_TTL + 1;
+      const next = await adapter.getStatus();
+      assert.strictEqual(next.available, true);
+      assert.strictEqual(fetchCalls, LOCALAPI_MAX_CONSECUTIVE_FAILURES + 2);
     });
   });
 

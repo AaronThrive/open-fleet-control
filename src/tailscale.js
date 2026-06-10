@@ -10,6 +10,17 @@
  *      http://127.0.0.1:9002/api/status, overridable via
  *      TAILSCALE_LOCAL_API_ENDPOINT)
  *
+ * Resilience behaviors:
+ *   - The path (CLI vs LocalAPI) that last succeeded is tried first on the
+ *     next refresh.
+ *   - After LOCALAPI_MAX_CONSECUTIVE_FAILURES consecutive LocalAPI failures
+ *     the LocalAPI fallback is skipped (it does not exist on bare hosts and
+ *     only adds a guaranteed second failure). It is re-probed after
+ *     LOCALAPI_REPROBE_INTERVAL_MS.
+ *   - Negative results are cached for a shorter TTL than positive ones so
+ *     recovery is noticed quickly without hammering the daemon.
+ *   - A transition to unavailable is logged once (not once per poll).
+ *
  * Never throws to callers: when tailscale is unavailable, getStatus()
  * resolves to `{ available: false, error, self: null, peers: [] }`.
  */
@@ -18,6 +29,10 @@ const { runCmd } = require("./utils");
 
 const DEFAULT_LOCAL_API_ENDPOINT = "http://127.0.0.1:9002/api/status";
 const STATUS_CACHE_TTL = 10000; // 10 seconds — avoid hammering the daemon
+const NEGATIVE_STATUS_CACHE_TTL = 3000; // 3 seconds — re-check failures sooner
+const EXEC_TIMEOUT_MS = 10000; // 10 seconds — slow hosts need headroom
+const LOCALAPI_MAX_CONSECUTIVE_FAILURES = 3;
+const LOCALAPI_REPROBE_INTERVAL_MS = 60 * 60 * 1000; // re-probe hourly
 
 /**
  * Strip a single trailing dot from a DNS name (tailscale FQDNs end with ".").
@@ -94,22 +109,36 @@ function normalizeStatus(raw) {
  * @param {object} [deps]
  * @param {function} [deps.execFn] - async (cmd) => stdout string
  * @param {function} [deps.fetchFn] - fetch-compatible function
- * @param {number} [deps.cacheTtlMs] - status cache TTL (default 10s)
+ * @param {number} [deps.cacheTtlMs] - positive-status cache TTL (default 10s)
+ * @param {number} [deps.negativeCacheTtlMs] - failure cache TTL (default 3s)
  * @param {string} [deps.localApiEndpoint] - override the LocalAPI status URL
  * @param {function} [deps.nowFn] - clock function (default Date.now)
+ * @param {function} [deps.warnFn] - warning logger (default console.warn)
  * @returns {{getStatus: function(): Promise<object>}}
  */
 function createTailscaleAdapter(deps = {}) {
   const {
-    execFn = (cmd) => runCmd(cmd, { timeout: 5000 }),
+    execFn = (cmd) => runCmd(cmd, { timeout: EXEC_TIMEOUT_MS }),
     fetchFn = (...args) => globalThis.fetch(...args),
     cacheTtlMs = STATUS_CACHE_TTL,
+    negativeCacheTtlMs = NEGATIVE_STATUS_CACHE_TTL,
     localApiEndpoint = null,
     nowFn = Date.now,
+    warnFn = (...args) => console.warn(...args),
   } = deps;
 
   let cachedStatus = null;
   let lastStatusUpdate = 0;
+
+  // Availability transition tracking (null = never resolved yet).
+  let lastAvailable = null;
+
+  // The path that last produced a successful status ("cli" | "localapi").
+  let preferredPath = "cli";
+
+  // LocalAPI circuit breaker: skip the fallback after repeated failures.
+  let localApiConsecutiveFailures = 0;
+  let localApiDisabledUntil = 0;
 
   function getLocalApiEndpoint() {
     return (
@@ -130,38 +159,97 @@ function createTailscaleAdapter(deps = {}) {
     return normalizeStatus(await res.json());
   }
 
+  function isLocalApiCircuitOpen(now) {
+    return (
+      localApiConsecutiveFailures >= LOCALAPI_MAX_CONSECUTIVE_FAILURES &&
+      now < localApiDisabledUntil
+    );
+  }
+
+  function recordLocalApiFailure(now) {
+    localApiConsecutiveFailures++;
+    if (localApiConsecutiveFailures >= LOCALAPI_MAX_CONSECUTIVE_FAILURES) {
+      localApiDisabledUntil = now + LOCALAPI_REPROBE_INTERVAL_MS;
+      if (localApiConsecutiveFailures === LOCALAPI_MAX_CONSECUTIVE_FAILURES) {
+        warnFn(
+          `[tailscale] LocalAPI fallback disabled after ${localApiConsecutiveFailures} consecutive failures; re-probing in ${LOCALAPI_REPROBE_INTERVAL_MS / 60000} minutes`,
+        );
+      }
+    }
+  }
+
   /**
-   * Get the normalized tailscale status (cached for cacheTtlMs).
+   * Attempt one path. Returns the status on success, null on failure
+   * (recording the error in `errors`).
+   */
+  async function tryPath(pathName, errors, now) {
+    if (pathName === "localapi") {
+      if (isLocalApiCircuitOpen(now)) {
+        errors.push({ path: "localapi", message: "skipped (circuit open)" });
+        return null;
+      }
+      try {
+        const status = await fetchViaLocalApi();
+        localApiConsecutiveFailures = 0;
+        localApiDisabledUntil = 0;
+        preferredPath = "localapi";
+        return status;
+      } catch (e) {
+        errors.push({ path: "localapi", message: e.message });
+        recordLocalApiFailure(now);
+        return null;
+      }
+    }
+
+    try {
+      const status = await fetchViaCli();
+      preferredPath = "cli";
+      return status;
+    } catch (e) {
+      errors.push({ path: "cli", message: e.message });
+      return null;
+    }
+  }
+
+  /**
+   * Get the normalized tailscale status (cached; positives for cacheTtlMs,
+   * negatives for negativeCacheTtlMs).
    * Never throws: returns { available: false, error } on failure.
    * @returns {Promise<object>}
    */
   async function getStatus() {
     const now = nowFn();
-    if (cachedStatus && now - lastStatusUpdate < cacheTtlMs) {
-      return cachedStatus;
+    if (cachedStatus) {
+      const ttl = cachedStatus.available ? cacheTtlMs : negativeCacheTtlMs;
+      if (now - lastStatusUpdate < ttl) {
+        return cachedStatus;
+      }
     }
 
+    const order = preferredPath === "localapi" ? ["localapi", "cli"] : ["cli", "localapi"];
+    const errors = [];
     let status = null;
-    let cliError = null;
 
-    try {
-      status = await fetchViaCli();
-    } catch (e) {
-      cliError = e;
+    for (const pathName of order) {
+      status = await tryPath(pathName, errors, now);
+      if (status) break;
     }
 
     if (!status) {
-      try {
-        status = await fetchViaLocalApi();
-      } catch (apiError) {
-        status = {
-          available: false,
-          error: `tailscale unavailable (cli: ${cliError ? cliError.message : "failed"}; localapi: ${apiError.message})`,
-          self: null,
-          peers: [],
-        };
-      }
+      const detail = errors.map((e) => `${e.path}: ${e.message}`).join("; ");
+      status = {
+        available: false,
+        error: `tailscale unavailable (${detail})`,
+        self: null,
+        peers: [],
+      };
     }
+
+    // Log once on the transition to unavailable — not on every failed poll.
+    if (status.available === false && lastAvailable !== false) {
+      warnFn(`[tailscale] mesh status unavailable: ${status.error}`);
+    }
+    lastAvailable = status.available;
 
     cachedStatus = status;
     lastStatusUpdate = now;
@@ -178,4 +266,8 @@ module.exports = {
   deriveMagicDnsSuffix,
   DEFAULT_LOCAL_API_ENDPOINT,
   STATUS_CACHE_TTL,
+  NEGATIVE_STATUS_CACHE_TTL,
+  EXEC_TIMEOUT_MS,
+  LOCALAPI_MAX_CONSECUTIVE_FAILURES,
+  LOCALAPI_REPROBE_INTERVAL_MS,
 };
