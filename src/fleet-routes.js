@@ -172,8 +172,20 @@ function createFleetRoutes({ fleet }) {
   }
 
   // -------------------------------------------------------------------
-  // Federation (read-only fleet-of-fleets monitoring)
+  // Federation (fleet-of-fleets monitoring + opt-in whitelisted write proxy)
   // -------------------------------------------------------------------
+
+  // Proxied remote writes audit LOCALLY under the closest matching native
+  // action (AUDIT_ACTIONS is a closed enum we deliberately do not extend);
+  // detail { kind: "federation-proxy", remote } disambiguates them from
+  // local mutations. The REMOTE side audits independently via the forwarded
+  // Tailscale-User-Login identity.
+  const FEDERATION_PROXY_AUDIT = {
+    "lesson.approve": "lesson.approve",
+    "lesson.reject": "lesson.reject",
+    "gate.set": "gate.toggle",
+    "task.move": "task.move",
+  };
 
   async function handleFederation(req, res, method, segments) {
     if (segments.length === 1 && method === "GET") {
@@ -188,12 +200,65 @@ function createFleetRoutes({ fleet }) {
         label: body.label,
         baseUrl: body.baseUrl,
         token: body.token,
+        allowWrites: body.allowWrites,
         addedBy: user,
       });
       // AUDIT_ACTIONS is a closed enum — reuse node.register with a
       // detail.kind marker instead of extending it.
       recordAudit(user, "node.register", remote.baseUrl, { kind: "federation", id: remote.id });
       json(res, 200, { success: true, remote });
+      return true;
+    }
+    if (segments[1] === "remotes" && segments.length === 3 && method === "PATCH") {
+      const user = guardMutation(req, res);
+      if (!user) return true;
+      const body = await readJsonBody(req);
+      if (typeof body.allowWrites !== "boolean") {
+        throw httpError(400, "Body must include a boolean 'allowWrites' field");
+      }
+      const remote = fleet.federation.setRemoteWrites(segments[2], body.allowWrites);
+      // Least-wrong audit action: toggling a remote's write opt-in is a
+      // registry (re)configuration, so it reuses node.register (the same
+      // action that recorded the registration) rather than gate.toggle
+      // (which means the local evolution gate) or alerts.config (alerting
+      // config). detail.change pinpoints what actually changed.
+      recordAudit(user, "node.register", remote.baseUrl, {
+        kind: "federation",
+        change: "allowWrites",
+        allowWrites: remote.allowWrites,
+        id: remote.id,
+      });
+      json(res, 200, { success: true, remote });
+      return true;
+    }
+    if (
+      segments[1] === "remotes" &&
+      segments.length === 4 &&
+      segments[3] === "actions" &&
+      method === "POST"
+    ) {
+      const user = guardMutation(req, res);
+      if (!user) return true;
+      const body = await readJsonBody(req);
+      const params = body.params && typeof body.params === "object" ? body.params : {};
+      // Whitelist + allowWrites + param validation enforced by the module;
+      // unknown actions throw 400, writes-disabled remotes throw 403.
+      const result = await fleet.federation.performRemoteAction(segments[2], body.action, params, {
+        actor: user,
+      });
+      recordAudit(
+        user,
+        FEDERATION_PROXY_AUDIT[result.action],
+        params.lessonId || params.taskId || null,
+        {
+          kind: "federation-proxy",
+          remote: result.remoteId,
+          action: result.action,
+          remoteStatus: result.remoteStatus,
+          ok: result.ok,
+        },
+      );
+      json(res, 200, { success: true, result });
       return true;
     }
     if (segments[1] === "remotes" && segments.length === 3 && method === "DELETE") {

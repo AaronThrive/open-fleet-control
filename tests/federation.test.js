@@ -65,8 +65,15 @@ describe("federation module", () => {
       assert.strictEqual(validateBaseUrl(`${REMOTE_URL}:8443/dash/`), `${REMOTE_URL}:8443/dash`);
     });
 
-    it("rejects http:// URLs", () => {
+    it("rejects http:// URLs for non-loopback hosts", () => {
       assert.throws(() => validateBaseUrl("http://atlas.example.com"), /only https/);
+      assert.throws(() => validateBaseUrl("http://10.0.0.5:3333"), /only https/);
+    });
+
+    it("allows http:// for loopback hosts only (test/dev escape hatch)", () => {
+      assert.strictEqual(validateBaseUrl("http://localhost:4444/"), "http://localhost:4444");
+      assert.strictEqual(validateBaseUrl("http://127.0.0.1:8080"), "http://127.0.0.1:8080");
+      assert.strictEqual(validateBaseUrl("http://[::1]:9999"), "http://[::1]:9999");
     });
 
     it("rejects javascript: URLs", () => {
@@ -212,10 +219,14 @@ describe("federation module", () => {
       await federation._pollOnce();
 
       assert.ok(fetchLog.length >= 1);
+      const allowedUrls = [`${REMOTE_URL}/api/state`, `${REMOTE_URL}/api/fleet/evolution`];
       for (const { url, init } of fetchLog) {
-        assert.strictEqual(url, `${REMOTE_URL}/api/state`);
+        assert.ok(allowedUrls.includes(url), `unexpected poll URL: ${url}`);
         assert.strictEqual(init.headers.Authorization, "Bearer tok-123");
       }
+      // Both the state poll and the lessons enrichment carry the token.
+      assert.ok(fetchLog.some(({ url }) => url === `${REMOTE_URL}/api/state`));
+      assert.ok(fetchLog.some(({ url }) => url === `${REMOTE_URL}/api/fleet/evolution`));
     });
 
     it("omits the Authorization header without a token", async () => {
@@ -350,7 +361,349 @@ describe("federation module", () => {
   });
 
   // -----------------------------------------------------------------------
-  // Read-only guarantee
+  // allowWrites opt-in (default off, persisted, toggleable)
+  // -----------------------------------------------------------------------
+
+  describe("allowWrites opt-in", () => {
+    it("defaults to false and persists across reloads", () => {
+      const { federation } = makeFederation();
+      const remote = federation.addRemote({ label: "Atlas", baseUrl: REMOTE_URL });
+      assert.strictEqual(remote.allowWrites, false);
+
+      const onDisk = JSON.parse(fs.readFileSync(path.join(stateDir, "federation.json"), "utf8"));
+      assert.strictEqual(onDisk.remotes[0].allowWrites, false);
+
+      const { federation: reloaded } = makeFederation();
+      assert.strictEqual(reloaded.getState().remotes[0].allowWrites, false);
+    });
+
+    it("normalizes pre-v1.6 registry records (missing field) to false", () => {
+      fs.writeFileSync(
+        path.join(stateDir, "federation.json"),
+        JSON.stringify({
+          remotes: [{ id: "old-1", label: "Old", baseUrl: REMOTE_URL, token: null }],
+        }),
+      );
+      const { federation } = makeFederation();
+      assert.strictEqual(federation.getState().remotes[0].allowWrites, false);
+    });
+
+    it("rejects non-boolean allowWrites on addRemote", () => {
+      const { federation } = makeFederation();
+      assert.throws(
+        () => federation.addRemote({ label: "A", baseUrl: REMOTE_URL, allowWrites: "yes" }),
+        /Invalid allowWrites/,
+      );
+    });
+
+    it("setRemoteWrites toggles, persists, and stays redacted", () => {
+      const { federation } = makeFederation();
+      const remote = federation.addRemote({ label: "Atlas", baseUrl: REMOTE_URL, token: "tok" });
+
+      const enabled = federation.setRemoteWrites(remote.id, true);
+      assert.strictEqual(enabled.allowWrites, true);
+      assert.strictEqual(enabled.token, undefined);
+      assert.strictEqual(enabled.hasToken, true);
+
+      const onDisk = JSON.parse(fs.readFileSync(path.join(stateDir, "federation.json"), "utf8"));
+      assert.strictEqual(onDisk.remotes[0].allowWrites, true);
+      // ...and the token survives the toggle, server-side only.
+      assert.strictEqual(onDisk.remotes[0].token, "tok");
+
+      const disabled = federation.setRemoteWrites(remote.id, false);
+      assert.strictEqual(disabled.allowWrites, false);
+    });
+
+    it("setRemoteWrites validates input and remote id", () => {
+      const { federation } = makeFederation();
+      const remote = federation.addRemote({ label: "Atlas", baseUrl: REMOTE_URL });
+      assert.throws(() => federation.setRemoteWrites(remote.id, "on"), /must be a boolean/);
+      assert.throws(() => federation.setRemoteWrites("nope", true), /Unknown remote/);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Write proxy (whitelisted actions)
+  // -----------------------------------------------------------------------
+
+  describe("performRemoteAction()", () => {
+    /** Federation + a writes-enabled remote + a programmable fetch stub. */
+    function makeWriteSetup({ respond, token = "tok-9" } = {}) {
+      const fetchLog = [];
+      const federation = createFederation({
+        stateDir,
+        fetchFn: async (url, init) => {
+          fetchLog.push({ url, init: init || {} });
+          if (respond) return respond(url, init);
+          return okResponse({ success: true });
+        },
+      });
+      const remote = federation.addRemote({ label: "Atlas", baseUrl: REMOTE_URL, token });
+      federation.setRemoteWrites(remote.id, true);
+      return { federation, remote, fetchLog };
+    }
+
+    function writes(fetchLog) {
+      return fetchLog.filter(({ init }) => (init.method || "GET").toUpperCase() !== "GET");
+    }
+
+    it("rejects unknown actions with a 400-style error before any request", async () => {
+      const { federation, remote, fetchLog } = makeWriteSetup();
+      await assert.rejects(
+        federation.performRemoteAction(remote.id, "node.unregister", {}),
+        (err) => /Unsupported federation action/.test(err.message) && err.statusCode === 400,
+      );
+      assert.strictEqual(writes(fetchLog).length, 0);
+    });
+
+    it("refuses with 403 when allowWrites is disabled, without contacting the remote", async () => {
+      const { federation, remote, fetchLog } = makeWriteSetup();
+      federation.setRemoteWrites(remote.id, false);
+      await assert.rejects(
+        federation.performRemoteAction(remote.id, "lesson.approve", { lessonId: "les_a1b2c3" }),
+        (err) => /Write actions are disabled/.test(err.message) && err.statusCode === 403,
+      );
+      assert.strictEqual(writes(fetchLog).length, 0);
+    });
+
+    it("throws Unknown remote for unregistered ids", async () => {
+      const { federation } = makeWriteSetup();
+      await assert.rejects(
+        federation.performRemoteAction("ghost", "lesson.approve", { lessonId: "les_a1b2c3" }),
+        /Unknown remote/,
+      );
+    });
+
+    it("lesson.approve hits the right URL with Authorization + forwarded identity", async () => {
+      const { federation, remote, fetchLog } = makeWriteSetup();
+      const result = await federation.performRemoteAction(
+        remote.id,
+        "lesson.approve",
+        { lessonId: "les_a1b2c3" },
+        { actor: "aaron@thrivenmedia.com" },
+      );
+
+      const [call] = writes(fetchLog);
+      assert.strictEqual(call.url, `${REMOTE_URL}/api/fleet/evolution/lessons/les_a1b2c3/approve`);
+      assert.strictEqual(call.init.method, "POST");
+      assert.strictEqual(call.init.headers.Authorization, "Bearer tok-9");
+      assert.strictEqual(call.init.headers["Tailscale-User-Login"], "aaron@thrivenmedia.com");
+      assert.deepStrictEqual(result, {
+        ok: true,
+        action: "lesson.approve",
+        remoteId: remote.id,
+        remoteStatus: 200,
+        remoteBody: { success: true },
+      });
+    });
+
+    it("lesson.reject hits the /reject endpoint", async () => {
+      const { federation, remote, fetchLog } = makeWriteSetup();
+      await federation.performRemoteAction(remote.id, "lesson.reject", { lessonId: "les_0fF1ce" });
+      const [call] = writes(fetchLog);
+      assert.strictEqual(call.url, `${REMOTE_URL}/api/fleet/evolution/lessons/les_0fF1ce/reject`);
+      assert.strictEqual(call.init.method, "POST");
+    });
+
+    it("gate.set PUTs the gate boolean", async () => {
+      const { federation, remote, fetchLog } = makeWriteSetup();
+      await federation.performRemoteAction(
+        remote.id,
+        "gate.set",
+        { gate: false },
+        { actor: "ops" },
+      );
+      const [call] = writes(fetchLog);
+      assert.strictEqual(call.url, `${REMOTE_URL}/api/fleet/evolution/gate`);
+      assert.strictEqual(call.init.method, "PUT");
+      assert.deepStrictEqual(JSON.parse(call.init.body), { gate: false });
+      assert.strictEqual(call.init.headers["Tailscale-User-Login"], "ops");
+    });
+
+    it("task.move POSTs status and optional order", async () => {
+      const { federation, remote, fetchLog } = makeWriteSetup();
+      await federation.performRemoteAction(remote.id, "task.move", {
+        taskId: "tsk_ab12cd",
+        status: "review",
+        order: 2,
+      });
+      const [call] = writes(fetchLog);
+      assert.strictEqual(call.url, `${REMOTE_URL}/api/fleet/kanban/tasks/tsk_ab12cd/move`);
+      assert.strictEqual(call.init.method, "POST");
+      assert.deepStrictEqual(JSON.parse(call.init.body), { status: "review", order: 2 });
+    });
+
+    it("works without a token (tailnet sharing) but still forwards identity", async () => {
+      const { federation, remote, fetchLog } = makeWriteSetup({ token: null });
+      await federation.performRemoteAction(remote.id, "gate.set", { gate: true });
+      const [call] = writes(fetchLog);
+      assert.strictEqual(call.init.headers.Authorization, undefined);
+      assert.strictEqual(call.init.headers["Tailscale-User-Login"], "anonymous");
+    });
+
+    it("strictly validates params before any request is issued", async () => {
+      const { federation, remote, fetchLog } = makeWriteSetup();
+      const cases = [
+        ["lesson.approve", {}],
+        ["lesson.approve", { lessonId: "../../etc/passwd" }],
+        ["lesson.approve", { lessonId: "les_xyz!" }],
+        ["gate.set", { gate: "open" }],
+        ["task.move", { taskId: "tsk_ab12cd", status: "shipped" }],
+        ["task.move", { taskId: "not-an-id", status: "done" }],
+        ["task.move", { taskId: "tsk_ab12cd", status: "done", order: "first" }],
+      ];
+      for (const [action, params] of cases) {
+        await assert.rejects(
+          federation.performRemoteAction(remote.id, action, params),
+          (err) => err.statusCode === 400,
+          `expected 400 for ${action} ${JSON.stringify(params)}`,
+        );
+      }
+      assert.strictEqual(writes(fetchLog).length, 0);
+    });
+
+    it("passes remote 4xx/5xx through as { ok: false, remoteStatus, remoteBody }", async () => {
+      const { federation, remote } = makeWriteSetup({
+        respond: (url, init) =>
+          (init.method || "GET") === "GET"
+            ? okResponse(remoteStateBody())
+            : { ok: false, status: 409, json: async () => ({ error: "already approved" }) },
+      });
+      const result = await federation.performRemoteAction(remote.id, "lesson.approve", {
+        lessonId: "les_a1b2c3",
+      });
+      assert.strictEqual(result.ok, false);
+      assert.strictEqual(result.remoteStatus, 409);
+      assert.deepStrictEqual(result.remoteBody, { error: "already approved" });
+    });
+
+    it("truncates oversized remote bodies to 4KB", async () => {
+      const huge = "x".repeat(10000);
+      const { federation, remote } = makeWriteSetup({
+        respond: (url, init) =>
+          (init.method || "GET") === "GET"
+            ? okResponse(remoteStateBody())
+            : { ok: true, status: 200, text: async () => huge },
+      });
+      const result = await federation.performRemoteAction(remote.id, "gate.set", { gate: true });
+      assert.strictEqual(typeof result.remoteBody, "string");
+      assert.strictEqual(result.remoteBody.length, 4096);
+    });
+
+    it("maps network failures to a 502-style error", async () => {
+      const { federation, remote } = makeWriteSetup({
+        respond: (url, init) => {
+          if ((init.method || "GET") !== "GET") throw new Error("connect ECONNREFUSED");
+          return okResponse(remoteStateBody());
+        },
+      });
+      await assert.rejects(
+        federation.performRemoteAction(remote.id, "gate.set", { gate: true }),
+        (err) => /Remote request failed/.test(err.message) && err.statusCode === 502,
+      );
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Pending lessons enrichment
+  // -----------------------------------------------------------------------
+
+  describe("pending lessons enrichment", () => {
+    function lessonsBody(count, extra = {}) {
+      return {
+        gate: true,
+        lessons: Array.from({ length: count }, (_, i) => ({
+          id: `les_${String(i).padStart(6, "0")}`,
+          title: `Lesson ${i}`,
+          status: "pending",
+          author: "agent-1",
+          ts: "2026-06-09T00:00:00Z",
+          body: "SECRET BODY SHOULD BE TRIMMED",
+          ...extra,
+        })),
+      };
+    }
+
+    it("stores trimmed pending lessons (max 10, id/title/author/ts only)", async () => {
+      const { federation } = makeFederation({
+        fetchFn: async (url) =>
+          url.endsWith("/api/fleet/evolution")
+            ? okResponse(lessonsBody(12))
+            : okResponse(remoteStateBody()),
+      });
+      const remote = federation.addRemote({ label: "Atlas", baseUrl: REMOTE_URL });
+      await federation._pollOnce();
+
+      const entry = federation.getState().remotes.find((r) => r.id === remote.id);
+      const lessons = entry.status.pendingLessons;
+      assert.strictEqual(lessons.length, 10);
+      assert.deepStrictEqual(lessons[0], {
+        id: "les_000000",
+        title: "Lesson 0",
+        author: "agent-1",
+        ts: "2026-06-09T00:00:00Z",
+      });
+      assert.ok(!JSON.stringify(lessons).includes("SECRET BODY"));
+    });
+
+    it("only includes pending lessons", async () => {
+      const body = lessonsBody(2);
+      body.lessons[1].status = "approved";
+      const { federation } = makeFederation({
+        fetchFn: async (url) =>
+          url.endsWith("/api/fleet/evolution") ? okResponse(body) : okResponse(remoteStateBody()),
+      });
+      const remote = federation.addRemote({ label: "Atlas", baseUrl: REMOTE_URL });
+      await federation._pollOnce();
+      const entry = federation.getState().remotes.find((r) => r.id === remote.id);
+      assert.deepStrictEqual(
+        entry.status.pendingLessons.map((l) => l.id),
+        ["les_000000"],
+      );
+    });
+
+    it("tolerates older remotes without the endpoint (404) silently", async () => {
+      const { federation } = makeFederation({
+        fetchFn: async (url) =>
+          url.endsWith("/api/fleet/evolution")
+            ? { ok: false, status: 404, json: async () => ({}) }
+            : okResponse(remoteStateBody()),
+      });
+      const remote = federation.addRemote({ label: "Old", baseUrl: REMOTE_URL });
+      await federation._pollOnce();
+      const entry = federation.getState().remotes.find((r) => r.id === remote.id);
+      assert.strictEqual(entry.status.reachable, true); // state poll unaffected
+      assert.strictEqual(entry.status.pendingLessons, null);
+    });
+
+    it("tolerates enrichment network errors silently", async () => {
+      const { federation } = makeFederation({
+        fetchFn: async (url) => {
+          if (url.endsWith("/api/fleet/evolution")) throw new Error("boom");
+          return okResponse(remoteStateBody());
+        },
+      });
+      const remote = federation.addRemote({ label: "Atlas", baseUrl: REMOTE_URL });
+      await federation._pollOnce();
+      const entry = federation.getState().remotes.find((r) => r.id === remote.id);
+      assert.strictEqual(entry.status.reachable, true);
+      assert.strictEqual(entry.status.pendingLessons, null);
+    });
+
+    it("extractPendingLessons tolerates malformed payloads", () => {
+      const { extractPendingLessons } = require("../src/federation");
+      assert.strictEqual(extractPendingLessons(null), null);
+      assert.strictEqual(extractPendingLessons("nope"), null);
+      assert.strictEqual(extractPendingLessons({ lessons: "nope" }), null);
+      assert.deepStrictEqual(
+        extractPendingLessons({ lessons: [{ status: "pending" }, null, 7] }),
+        [],
+      );
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Read-only guarantee (still holds whenever allowWrites is off)
   // -----------------------------------------------------------------------
 
   describe("read-only guarantee", () => {
@@ -372,6 +725,27 @@ describe("federation module", () => {
         const method = (init.method || "GET").toUpperCase();
         assert.strictEqual(method, "GET", `non-GET request detected: ${method} ${url}`);
         assert.match(url, /^https:\/\//);
+      }
+    });
+
+    it("holds even when write actions are attempted with allowWrites=false", async () => {
+      const { federation, fetchLog } = makeFederation();
+      const remote = federation.addRemote({ label: "Atlas", baseUrl: REMOTE_URL });
+      await new Promise((resolve) => setImmediate(resolve)); // initial probe
+      await federation._pollOnce();
+
+      await assert.rejects(
+        federation.performRemoteAction(remote.id, "lesson.approve", { lessonId: "les_a1b2c3" }),
+        (err) => err.statusCode === 403,
+      );
+      await assert.rejects(
+        federation.performRemoteAction(remote.id, "gate.set", { gate: true }),
+        (err) => err.statusCode === 403,
+      );
+
+      for (const { url, init } of fetchLog) {
+        const method = (init.method || "GET").toUpperCase();
+        assert.strictEqual(method, "GET", `non-GET request detected: ${method} ${url}`);
       }
     });
   });

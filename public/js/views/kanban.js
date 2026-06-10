@@ -36,6 +36,9 @@ const state = {
   dragging: false,
   pendingRefresh: false,
   forceBoard: false, // empty-state CTA pressed: show columns even with 0 tasks
+  moveModeTaskId: null, // card currently in keyboard move mode
+  moveOrigin: null, // { status, index } snapshot for Escape-cancel
+  drawerReturnTaskId: null, // card to refocus when the drawer closes
   refs: {},
 };
 
@@ -123,6 +126,35 @@ function removeTask(id) {
   state.tasks = state.tasks.filter((t) => t.id !== id);
 }
 
+function cssEscape(value) {
+  return window.CSS?.escape ? CSS.escape(String(value)) : String(value);
+}
+
+function cardEl(taskId) {
+  return state.refs.board?.querySelector(`.kb-card[data-id="${cssEscape(taskId)}"]`) || null;
+}
+
+/** Tasks of one column, in render order (shared by renderBoard + keyboard moves). */
+function sortedColumn(status) {
+  return state.tasks
+    .filter((t) => t.status === status)
+    .sort((a, b) => a.order - b.order || (a.created_at < b.created_at ? -1 : 1));
+}
+
+function columnLabel(status) {
+  return COLUMNS.find((c) => c.status === status)?.label || status;
+}
+
+/** Screen-reader announcement via the aria-live region (cleared first to re-trigger). */
+function announce(message) {
+  const el = state.refs.live;
+  if (!el) return;
+  el.textContent = "";
+  window.setTimeout(() => {
+    if (isActive()) el.textContent = message;
+  }, 30);
+}
+
 function isOverdue(task) {
   if (!task.due || task.status === "done" || task.status === "failed") return false;
   const due = new Date(task.due);
@@ -204,6 +236,8 @@ function buildColumnSkeleton(boardEl) {
     const list = document.createElement("div");
     list.className = "kb-list";
     list.dataset.status = col.status;
+    list.setAttribute("role", "list");
+    list.setAttribute("aria-label", `${col.label} column`);
 
     colEl.append(header, form, list);
     boardEl.appendChild(colEl);
@@ -221,6 +255,10 @@ function buildCard(task) {
   const card = document.createElement("div");
   card.className = "kb-card";
   card.dataset.id = task.id;
+  card.tabIndex = 0;
+  card.setAttribute("role", "listitem");
+  card.setAttribute("aria-label", `${task.title} — ${columnLabel(task.status)}`);
+  if (task.id === state.moveModeTaskId) card.classList.add("kb-move-mode");
 
   const title = document.createElement("div");
   title.className = "kb-card-title";
@@ -276,8 +314,9 @@ function buildCard(task) {
   }
 
   card.addEventListener("click", () => {
-    if (!state.dragging) openDrawer(task.id);
+    if (!state.dragging && state.moveModeTaskId !== task.id) openDrawer(task.id);
   });
+  card.addEventListener("keydown", (e) => handleCardKeydown(e, task.id));
   return card;
 }
 
@@ -296,24 +335,29 @@ function renderBoard() {
     state.pendingRefresh = true;
     return;
   }
-  const { board, emptyState, loading } = state.refs;
+  const { board, emptyState, loading, kbdHint } = state.refs;
   loading.hidden = true;
 
   const empty = state.tasks.length === 0 && !state.forceBoard && !anyNewFormOpen();
   emptyState.hidden = !empty;
   board.hidden = empty;
+  if (kbdHint) kbdHint.hidden = empty;
   if (state.tasks.length > 0) state.forceBoard = false;
+
+  // Re-rendering destroys the focused card; remember it by id and refocus below.
+  const focusedCardId = document.activeElement?.classList?.contains("kb-card")
+    ? document.activeElement.dataset.id
+    : null;
 
   for (const col of COLUMNS) {
     const list = board.querySelector(`.kb-list[data-status="${col.status}"]`);
     if (!list) continue;
     list.textContent = "";
-    const tasks = state.tasks
-      .filter((t) => t.status === col.status)
-      .sort((a, b) => a.order - b.order || (a.created_at < b.created_at ? -1 : 1));
-    for (const task of tasks) list.appendChild(buildCard(task));
+    for (const task of sortedColumn(col.status)) list.appendChild(buildCard(task));
   }
   renderCounts();
+
+  if (focusedCardId) cardEl(focusedCardId)?.focus();
 
   if (state.openTaskId) {
     const task = getTask(state.openTaskId);
@@ -446,6 +490,212 @@ async function handleDragEnd(evt) {
 }
 
 // ---------------------------------------------------------------------------
+// Keyboard move mode (parallel input path to drag & drop; same move API)
+// ---------------------------------------------------------------------------
+
+/**
+ * Immutably re-shelve a task locally: status change + dense re-index of the
+ * affected column(s) so the optimistic render matches the intended order.
+ */
+function applyLocalMove(taskId, toStatus, toIndex) {
+  const task = getTask(taskId);
+  if (!task) return;
+  const fromStatus = task.status;
+
+  const source = sortedColumn(fromStatus).filter((t) => t.id !== taskId);
+  const target = fromStatus === toStatus ? source : sortedColumn(toStatus);
+
+  const targetIds = target.map((t) => t.id);
+  const index = Math.max(0, Math.min(toIndex, targetIds.length));
+  targetIds.splice(index, 0, taskId);
+
+  upsertTask({ ...task, status: toStatus, order: index });
+  targetIds.forEach((id, i) => {
+    const t = getTask(id);
+    if (t) upsertTask({ ...t, order: i });
+  });
+  if (fromStatus !== toStatus) {
+    source.forEach((t, i) => upsertTask({ ...t, order: i }));
+  }
+}
+
+/** Persist a move through the same API used by drag & drop; rollback on error. */
+async function persistMove(taskId, toStatus, toIndex) {
+  try {
+    const result = await api("POST", `/tasks/${encodeURIComponent(taskId)}/move`, {
+      status: toStatus,
+      order: toIndex,
+    });
+    if (result?.task) upsertTask(result.task);
+    return true;
+  } catch (err) {
+    toast(`Move failed: ${err.message}`);
+    announce(`Move failed: ${err.message}`);
+    await refreshBoard(); // rollback to server truth
+    return false;
+  }
+}
+
+function updateMoveHint(task) {
+  const hint = state.refs.moveHint;
+  if (!hint) return;
+  if (!task) {
+    hint.hidden = true;
+    hint.textContent = "";
+    return;
+  }
+  hint.hidden = false;
+  hint.textContent =
+    `Move mode: "${task.title}" — ` +
+    "←/→ change column, ↑/↓ change position, Enter confirm, Esc cancel";
+}
+
+function enterMoveMode(taskId) {
+  const task = getTask(taskId);
+  if (!task) return;
+  const index = sortedColumn(task.status).findIndex((t) => t.id === taskId);
+  state.moveModeTaskId = taskId;
+  state.moveOrigin = { status: task.status, index };
+  cardEl(taskId)?.classList.add("kb-move-mode");
+  updateMoveHint(task);
+  announce(
+    `Move mode on for task "${task.title}". Use arrow keys to move, ` +
+      "Enter to confirm, Escape to cancel.",
+  );
+}
+
+function exitMoveMode() {
+  const taskId = state.moveModeTaskId;
+  state.moveModeTaskId = null;
+  state.moveOrigin = null;
+  if (taskId) cardEl(taskId)?.classList.remove("kb-move-mode");
+  updateMoveHint(null);
+}
+
+function confirmMoveMode(taskId) {
+  const task = getTask(taskId);
+  exitMoveMode();
+  if (task) {
+    announce(`Move confirmed: task "${task.title}" is in ${columnLabel(task.status)}.`);
+  }
+  cardEl(taskId)?.focus();
+}
+
+async function cancelMoveMode(taskId) {
+  const origin = state.moveOrigin;
+  const task = getTask(taskId);
+  exitMoveMode();
+
+  const movedAway =
+    task &&
+    origin &&
+    (task.status !== origin.status ||
+      sortedColumn(origin.status).findIndex((t) => t.id === taskId) !== origin.index);
+
+  if (movedAway) {
+    // Put the card back where move mode started, then refetch server truth.
+    try {
+      await api("POST", `/tasks/${encodeURIComponent(taskId)}/move`, {
+        status: origin.status,
+        order: origin.index,
+      });
+    } catch (err) {
+      toast(`Cancel restore failed: ${err.message}`);
+    }
+    await refreshBoard();
+  }
+  announce(`Move cancelled: task "${task ? task.title : taskId}" restored.`);
+  cardEl(taskId)?.focus();
+}
+
+/** ArrowLeft / ArrowRight — move to previous/next column (appended at the end). */
+async function keyboardMoveAcross(taskId, delta) {
+  const task = getTask(taskId);
+  if (!task) return;
+  const colIdx = COLUMNS.findIndex((c) => c.status === task.status);
+  const nextIdx = colIdx + delta;
+  if (nextIdx < 0 || nextIdx >= COLUMNS.length) {
+    announce(`Task "${task.title}" is already in the ${delta < 0 ? "first" : "last"} column.`);
+    return;
+  }
+  const toStatus = COLUMNS[nextIdx].status;
+  const toIndex = sortedColumn(toStatus).length;
+  applyLocalMove(taskId, toStatus, toIndex);
+  renderBoard();
+  cardEl(taskId)?.focus();
+  announce(`Task "${task.title}" moved to ${COLUMNS[nextIdx].label}.`);
+  await persistMove(taskId, toStatus, toIndex);
+}
+
+/** ArrowUp / ArrowDown — reorder within the current column. */
+async function keyboardReorder(taskId, delta) {
+  const task = getTask(taskId);
+  if (!task) return;
+  const column = sortedColumn(task.status);
+  const fromIndex = column.findIndex((t) => t.id === taskId);
+  const toIndex = fromIndex + delta;
+  if (toIndex < 0 || toIndex >= column.length) {
+    announce(
+      `Task "${task.title}" is already at the ${delta < 0 ? "top" : "bottom"} of ` +
+        `${columnLabel(task.status)}.`,
+    );
+    return;
+  }
+  applyLocalMove(taskId, task.status, toIndex);
+  renderBoard();
+  cardEl(taskId)?.focus();
+  announce(
+    `Task "${task.title}" moved to position ${toIndex + 1} of ${column.length} in ` +
+      `${columnLabel(task.status)}.`,
+  );
+  await persistMove(taskId, task.status, toIndex);
+}
+
+function handleCardKeydown(e, taskId) {
+  const inMoveMode = state.moveModeTaskId === taskId;
+
+  switch (e.key) {
+    case "Enter":
+      e.preventDefault();
+      if (inMoveMode) confirmMoveMode(taskId);
+      else openDrawer(taskId);
+      return;
+    case " ":
+      e.preventDefault();
+      if (!inMoveMode) openDrawer(taskId);
+      return;
+    case "m":
+    case "M":
+      e.preventDefault();
+      if (inMoveMode) confirmMoveMode(taskId);
+      else enterMoveMode(taskId);
+      return;
+    case "Escape":
+      if (inMoveMode) {
+        e.preventDefault();
+        e.stopPropagation(); // keep board-level Escape away from the drawer handler
+        cancelMoveMode(taskId);
+      }
+      return;
+    case "ArrowLeft":
+    case "ArrowRight":
+      if (inMoveMode) {
+        e.preventDefault();
+        keyboardMoveAcross(taskId, e.key === "ArrowLeft" ? -1 : 1);
+      }
+      return;
+    case "ArrowUp":
+    case "ArrowDown":
+      if (inMoveMode) {
+        e.preventDefault();
+        keyboardReorder(taskId, e.key === "ArrowUp" ? -1 : 1);
+      }
+      return;
+    default:
+  }
+}
+
+// ---------------------------------------------------------------------------
 // New-task inline form
 // ---------------------------------------------------------------------------
 
@@ -490,15 +740,92 @@ function openDrawer(taskId) {
   const task = getTask(taskId);
   if (!task) return;
   state.openTaskId = taskId;
+  state.drawerReturnTaskId = taskId;
   state.refs.drawer.hidden = false;
   state.refs.backdrop.hidden = false;
   renderDrawer(task, { preserveEdits: false });
+  state.refs.drawer.querySelector("#kb-drawer-close")?.focus();
 }
 
 function closeDrawer() {
+  const returnTaskId = state.drawerReturnTaskId;
   state.openTaskId = null;
+  state.drawerReturnTaskId = null;
   if (state.refs.drawer) state.refs.drawer.hidden = true;
   if (state.refs.backdrop) state.refs.backdrop.hidden = true;
+  // Return focus to the originating card (no-op if it left the board).
+  if (returnTaskId) cardEl(returnTaskId)?.focus();
+}
+
+function getDrawerFocusables() {
+  const selector = 'button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])';
+  return [...state.refs.drawer.querySelectorAll(selector)].filter(
+    (el) => !el.disabled && el.offsetParent !== null,
+  );
+}
+
+/** Focus trap + Escape-to-close while the drawer dialog is open. */
+function handleDrawerKeydown(e) {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    e.stopPropagation();
+    closeDrawer();
+    return;
+  }
+  if (e.key !== "Tab") return;
+  const focusables = getDrawerFocusables();
+  if (focusables.length === 0) return;
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+/** "Move to column" fallback buttons — same API path as drag and move mode. */
+function renderMoveButtons(task) {
+  const host = state.refs.drawer.querySelector("#kb-move-row");
+  if (!host) return;
+  const focusedStatus =
+    document.activeElement?.parentElement === host ? document.activeElement.dataset.status : null;
+  host.textContent = "";
+  for (const col of COLUMNS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "kb-move-btn";
+    btn.dataset.status = col.status;
+    btn.textContent = col.label;
+    if (col.status === task.status) {
+      btn.disabled = true;
+      btn.setAttribute("aria-label", `${col.label} (current column)`);
+    } else {
+      btn.setAttribute("aria-label", `Move to ${col.label}`);
+      btn.addEventListener("click", () => moveOpenTaskTo(col.status));
+    }
+    host.appendChild(btn);
+  }
+  if (focusedStatus) {
+    // The previously focused button may now be the disabled "current column"
+    // one; fall back to the close button so focus never escapes the dialog.
+    const again = host.querySelector(`.kb-move-btn[data-status="${focusedStatus}"]`);
+    if (again && !again.disabled) again.focus();
+    else state.refs.drawer.querySelector("#kb-drawer-close")?.focus();
+  }
+}
+
+async function moveOpenTaskTo(toStatus) {
+  const taskId = state.openTaskId;
+  const task = taskId ? getTask(taskId) : null;
+  if (!task || task.status === toStatus) return;
+  const toIndex = sortedColumn(toStatus).length;
+  applyLocalMove(taskId, toStatus, toIndex);
+  renderBoard(); // refreshes the board and the open drawer (incl. these buttons)
+  announce(`Task "${task.title}" moved to ${columnLabel(toStatus)}.`);
+  await persistMove(taskId, toStatus, toIndex);
 }
 
 /**
@@ -520,6 +847,7 @@ function renderDrawer(task, { preserveEdits }) {
     input.value = String(value);
   });
 
+  renderMoveButtons(task);
   renderAttempts(task);
   renderComments(task);
 }
@@ -685,6 +1013,7 @@ async function deleteOpenTask() {
 function bindDrawerEvents() {
   const { drawer, backdrop } = state.refs;
   drawer.querySelector("#kb-drawer-close").addEventListener("click", closeDrawer);
+  drawer.addEventListener("keydown", handleDrawerKeydown);
   backdrop.addEventListener("click", closeDrawer);
   drawer.querySelectorAll("[data-field]").forEach((input) => {
     input.addEventListener("change", () => patchOpenTask(input.dataset.field, input.value));
@@ -707,6 +1036,9 @@ function teardown() {
   state.pendingRefresh = false;
   state.openTaskId = null;
   state.forceBoard = false;
+  state.moveModeTaskId = null;
+  state.moveOrigin = null;
+  state.drawerReturnTaskId = null;
 }
 
 /**
@@ -722,6 +1054,9 @@ export function init(containerEl) {
     loading: containerEl.querySelector("#kb-loading"),
     drawer: containerEl.querySelector("#kb-drawer"),
     backdrop: containerEl.querySelector("#kb-backdrop"),
+    live: containerEl.querySelector("#kb-live"),
+    moveHint: containerEl.querySelector("#kb-move-hint"),
+    kbdHint: containerEl.querySelector("#kb-kbd-hint"),
   };
   if (!state.refs.board) {
     console.error("[Kanban] Partial markup missing #kanban-board");

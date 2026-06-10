@@ -1,5 +1,5 @@
 /**
- * Federation View — read-only fleet-of-fleets monitoring.
+ * Federation View — fleet-of-fleets monitoring + opt-in write actions.
  *
  * Loaded on demand by views.js, which calls init(containerEl) on EVERY
  * visit of the view. The partial HTML is re-injected fresh each visit, so
@@ -9,11 +9,15 @@
  * Data sources:
  *   GET    /api/fleet/federation              — remotes + last-known summaries
  *   POST   /api/fleet/federation/remotes      — add a remote dashboard
+ *   PATCH  /api/fleet/federation/remotes/:id  — toggle per-remote allowWrites
  *   DELETE /api/fleet/federation/remotes/:id  — remove a remote
+ *   POST   /api/fleet/federation/remotes/:id/actions — whitelisted write proxy
  *   SSE    /api/events (event "fleet.federation") — reachability transitions
  *
- * v1 is strictly read-only against remotes: this panel only ever mutates the
- * LOCAL registry of which dashboards to watch.
+ * Remotes are read-only by default: this panel only mutates the LOCAL
+ * registry unless a remote is explicitly opted in (allowWrites). With writes
+ * enabled, the card exposes the remote's pending lessons (approve/reject)
+ * and a gate toggle — all proxied through the server-side whitelist.
  */
 
 const REFRESH_INTERVAL_MS = 60000; // fallback poll; SSE drives live updates
@@ -211,6 +215,20 @@ function buildRemoteCard(remote) {
 
   const latency = isFiniteNumber(status.latencyMs) ? `${Math.round(status.latencyMs)} ms` : "—";
   head.appendChild(el("span", "fed-latency", latency));
+
+  // Writes opt-in badge (OFF by default) — click to toggle.
+  const writesOn = remote.allowWrites === true;
+  const writesBadge = el(
+    "button",
+    `fed-writes-badge${writesOn ? " on" : ""}`,
+    writesOn ? "WRITES ON" : "writes off",
+  );
+  writesBadge.type = "button";
+  writesBadge.title = writesOn
+    ? "Write actions enabled — click to disable"
+    : "Read-only — click to enable write actions";
+  writesBadge.addEventListener("click", () => toggleWrites(remote, writesBadge));
+  head.appendChild(writesBadge);
   card.appendChild(head);
 
   // Last-known summary tiles
@@ -218,6 +236,12 @@ function buildRemoteCard(remote) {
     card.appendChild(buildSummaryTiles(summary));
   } else {
     card.appendChild(el("div", "fed-muted", "No data from this remote yet."));
+  }
+
+  // Write controls (gate toggle + pending lessons) — only with writes
+  // enabled AND the remote currently reachable.
+  if (writesOn && status.reachable === true) {
+    card.appendChild(buildWriteControls(remote, status, summary));
   }
 
   // Last error (when unreachable)
@@ -342,7 +366,153 @@ function buildTaskBars(counts) {
   return wrap;
 }
 
-// --- Mutations (LOCAL registry only — never against remotes) ----------------
+/**
+ * Gate toggle + pending lessons mini-list for a writes-enabled, reachable
+ * remote. All actions go through the server's whitelisted proxy.
+ */
+function buildWriteControls(remote, status, summary) {
+  const wrap = el("div", "fed-write-controls");
+  wrap.appendChild(el("div", "fed-write-controls-title", "Remote actions"));
+
+  // Gate control mirroring the remote gate state.
+  const gate = summary && summary.evolution ? summary.evolution.gate : null;
+  const gateRow = el("div", "fed-gate-row");
+  gateRow.appendChild(el("span", null, "Evolution gate:"));
+  const gateClass = gate === true ? "on" : gate === false ? "off" : "unknown";
+  gateRow.appendChild(
+    el(
+      "span",
+      `fed-gate-badge ${gateClass}`,
+      gate === true ? "Gated" : gate === false ? "Open" : "—",
+    ),
+  );
+  if (typeof gate === "boolean") {
+    const gateBtn = el("button", "fed-action-btn", gate ? "Open gate" : "Close gate");
+    gateBtn.type = "button";
+    gateBtn.addEventListener("click", () =>
+      proxyAction(remote, "gate.set", { gate: !gate }, gateBtn),
+    );
+    gateRow.appendChild(gateBtn);
+  }
+  wrap.appendChild(gateRow);
+
+  // Pending lessons mini-list with per-lesson approve/reject.
+  const lessons = Array.isArray(status.pendingLessons) ? status.pendingLessons : null;
+  if (lessons && lessons.length > 0) {
+    const list = el("div", "fed-lessons");
+    for (const lesson of lessons) {
+      const row = el("div", "fed-lesson-row");
+      const title = el("span", "fed-lesson-title", lesson.title || lesson.id);
+      title.title = `${lesson.id}${lesson.ts ? ` · ${lesson.ts}` : ""}`;
+      row.appendChild(title);
+      if (lesson.author) row.appendChild(el("span", "fed-lesson-author", lesson.author));
+
+      const approveBtn = el("button", "fed-action-btn approve", "Approve");
+      approveBtn.type = "button";
+      approveBtn.addEventListener("click", () =>
+        proxyAction(remote, "lesson.approve", { lessonId: lesson.id }, approveBtn),
+      );
+      row.appendChild(approveBtn);
+
+      const rejectBtn = el("button", "fed-action-btn reject", "Reject");
+      rejectBtn.type = "button";
+      rejectBtn.addEventListener("click", () =>
+        proxyAction(remote, "lesson.reject", { lessonId: lesson.id }, rejectBtn),
+      );
+      row.appendChild(rejectBtn);
+      list.appendChild(row);
+    }
+    wrap.appendChild(list);
+  } else {
+    wrap.appendChild(el("div", "fed-muted", "No pending lessons on this remote."));
+  }
+
+  return wrap;
+}
+
+// --- Mutations (LOCAL registry + whitelisted remote write proxy) -------------
+
+/** Toggle the per-remote write opt-in (PATCH), confirming before enabling. */
+async function toggleWrites(remote, button) {
+  const name = remote.label || baseUrlHost(remote.baseUrl);
+  const enabling = remote.allowWrites !== true;
+  if (
+    enabling &&
+    !window.confirm(
+      `Enable write actions against "${name}"?\n\n` +
+        "This dashboard will be able to approve/reject lessons, toggle the " +
+        "evolution gate, and move tasks ON THE REMOTE dashboard. Every action " +
+        "is audited on both sides under your identity. Only enable this for " +
+        "remotes you operate and trust.",
+    )
+  ) {
+    return;
+  }
+  button.disabled = true;
+  try {
+    await fetchJson(`/api/fleet/federation/remotes/${encodeURIComponent(remote.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ allowWrites: enabling }),
+    });
+    showToast(`Write actions ${enabling ? "ENABLED" : "disabled"} for "${name}".`, "success");
+    await refresh({ initial: false });
+  } catch (err) {
+    button.disabled = false;
+    showToast(`Failed to update write access: ${err.message}`, "error");
+  }
+}
+
+/**
+ * Run one whitelisted write action against a remote via the server-side
+ * proxy. Surfaces the remote's status clearly (403 writes-disabled, remote
+ * 4xx/5xx, network failures) and optimistically refreshes the panel.
+ */
+async function proxyAction(remote, action, params, button) {
+  const name = remote.label || baseUrlHost(remote.baseUrl);
+  button.disabled = true;
+  try {
+    const payload = await fetchJson(
+      `/api/fleet/federation/remotes/${encodeURIComponent(remote.id)}/actions`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, params }),
+      },
+    );
+    const result = payload && payload.result ? payload.result : {};
+    if (result.ok) {
+      showToast(
+        `${action} succeeded on "${name}" (remote HTTP ${result.remoteStatus}).`,
+        "success",
+      );
+    } else {
+      const detail =
+        result.remoteBody && result.remoteBody.error ? ` — ${result.remoteBody.error}` : "";
+      showToast(
+        `${action} failed on "${name}": remote HTTP ${result.remoteStatus}${detail}`,
+        "error",
+      );
+    }
+    await refresh({ initial: false });
+  } catch (err) {
+    // Local rejections: 403 writes-disabled, 400 validation, 502 unreachable.
+    button.disabled = false;
+    showToast(`${action} failed on "${name}": ${err.message}`, "error");
+  }
+}
+
+/** Toast using the dashboard's global .toast styles (same as cortex view). */
+function showToast(message, kind) {
+  let host = document.querySelector(".toast-container");
+  if (!host) {
+    host = el("div", "toast-container");
+    document.body.appendChild(host);
+  }
+  const toast = el("div", `toast ${kind === "error" ? "error" : "success"}`, message);
+  host.appendChild(toast);
+  setTimeout(() => toast.remove(), 5000);
+}
 
 async function removeRemote(remote, button) {
   const name = remote.label || baseUrlHost(remote.baseUrl);

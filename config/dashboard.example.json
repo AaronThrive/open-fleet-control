@@ -94,7 +94,7 @@
       "intervalMs": 15000
     },
     "federation": {
-      "_comment": "Read-only fleet-of-fleets: poll OTHER Open Fleet Control dashboards' /api/state every intervalMs. Remotes are managed in the Federation panel (state/federation.json); tokens stay server-side.",
+      "_comment": "Fleet-of-fleets: poll OTHER Open Fleet Control dashboards' /api/state (plus best-effort pending-lessons enrichment) every intervalMs. Remotes are managed in the Federation panel (state/federation.json); tokens stay server-side. Remotes are READ-ONLY by default — enabling allowWrites per remote (in the panel) unlocks a whitelisted write proxy ONLY for: lesson.approve, lesson.reject, gate.set, task.move. Proxied writes forward the local operator identity (Tailscale-User-Login) and are audited on both sides.",
       "intervalMs": 30000
     },
     "watchdog": {
