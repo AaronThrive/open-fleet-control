@@ -9,7 +9,7 @@ English | [简体中文](README.zh-CN.md)
 [![CI](https://github.com/AaronThrive/open-fleet-control/actions/workflows/ci.yml/badge.svg)](https://github.com/AaronThrive/open-fleet-control/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
-[![Version](https://img.shields.io/badge/version-1.5.0-blue)](package.json)
+[![Version](https://img.shields.io/badge/version-1.6.0-blue)](package.json)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/AaronThrive/open-fleet-control/pulls)
 
 [Feature Tour](#feature-tour) • [Quick Start](#quick-start) • [Fleet Configuration](#fleet-configuration) • [API](#fleet-api) • [Deployment](#deployment)
@@ -35,18 +35,19 @@ Open Fleet Control is the **Overmind's command deck** for that fleet — one das
 
 ## Feature Tour
 
-| Panel | What it does |
-| --- | --- |
-| 🕸️ **Mesh** | Registry of fleet nodes with health polling over the tailnet. Node URLs are composed at runtime from the MagicDNS suffix Tailscale reports — **no tailnet name is ever hardcoded**. Latency sparklines, peer discovery, offline/unreachable detection, and best-effort cost rollups from each node's `/api/state`. |
-| 💬 **Fleet Chat** | Agent-to-agent broadcast bus. Every message lands in a durable JSONL trail (`logs/fleet-chat.jsonl`, rotated at 50MB) **and** a SQLite history (`state/fleet-chat.db`, via `node:sqlite`) for filtered queries. |
-| 🚨 **Alerts** | Rule-based alert engine (`nodeOffline`, `nodeUnreachable`, `taskFailed`, `taskStale`, `lessonPending`) with 5-minute dedupe and two sink types: **webhooks** (HMAC-signed, see below) and **Slack** via your OpenClaw gateway — the dashboard never holds Slack tokens. |
-| 📋 **Kanban** | Task board for the swarm: `inbox → assigned → inprogress → review → done \| failed`. The board file is agent-editable; every read goes through a safe store that quarantines corrupt JSON and auto-restores backups. A watchdog flags stale in-flight tasks. |
-| 📑 **Briefs** | A markdown SOP/report library served from `briefs/*.md` — daily standups, runbooks, incident recaps. Strict filename allowlist + path containment, double-checked. |
-| 🧠 **Cortex** | The fleet's shared brain: LanceDB **memory-pro** dataset (direct reads; search and **all writes go through the `openclaw memory-pro` CLI**), the **gbrain** knowledge graph (read-only via its CLI — never opens the PGLite DB directly), and **compression fuel gauges** (headroom / lean-ctx / lcm token-savings telemetry). Each adapter degrades gracefully when unconfigured. |
-| 🧬 **Evolution + Validation Gate** | Lessons-learned ledger (`lessons_learned.md`) with a human approval gate. Gate ON: new lessons are `pending` until approved into `lessons_learned.approved.md`. Gate OFF: auto-approve, still fully recorded. Approvals rewrite only the target section's status line, atomically. |
-| 🌐 **Federation** | Fleet-of-fleets: register other Open Fleet Control dashboards (HTTPS-only, optional bearer token — stored server-side, always redacted in responses) and watch their compact fleet summaries from one pane of glass. **Read-only in v1**: never issues writes against remotes. |
-| 🧾 **Audit Logs** | Append-only JSONL trail of every mutation: who (Tailscale identity), what (a fixed action enum), when, against which target. Rotated at 50MB, queryable by user/action/time range. |
-| 🔐 **Tailnet-open auth** | Designed to sit behind Tailscale Serve: the tailnet is the perimeter, and every mutating request is attributed to the `Tailscale-User-Login` identity header (falling back to `anonymous`). Token, Cloudflare Access, and IP-allowlist modes remain available from upstream. |
+| Panel                              | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 🕸️ **Mesh**                        | Registry of fleet nodes with health polling over the tailnet. Node URLs are composed at runtime from the MagicDNS suffix Tailscale reports — **no tailnet name is ever hardcoded**. Latency sparklines, peer discovery, offline/unreachable detection, and best-effort cost rollups from each node's `/api/state`.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 💬 **Fleet Chat**                  | Agent-to-agent broadcast bus. Every message lands in a durable JSONL trail (`logs/fleet-chat.jsonl`, rotated at 50MB) **and** a SQLite history (`state/fleet-chat.db`, via `node:sqlite`) for filtered queries.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 🚨 **Alerts**                      | Rule-based alert engine (`nodeOffline`, `nodeUnreachable`, `taskFailed`, `taskStale`, `lessonPending`) with 5-minute dedupe and two sink types: **webhooks** (HMAC-signed, see below) and **Slack** via your OpenClaw gateway — the dashboard never holds Slack tokens.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 📋 **Kanban**                      | Task board for the swarm: `inbox → assigned → inprogress → review → done \| failed`. The board file is agent-editable; every read goes through a safe store that quarantines corrupt JSON and auto-restores backups. A watchdog flags stale in-flight tasks. **Fully keyboard-accessible** (v1.6): `Tab` walks the cards, `Enter`/`Space` opens the detail drawer (focus-trapped, `Esc` closes), `M` toggles move mode, then `←`/`→` changes column, `↑`/`↓` reorders within a column, `Enter` confirms and `Esc` cancels (restoring the original position) — every move is announced via an `aria-live` region.                                                                                                                                    |
+| 📑 **Briefs**                      | A markdown SOP/report library served from `briefs/*.md` — daily standups, runbooks, incident recaps. Strict filename allowlist + path containment, double-checked.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 🧠 **Cortex**                      | The fleet's shared brain: LanceDB **memory-pro** dataset (direct reads; search and **all writes go through the `openclaw memory-pro` CLI**), the **gbrain** knowledge graph (read-only via its CLI — never opens the PGLite DB directly), and **compression fuel gauges** (headroom / lean-ctx / lcm token-savings telemetry). Each adapter degrades gracefully when unconfigured.                                                                                                                                                                                                                                                                                                                                                                  |
+| 🧬 **Evolution + Validation Gate** | Lessons-learned ledger (`lessons_learned.md`) with a human approval gate. Gate ON: new lessons are `pending` until approved into `lessons_learned.approved.md`. Gate OFF: auto-approve, still fully recorded. Approvals rewrite only the target section's status line, atomically.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 🌐 **Federation**                  | Fleet-of-fleets: register other Open Fleet Control dashboards (HTTPS-only, optional bearer token — stored server-side, always redacted in responses) and watch their compact fleet summaries from one pane of glass. Remotes are **read-only by default**; v1.6 adds **opt-in write actions**: flip a per-remote `allowWrites` flag (the WRITES badge) and the card exposes the remote's pending lessons and evolution gate. All writes go through a server-side proxy that only executes a **hardcoded action whitelist** (`lesson.approve`, `lesson.reject`, `gate.set`, `task.move`) with strict param validation, and **forwards your operator identity** (`Tailscale-User-Login`) so the action is audited on both dashboards under your name. |
+| 🧾 **Audit Logs**                  | Append-only JSONL trail of every mutation: who (Tailscale identity), what (a fixed action enum), when, against which target. Rotated at 50MB, queryable by user/action/time range.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 🔐 **Tailnet-open auth**           | Designed to sit behind Tailscale Serve: the tailnet is the perimeter, and every mutating request is attributed to the `Tailscale-User-Login` identity header (falling back to `anonymous`). Token, Cloudflare Access, and IP-allowlist modes remain available from upstream.                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 🌍 **Full panel i18n**             | The entire panel — HTML shells **and** every JS-generated runtime string (toasts, confirm dialogs, empty/error states, aria-labels, screen-reader announcements, tooltips) — is keyed and shipped in **English and 简体中文** (`public/locales/en.json` / `zh-CN.json`). Language is picked from `?lang=`, `localStorage` (`occ.locale`), or `navigator.language`, switchable live from the header; missing keys always fall back to English, never to a raw key path. `scripts/checks/i18n-coverage.mjs` keeps code and locale files in sync in CI.                                                                                                                                                                                                |
 
 Plus everything inherited from upstream: session monitoring, LLM fuel gauges, system vitals, cron jobs, Cerebro topics, operators, memory browser, privacy controls, and cost breakdowns.
 
@@ -133,36 +134,37 @@ Delivery is resilient: 10s timeout, one retry after 30s, failures logged but nev
 
 All fleet endpoints live under `/api/fleet/*`. Mutations are rate-limited (token bucket per user+IP, `429` + `retryAfterMs` when exceeded), audited, and attributed to the Tailscale identity header.
 
-| Endpoint | Method | Description |
-| --- | --- | --- |
-| `/api/fleet/mesh` | GET | Node registry + health + tailscale status |
-| `/api/fleet/mesh/discover` | GET | Tailnet peers not yet registered |
-| `/api/fleet/mesh/nodes` | POST | Register a node |
-| `/api/fleet/mesh/nodes/:id` | DELETE | Unregister a node |
-| `/api/fleet/costs` | GET | Best-effort cost rollup across nodes |
-| `/api/fleet/chat` | GET | Query messages (sender/receiver/text/limit/before) |
-| `/api/fleet/chat/publish` | POST | Publish a message to the bus |
-| `/api/fleet/kanban` | GET | Full board |
-| `/api/fleet/kanban/tasks` | POST | Create task |
-| `/api/fleet/kanban/tasks/:id` | PATCH / DELETE | Update / delete task |
-| `/api/fleet/kanban/tasks/:id/move` | POST | Move between columns |
-| `/api/fleet/kanban/tasks/:id/comments` | POST | Add comment |
-| `/api/fleet/kanban/tasks/:id/attempts` | POST | Record an agent attempt |
-| `/api/fleet/briefs` | GET | List briefs |
-| `/api/fleet/briefs/:name` | GET / PUT / DELETE | Read / write (≤1MB markdown) / delete |
-| `/api/fleet/evolution` | GET | Gate state + lessons ledger |
-| `/api/fleet/evolution/gate` | GET / PUT | Read / toggle the validation gate |
-| `/api/fleet/evolution/lessons` | POST | File a lesson |
-| `/api/fleet/evolution/lessons/:id/approve` · `/reject` | POST | Gate decisions |
-| `/api/fleet/cortex` | GET | Unified cortex state (memory/graph/gauges) |
-| `/api/fleet/cortex/memory` | GET / POST | List/search memory · store (via CLI) |
-| `/api/fleet/cortex/graph` | GET | gbrain knowledge graph (read-only) |
-| `/api/fleet/cortex/gauges` | GET | Compression fuel gauges |
-| `/api/fleet/federation` | GET | Federated remotes + their fleet summaries |
-| `/api/fleet/federation/remotes` | POST | Register a remote dashboard |
-| `/api/fleet/federation/remotes/:id` | DELETE | Remove a remote |
-| `/api/fleet/audit` | GET | Audit trail (user/action/since/until filters) |
-| `/api/fleet/alerts` | GET | Recent fired alerts (ring buffer) |
+| Endpoint                                               | Method             | Description                                                                                                 |
+| ------------------------------------------------------ | ------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `/api/fleet/mesh`                                      | GET                | Node registry + health + tailscale status                                                                   |
+| `/api/fleet/mesh/discover`                             | GET                | Tailnet peers not yet registered                                                                            |
+| `/api/fleet/mesh/nodes`                                | POST               | Register a node                                                                                             |
+| `/api/fleet/mesh/nodes/:id`                            | DELETE             | Unregister a node                                                                                           |
+| `/api/fleet/costs`                                     | GET                | Best-effort cost rollup across nodes                                                                        |
+| `/api/fleet/chat`                                      | GET                | Query messages (sender/receiver/text/limit/before)                                                          |
+| `/api/fleet/chat/publish`                              | POST               | Publish a message to the bus                                                                                |
+| `/api/fleet/kanban`                                    | GET                | Full board                                                                                                  |
+| `/api/fleet/kanban/tasks`                              | POST               | Create task                                                                                                 |
+| `/api/fleet/kanban/tasks/:id`                          | PATCH / DELETE     | Update / delete task                                                                                        |
+| `/api/fleet/kanban/tasks/:id/move`                     | POST               | Move between columns                                                                                        |
+| `/api/fleet/kanban/tasks/:id/comments`                 | POST               | Add comment                                                                                                 |
+| `/api/fleet/kanban/tasks/:id/attempts`                 | POST               | Record an agent attempt                                                                                     |
+| `/api/fleet/briefs`                                    | GET                | List briefs                                                                                                 |
+| `/api/fleet/briefs/:name`                              | GET / PUT / DELETE | Read / write (≤1MB markdown) / delete                                                                       |
+| `/api/fleet/evolution`                                 | GET                | Gate state + lessons ledger                                                                                 |
+| `/api/fleet/evolution/gate`                            | GET / PUT          | Read / toggle the validation gate                                                                           |
+| `/api/fleet/evolution/lessons`                         | POST               | File a lesson                                                                                               |
+| `/api/fleet/evolution/lessons/:id/approve` · `/reject` | POST               | Gate decisions                                                                                              |
+| `/api/fleet/cortex`                                    | GET                | Unified cortex state (memory/graph/gauges)                                                                  |
+| `/api/fleet/cortex/memory`                             | GET / POST         | List/search memory · store (via CLI)                                                                        |
+| `/api/fleet/cortex/graph`                              | GET                | gbrain knowledge graph (read-only)                                                                          |
+| `/api/fleet/cortex/gauges`                             | GET                | Compression fuel gauges                                                                                     |
+| `/api/fleet/federation`                                | GET                | Federated remotes + their fleet summaries                                                                   |
+| `/api/fleet/federation/remotes`                        | POST               | Register a remote dashboard                                                                                 |
+| `/api/fleet/federation/remotes/:id`                    | PATCH / DELETE     | Toggle per-remote `allowWrites` / remove a remote                                                           |
+| `/api/fleet/federation/remotes/:id/actions`            | POST               | Whitelisted write proxy (`lesson.approve` · `lesson.reject` · `gate.set` · `task.move`), identity forwarded |
+| `/api/fleet/audit`                                     | GET                | Audit trail (user/action/since/until filters)                                                               |
+| `/api/fleet/alerts`                                    | GET                | Recent fired alerts (ring buffer)                                                                           |
 
 `GET /api/state` additionally carries a compact `fleet` summary, and SSE (`/api/events`) pushes `fleet.mesh`, `fleet.chat`, `fleet.kanban`, `fleet.evolution`, and `fleet.alert` events with minimal payloads — clients refetch detail over REST.
 
@@ -198,11 +200,11 @@ Fleet Control slots into the `openclaw-stack` appliance as two extra Compose con
 
 ---
 
-## 🚀 Roadmap (v1.6)
+## 🚀 Roadmap (v1.7 ideas)
 
-- **Kanban keyboard accessibility** — full keyboard navigation and ARIA semantics for the board.
-- **Federation write-actions** — drive remote nodes (not just observe them) from the mesh panel.
-- **Full panel i18n** — the HTML shells of all panels are keyed (`data-i18n`) and covered in `en`/`zh-CN` today, but **JS-generated runtime strings inside the fleet panels are not yet keyed**; closing that gap is a known v1.6 item.
+- **Federation remote-node drill-down** — click through a federated card into the remote's mesh/kanban detail, not just the summary tiles.
+- **Graph edge extraction scheduling** — periodic gbrain edge extraction runs managed (and visualized) from the Cortex panel.
+- **Alert rule UI** — edit alert rules and sinks from the dashboard instead of `dashboard.json`.
 
 ---
 

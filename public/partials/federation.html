@@ -387,27 +387,29 @@
         <span data-i18n="views.federation.title">Federation</span>
       </div>
       <div class="view-subtitle" data-i18n="views.federation.subtitle">
-        Fleet-of-fleets: read-only monitoring of other Open Fleet Control dashboards
+        Fleet-of-fleets: monitor other Open Fleet Control dashboards, with per-remote opt-in write
+        actions
       </div>
     </div>
 
     <!-- Loading / error feedback (managed by federation.js) -->
-    <div class="view-loading" id="fed-loading">Loading federation state...</div>
+    <div class="view-loading" id="fed-loading" data-i18n="views.federation.loading">
+      Loading federation state...
+    </div>
     <div class="fed-error" id="fed-fetch-error" hidden></div>
 
     <div class="fed-body" id="fed-body" hidden>
-      <!-- Scope + cross-tailnet hint. NOTE: deliberately not bound to the
-           views.federation.readOnlyNote i18n key — that key still describes
-           the v1 read-only-only behavior, superseded by per-remote opt-in
-           write actions in v1.6. -->
+      <!-- Scope + cross-tailnet hint -->
       <div class="fed-note">
         <span>🔭</span>
-        <span>
+        <span data-i18n="views.federation.writeNote">
           Remotes are read-only by default. Write actions (lesson approve/reject, gate, task move)
           are a per-remote opt-in via the WRITES badge on each card.
         </span>
         <span>
-          Cross-tailnet access works via Tailscale node sharing — see
+          <span data-i18n="views.federation.crossTailnetNote"
+            >Cross-tailnet access works via Tailscale node sharing — see</span
+          >
           <a
             href="https://github.com/AaronThrive/open-fleet-control/blob/main/docs/guides/client-install.md"
             target="_blank"
@@ -448,6 +450,7 @@
             id="fed-add-label"
             class="fed-add-label-input"
             placeholder="Label"
+            data-i18n-placeholder="views.federation.labelPlaceholder"
             maxlength="120"
             required
           />
@@ -463,9 +466,17 @@
             id="fed-add-token"
             class="fed-add-token-input"
             placeholder="Bearer token (optional)"
+            data-i18n-placeholder="views.federation.tokenPlaceholder"
             autocomplete="off"
           />
-          <button type="submit" class="fed-add-btn" id="fed-add-btn">Add remote</button>
+          <button
+            type="submit"
+            class="fed-add-btn"
+            id="fed-add-btn"
+            data-i18n="views.federation.addBtn"
+          >
+            Add remote
+          </button>
         </form>
         <div class="fed-add-hint" data-i18n="views.federation.tokenHint">
           HTTPS only. The token is stored server-side and never displayed again.

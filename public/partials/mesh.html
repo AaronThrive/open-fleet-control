@@ -372,14 +372,16 @@
     </div>
 
     <!-- Loading / error feedback (managed by mesh.js) -->
-    <div class="view-loading" id="mesh-loading">Loading mesh state...</div>
+    <div class="view-loading" id="mesh-loading" data-i18n="views.mesh.loading">
+      Loading mesh state...
+    </div>
     <div class="mesh-error" id="mesh-fetch-error" hidden></div>
 
     <div class="mesh-body" id="mesh-body" hidden>
       <!-- Tailscale availability warning -->
       <div class="mesh-warning" id="mesh-ts-warning" hidden>
         <span>⚠️</span>
-        <span
+        <span data-i18n="views.mesh.tsDegraded"
           >Tailscale is unavailable on this host — node discovery and health checks are degraded.
         </span>
         <span id="mesh-ts-error-detail"></span>
@@ -392,21 +394,21 @@
           <div class="mesh-self-hostname" id="mesh-self-hostname"></div>
           <div class="mesh-self-fqdn" id="mesh-self-fqdn"></div>
         </div>
-        <div class="mesh-self-tag">This dashboard</div>
+        <div class="mesh-self-tag" data-i18n="views.mesh.selfTag">This dashboard</div>
       </div>
 
       <!-- Fleet costs strip -->
       <div class="mesh-costs" id="mesh-costs" hidden>
         <div class="mesh-cost-item">
-          <span class="mesh-cost-label">Fleet cost (24h)</span>
+          <span class="mesh-cost-label" data-i18n="views.mesh.cost24h">Fleet cost (24h)</span>
           <span class="mesh-cost-value" id="mesh-cost-24h">—</span>
         </div>
         <div class="mesh-cost-item">
-          <span class="mesh-cost-label">Fleet cost (7d)</span>
+          <span class="mesh-cost-label" data-i18n="views.mesh.cost7d">Fleet cost (7d)</span>
           <span class="mesh-cost-value" id="mesh-cost-7d">—</span>
         </div>
         <div class="mesh-cost-item">
-          <span class="mesh-cost-label">Nodes reporting</span>
+          <span class="mesh-cost-label" data-i18n="views.mesh.nodesReporting">Nodes reporting</span>
           <span class="mesh-cost-value" id="mesh-cost-reporting">—</span>
         </div>
       </div>
@@ -431,12 +433,16 @@
       <div class="mesh-discovery" id="mesh-discovery">
         <div class="mesh-discovery-head">
           <div>
-            <div class="mesh-discovery-title">Tailnet discovery</div>
-            <div class="mesh-discovery-hint">
+            <div class="mesh-discovery-title" data-i18n="views.mesh.discoveryTitle">
+              Tailnet discovery
+            </div>
+            <div class="mesh-discovery-hint" data-i18n="views.mesh.discoveryHint">
               Find peers on your tailnet and register them as fleet nodes.
             </div>
           </div>
-          <button class="btn-secondary" id="mesh-discover-btn">Discover nodes</button>
+          <button class="btn-secondary" id="mesh-discover-btn" data-i18n="views.mesh.discoverBtn">
+            Discover nodes
+          </button>
         </div>
         <div class="mesh-peer-list" id="mesh-peer-list"></div>
       </div>

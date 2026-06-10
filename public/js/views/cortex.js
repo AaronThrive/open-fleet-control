@@ -7,6 +7,8 @@
  * server data.
  */
 
+import { t } from "../utils.js";
+
 const API_BASE = "/api/fleet/cortex";
 const MEMORY_LIST_LIMIT = 30;
 const GRAPH_NODE_CAP = 150;
@@ -35,17 +37,17 @@ function relativeTime(timestamp) {
   const ts = Number(timestamp);
   if (!Number.isFinite(ts) || ts <= 0) return "";
   const diff = Date.now() - ts;
-  if (diff < 0) return "just now";
+  if (diff < 0) return t("time.relJustNow", {}, "just now");
   const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1) return t("time.relJustNow", {}, "just now");
+  if (mins < 60) return t("time.agoMinutes", { n: mins }, "{n}m ago");
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return t("time.agoHours", { n: hours }, "{n}h ago");
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
+  if (days < 30) return t("time.agoDays", { n: days }, "{n}d ago");
   const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo ago`;
-  return `${Math.floor(months / 12)}y ago`;
+  if (months < 12) return t("time.agoMonths", { n: months }, "{n}mo ago");
+  return t("time.agoYears", { n: Math.floor(months / 12) }, "{n}y ago");
 }
 
 /** Build a short, human detail line for a gauge's `detail` object. */
@@ -53,20 +55,40 @@ function gaugeDetailLine(gauge) {
   const d = gauge.detail || {};
   if (gauge.source === "headroom") {
     const parts = [
-      `in ${formatTokens(d.input)}`,
-      `out ${formatTokens(d.output)}`,
-      `cache reads ${formatTokens(d.cacheReads)}`,
+      t(
+        "views.cortex.detailHeadroom",
+        {
+          input: formatTokens(d.input),
+          output: formatTokens(d.output),
+          cacheReads: formatTokens(d.cacheReads),
+        },
+        "in {input} · out {output} · cache reads {cacheReads}",
+      ),
     ];
     if (d.fiveHourUtilizationPct !== null && d.fiveHourUtilizationPct !== undefined) {
-      parts.push(`5h window ${d.fiveHourUtilizationPct}%`);
+      parts.push(
+        t(
+          "views.cortex.detailHeadroomWindow",
+          { pct: d.fiveHourUtilizationPct },
+          "5h window {pct}%",
+        ),
+      );
     }
     return parts.join(" · ");
   }
   if (gauge.source === "lean-ctx") {
-    return `${d.totalCommands ?? 0} commands compressed · ${d.daysTracked ?? 0} days tracked`;
+    return t(
+      "views.cortex.detailLeanCtx",
+      { commands: d.totalCommands ?? 0, days: d.daysTracked ?? 0 },
+      "{commands} commands compressed · {days} days tracked",
+    );
   }
   if (gauge.source === "lcm") {
-    return `${d.summaries ?? 0} summaries · ${d.messages ?? 0} source messages`;
+    return t(
+      "views.cortex.detailLcm",
+      { summaries: d.summaries ?? 0, messages: d.messages ?? 0 },
+      "{summaries} summaries · {messages} source messages",
+    );
   }
   // Unknown source: render scalar key/value pairs generically.
   return Object.entries(d)
@@ -143,7 +165,9 @@ function renderAvailability(root, state) {
     const label = root.querySelector(`[data-avail-state="${key}"]`);
     if (dot) dot.className = `cx-avail-dot ${up ? "up" : "down"}`;
     if (label) {
-      label.textContent = up ? "online" : "offline";
+      label.textContent = up
+        ? t("views.cortex.online", {}, "online")
+        : t("views.cortex.offline", {}, "offline");
       label.style.color = up ? "var(--cx-accent)" : "#f8a3a0";
     }
   }
@@ -164,10 +188,10 @@ function buildGaugeCard(gauge) {
   const pct = el("div", "cx-gauge-pct");
   if (gauge.available && gauge.savingsPct !== null && gauge.savingsPct !== undefined) {
     pct.textContent = `${gauge.savingsPct}%`;
-    pct.appendChild(el("small", null, "saved"));
+    pct.appendChild(el("small", null, t("views.cortex.savedLabel", {}, "saved")));
   } else {
     pct.classList.add("na");
-    pct.textContent = gauge.available ? "—" : "offline";
+    pct.textContent = gauge.available ? "—" : t("views.cortex.offline", {}, "offline");
   }
   top.appendChild(pct);
   card.appendChild(top);
@@ -183,10 +207,10 @@ function buildGaugeCard(gauge) {
 
   const counts = el("div", "cx-gauge-counts");
   const rawSpan = el("span");
-  rawSpan.append("raw ");
+  rawSpan.append(`${t("views.cortex.rawLabel", {}, "raw")} `);
   rawSpan.appendChild(el("b", null, formatTokens(raw)));
   const effSpan = el("span", "eff");
-  effSpan.append("effective ");
+  effSpan.append(`${t("views.cortex.effectiveLabel", {}, "effective")} `);
   effSpan.appendChild(el("b", null, formatTokens(effective)));
   counts.append(rawSpan, effSpan);
   card.appendChild(counts);
@@ -194,7 +218,9 @@ function buildGaugeCard(gauge) {
   if (gauge.available) {
     card.appendChild(el("div", "cx-gauge-detail", gaugeDetailLine(gauge)));
   } else {
-    const reason = gauge.detail?.error || "source not available on this host";
+    const reason =
+      gauge.detail?.error ||
+      t("views.cortex.sourceUnavailable", {}, "source not available on this host");
     card.appendChild(el("div", "cx-gauge-reason", reason));
   }
   return card;
@@ -206,7 +232,13 @@ function renderGauges(root, gauges) {
   clearChildren(host);
   const list = Array.isArray(gauges) ? gauges : [];
   if (list.length === 0) {
-    host.appendChild(el("div", "cx-empty", "No compression gauges reported by the server."));
+    host.appendChild(
+      el(
+        "div",
+        "cx-empty",
+        t("views.cortex.noGauges", {}, "No compression gauges reported by the server."),
+      ),
+    );
     return;
   }
   for (const gauge of list) host.appendChild(buildGaugeCard(gauge));
@@ -219,16 +251,18 @@ function renderGauges(root, gauges) {
 function buildMemoryItem(row) {
   const item = el("div", "cx-mem-item");
 
-  const text = el("div", "cx-mem-text", row.text || "(empty)");
+  const text = el("div", "cx-mem-text", row.text || t("views.cortex.emptyMemory", {}, "(empty)"));
   item.appendChild(text);
 
-  const expand = el("button", "cx-mem-expand", "Show more");
+  const expand = el("button", "cx-mem-expand", t("views.cortex.showMore", {}, "Show more"));
   expand.type = "button";
   let expanded = false;
   const toggle = () => {
     expanded = !expanded;
     text.classList.toggle("expanded", expanded);
-    expand.textContent = expanded ? "Show less" : "Show more";
+    expand.textContent = expanded
+      ? t("views.cortex.showLess", {}, "Show less")
+      : t("views.cortex.showMore", {}, "Show more");
   };
   expand.addEventListener("click", toggle);
   text.addEventListener("click", toggle);
@@ -247,12 +281,14 @@ function buildMemoryItem(row) {
     const dot = el("span", "cx-imp-dot");
     dot.style.background =
       importance >= 0.8 ? "var(--cx-accent)" : importance >= 0.5 ? "#e3b341" : "#555c68";
-    dot.title = `importance ${importance}`;
+    dot.title = t("views.cortex.importanceTitle", { value: importance }, "importance {value}");
     meta.appendChild(dot);
     meta.appendChild(el("span", null, importance.toFixed(2)));
   }
   if (typeof row.score === "number") {
-    meta.appendChild(el("span", null, `score ${row.score.toFixed(3)}`));
+    meta.appendChild(
+      el("span", null, t("views.cortex.score", { value: row.score.toFixed(3) }, "score {value}")),
+    );
   }
   const when = relativeTime(row.timestamp);
   if (when) meta.appendChild(el("span", "cx-mem-time", when));
@@ -264,7 +300,15 @@ async function loadMemories(root, query) {
   const list = root.querySelector("#cx-memory-list");
   if (!list) return;
   clearChildren(list);
-  list.appendChild(el("div", "cx-loading", query ? "Searching…" : "Loading memories…"));
+  list.appendChild(
+    el(
+      "div",
+      "cx-loading",
+      query
+        ? t("views.cortex.searching", {}, "Searching…")
+        : t("views.cortex.loadingMemories", {}, "Loading memories…"),
+    ),
+  );
 
   try {
     const trimmed = (query || "").trim();
@@ -280,7 +324,9 @@ async function loadMemories(root, query) {
         el(
           "div",
           "cx-empty",
-          trimmed ? "No memories match this search." : "No memories stored yet.",
+          trimmed
+            ? t("views.cortex.noSearchResults", {}, "No memories match this search.")
+            : t("views.cortex.noMemories", {}, "No memories stored yet."),
         ),
       );
       return;
@@ -289,7 +335,17 @@ async function loadMemories(root, query) {
   } catch (error) {
     if (error.name === "AbortError") return;
     clearChildren(list);
-    list.appendChild(el("div", "cx-empty", `Memory lookup failed: ${error.message}`));
+    list.appendChild(
+      el(
+        "div",
+        "cx-empty",
+        t(
+          "views.cortex.lookupFailed",
+          { message: error.message },
+          "Memory lookup failed: {message}",
+        ),
+      ),
+    );
   }
 }
 
@@ -306,9 +362,14 @@ function setupMemoryBrowser(root, memoryState) {
       offline.appendChild(
         buildOfflineBlock(
           "🧠",
-          "Memory store offline",
-          memoryState?.reason || "memory adapter unavailable",
-          "The memory browser comes back automatically once the OpenClaw CLI or the LanceDB dataset is reachable on this host.",
+          t("views.cortex.memoryOfflineTitle", {}, "Memory store offline"),
+          memoryState?.reason ||
+            t("views.cortex.memoryOfflineReason", {}, "memory adapter unavailable"),
+          t(
+            "views.cortex.memoryOfflineHelp",
+            {},
+            "The memory browser comes back automatically once the OpenClaw CLI or the LanceDB dataset is reachable on this host.",
+          ),
         ),
       );
     }
@@ -319,7 +380,11 @@ function setupMemoryBrowser(root, memoryState) {
 
   const stats = memoryState.stats;
   if (statsEl && stats?.totalMemories !== undefined) {
-    statsEl.textContent = `${stats.totalMemories} memories`;
+    statsEl.textContent = t(
+      "views.cortex.memoriesCount",
+      { count: stats.totalMemories },
+      "{count} memories",
+    );
   }
 
   const search = root.querySelector("#cx-memory-search");
@@ -349,16 +414,16 @@ function setupStoreForm(root) {
     const textEl = root.querySelector("#cx-store-text");
     const text = textEl?.value.trim() || "";
     if (!text) {
-      showToast("Memory text cannot be empty.", "error");
+      showToast(t("views.cortex.emptyTextError", {}, "Memory text cannot be empty."), "error");
       return;
     }
     const submit = root.querySelector("#cx-store-submit");
-    const originalLabel = submit?.textContent || "Store";
+    const originalLabel = submit?.textContent || t("views.cortex.storeBtn", {}, "Store");
     if (submit) {
       submit.disabled = true;
       clearChildren(submit);
       submit.appendChild(el("span", "cx-spinner"));
-      submit.append(" Storing…");
+      submit.append(` ${t("views.cortex.storing", {}, "Storing…")}`);
     }
     try {
       const options = {
@@ -373,13 +438,20 @@ function setupStoreForm(root) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, options }),
       });
-      showToast("Memory stored.", "success");
+      showToast(t("views.cortex.stored", {}, "Memory stored."), "success");
       if (textEl) textEl.value = "";
       const search = root.querySelector("#cx-memory-search");
       loadMemories(root, search?.value || "");
     } catch (error) {
       if (error.name !== "AbortError") {
-        showToast(`Failed to store memory: ${error.message}`, "error");
+        showToast(
+          t(
+            "views.cortex.storeFailed",
+            { message: error.message },
+            "Failed to store memory: {message}",
+          ),
+          "error",
+        );
       }
     } finally {
       if (submit) {
@@ -497,8 +569,16 @@ function renderGraph(root, graph) {
   if (countEl) {
     countEl.textContent =
       allNodes.length > nodes.length
-        ? `showing ${nodes.length} of ${allNodes.length} nodes · ${edges.length} links`
-        : `${nodes.length} nodes · ${edges.length} links`;
+        ? t(
+            "views.cortex.graphCountCapped",
+            { shown: nodes.length, total: allNodes.length, links: edges.length },
+            "showing {shown} of {total} nodes · {links} links",
+          )
+        : t(
+            "views.cortex.graphCount",
+            { nodes: nodes.length, links: edges.length },
+            "{nodes} nodes · {links} links",
+          );
   }
   if (noteEl && graph.note) noteEl.textContent = graph.note;
 
@@ -509,7 +589,11 @@ function renderGraph(root, graph) {
     msg.setAttribute("text-anchor", "middle");
     msg.setAttribute("fill", "#9aa4b2");
     msg.setAttribute("font-size", "13");
-    msg.textContent = "The knowledge graph is empty — no pages in gbrain yet.";
+    msg.textContent = t(
+      "views.cortex.graphEmpty",
+      {},
+      "The knowledge graph is empty — no pages in gbrain yet.",
+    );
     svg.appendChild(msg);
     return;
   }
@@ -588,7 +672,15 @@ function showNodeCard(root, node, edges, degreeCount) {
   if (!card || !title || !meta || !links) return;
 
   title.textContent = node.title || node.id;
-  meta.textContent = `type: ${node.type || "page"} · id: ${node.id} · ${degreeCount} link${degreeCount === 1 ? "" : "s"}`;
+  const linkCount =
+    degreeCount === 1
+      ? t("views.cortex.linkCountOne", { n: degreeCount }, "{n} link")
+      : t("views.cortex.linkCountMany", { n: degreeCount }, "{n} links");
+  meta.textContent = t(
+    "views.cortex.nodeMeta",
+    { type: node.type || "page", id: node.id, links: linkCount },
+    "type: {type} · id: {id} · {links}",
+  );
 
   clearChildren(links);
   const neighbors = [];
@@ -597,7 +689,7 @@ function showNodeCard(root, node, edges, degreeCount) {
     else if (e.to === node.id) neighbors.push({ other: e.from, kind: e.kind, dir: "←" });
   }
   if (neighbors.length === 0) {
-    links.appendChild(el("div", null, "No links to other pages."));
+    links.appendChild(el("div", null, t("views.cortex.noLinks", {}, "No links to other pages.")));
   } else {
     for (const n of neighbors.slice(0, 12)) {
       const row = el("div");
@@ -607,7 +699,13 @@ function showNodeCard(root, node, edges, degreeCount) {
       links.appendChild(row);
     }
     if (neighbors.length > 12) {
-      links.appendChild(el("div", null, `…and ${neighbors.length - 12} more`));
+      links.appendChild(
+        el(
+          "div",
+          null,
+          t("views.cortex.andMore", { count: neighbors.length - 12 }, "…and {count} more"),
+        ),
+      );
     }
   }
   card.classList.add("visible");
@@ -690,9 +788,13 @@ function showGraphOffline(root, reason) {
   offline.appendChild(
     buildOfflineBlock(
       "🕸️",
-      "Knowledge graph offline",
-      reason || "gbrain adapter unavailable",
-      "The graph is built from the gbrain knowledge-graph CLI. It renders here automatically as soon as gbrain is healthy on this host — no dashboard changes needed.",
+      t("views.cortex.graphOfflineTitle", {}, "Knowledge graph offline"),
+      reason || t("views.cortex.graphOfflineReason", {}, "gbrain adapter unavailable"),
+      t(
+        "views.cortex.graphOfflineHelp",
+        {},
+        "The graph is built from the gbrain knowledge-graph CLI. It renders here automatically as soon as gbrain is healthy on this host — no dashboard changes needed.",
+      ),
     ),
   );
 }
@@ -742,7 +844,17 @@ export function init(container) {
       const gauges = root.querySelector("#cx-gauges");
       if (gauges) {
         clearChildren(gauges);
-        gauges.appendChild(el("div", "cx-empty", `Failed to load Cortex state: ${error.message}`));
+        gauges.appendChild(
+          el(
+            "div",
+            "cx-empty",
+            t(
+              "views.cortex.loadError",
+              { message: error.message },
+              "Failed to load Cortex state: {message}",
+            ),
+          ),
+        );
       }
       setupMemoryBrowser(root, { available: false, reason: error.message });
       showGraphOffline(root, error.message);

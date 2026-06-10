@@ -20,6 +20,8 @@
  * and a gate toggle — all proxied through the server-side whitelist.
  */
 
+import { t } from "../utils.js";
+
 const REFRESH_INTERVAL_MS = 60000; // fallback poll; SSE drives live updates
 const SSE_REFETCH_DEBOUNCE_MS = 300;
 
@@ -168,7 +170,11 @@ async function refresh({ initial }) {
 function renderFetchError(initial, err) {
   refs.loading.hidden = true;
   refs.fetchError.hidden = false;
-  refs.fetchError.textContent = `Failed to load federation state: ${err.message}. Retrying automatically...`;
+  refs.fetchError.textContent = t(
+    "views.federation.loadError",
+    { message: err.message },
+    "Failed to load federation state: {message}. Retrying automatically...",
+  );
   // Keep showing the last good render (if any) under the error banner.
   if (initial) refs.body.hidden = true;
 }
@@ -200,14 +206,16 @@ function buildRemoteCard(remote) {
   const dot = el("span", `fed-status-dot ${reachClass}`.trim());
   dot.title =
     status.reachable === true
-      ? "Reachable"
+      ? t("views.federation.reachable", {}, "Reachable")
       : status.reachable === false
-        ? "Unreachable"
-        : "Not checked yet";
+        ? t("views.federation.unreachable", {}, "Unreachable")
+        : t("views.federation.notChecked", {}, "Not checked yet");
   head.appendChild(dot);
 
   const names = el("div", "fed-card-names");
-  names.appendChild(el("div", "fed-card-label", remote.label || "unnamed"));
+  names.appendChild(
+    el("div", "fed-card-label", remote.label || t("views.federation.unnamed", {}, "unnamed")),
+  );
   const hostLine = baseUrlHost(remote.baseUrl);
   const hostname = summary && summary.hostname ? ` · ${summary.hostname}` : "";
   names.appendChild(el("div", "fed-card-host", hostLine + hostname));
@@ -221,12 +229,14 @@ function buildRemoteCard(remote) {
   const writesBadge = el(
     "button",
     `fed-writes-badge${writesOn ? " on" : ""}`,
-    writesOn ? "WRITES ON" : "writes off",
+    writesOn
+      ? t("views.federation.writesOn", {}, "WRITES ON")
+      : t("views.federation.writesOff", {}, "writes off"),
   );
   writesBadge.type = "button";
   writesBadge.title = writesOn
-    ? "Write actions enabled — click to disable"
-    : "Read-only — click to enable write actions";
+    ? t("views.federation.writesOnTitle", {}, "Write actions enabled — click to disable")
+    : t("views.federation.writesOffTitle", {}, "Read-only — click to enable write actions");
   writesBadge.addEventListener("click", () => toggleWrites(remote, writesBadge));
   head.appendChild(writesBadge);
   card.appendChild(head);
@@ -235,7 +245,9 @@ function buildRemoteCard(remote) {
   if (summary) {
     card.appendChild(buildSummaryTiles(summary));
   } else {
-    card.appendChild(el("div", "fed-muted", "No data from this remote yet."));
+    card.appendChild(
+      el("div", "fed-muted", t("views.federation.noData", {}, "No data from this remote yet.")),
+    );
   }
 
   // Write controls (gate toggle + pending lessons) — only with writes
@@ -246,15 +258,29 @@ function buildRemoteCard(remote) {
 
   // Last error (when unreachable)
   if (status.reachable === false && status.lastError) {
-    card.appendChild(el("div", "fed-card-error", `Last error: ${status.lastError}`));
+    card.appendChild(
+      el(
+        "div",
+        "fed-card-error",
+        t("views.federation.lastError", { message: status.lastError }, "Last error: {message}"),
+      ),
+    );
   }
 
   // Foot: added-by line, last checked, remove
   const foot = el("div", "fed-card-foot");
-  foot.appendChild(el("span", null, `Checked: ${formatAgo(status.lastChecked)}`));
-  if (remote.hasToken) foot.appendChild(el("span", null, "🔑 token"));
+  foot.appendChild(
+    el(
+      "span",
+      null,
+      t("views.federation.checked", { value: formatAgo(status.lastChecked) }, "Checked: {value}"),
+    ),
+  );
+  if (remote.hasToken) {
+    foot.appendChild(el("span", null, t("views.federation.tokenChip", {}, "🔑 token")));
+  }
 
-  const removeBtn = el("button", "fed-remove-btn", "Remove");
+  const removeBtn = el("button", "fed-remove-btn", t("actions.remove", {}, "Remove"));
   removeBtn.type = "button";
   removeBtn.addEventListener("click", () => removeRemote(remote, removeBtn));
   foot.appendChild(removeBtn);
@@ -268,7 +294,9 @@ function buildSummaryTiles(summary) {
 
   // Mesh nodes online/total
   const meshTile = el("div", "fed-tile");
-  meshTile.appendChild(el("span", "fed-tile-label", "Nodes online"));
+  meshTile.appendChild(
+    el("span", "fed-tile-label", t("views.federation.tileNodes", {}, "Nodes online")),
+  );
   const mesh = summary.mesh;
   meshTile.appendChild(
     el(
@@ -283,7 +311,7 @@ function buildSummaryTiles(summary) {
 
   // Tasks by status mini-bars
   const taskTile = el("div", "fed-tile");
-  taskTile.appendChild(el("span", "fed-tile-label", "Tasks"));
+  taskTile.appendChild(el("span", "fed-tile-label", t("views.federation.tileTasks", {}, "Tasks")));
   const counts = summary.kanban && summary.kanban.counts ? summary.kanban.counts : null;
   const taskBars = buildTaskBars(counts);
   if (taskBars) {
@@ -295,7 +323,7 @@ function buildSummaryTiles(summary) {
 
   // Stale count
   const staleTile = el("div", "fed-tile");
-  staleTile.appendChild(el("span", "fed-tile-label", "Stale"));
+  staleTile.appendChild(el("span", "fed-tile-label", t("views.federation.tileStale", {}, "Stale")));
   staleTile.appendChild(
     el(
       "span",
@@ -309,16 +337,23 @@ function buildSummaryTiles(summary) {
 
   // Evolution gate badge
   const gateTile = el("div", "fed-tile");
-  gateTile.appendChild(el("span", "fed-tile-label", "Gate"));
+  gateTile.appendChild(el("span", "fed-tile-label", t("views.federation.tileGate", {}, "Gate")));
   const gate = summary.evolution ? summary.evolution.gate : null;
   const gateClass = gate === true ? "on" : gate === false ? "off" : "unknown";
-  const gateText = gate === true ? "Gated" : gate === false ? "Open" : "—";
+  const gateText =
+    gate === true
+      ? t("views.federation.gateGated", {}, "Gated")
+      : gate === false
+        ? t("views.federation.gateOpen", {}, "Open")
+        : "—";
   gateTile.appendChild(el("span", `fed-gate-badge ${gateClass}`, gateText));
   tiles.appendChild(gateTile);
 
   // Pending lessons
   const pendingTile = el("div", "fed-tile");
-  pendingTile.appendChild(el("span", "fed-tile-label", "Pending lessons"));
+  pendingTile.appendChild(
+    el("span", "fed-tile-label", t("views.federation.tilePending", {}, "Pending lessons")),
+  );
   pendingTile.appendChild(
     el(
       "span",
@@ -332,7 +367,9 @@ function buildSummaryTiles(summary) {
 
   // Recent alerts
   const alertsTile = el("div", "fed-tile");
-  alertsTile.appendChild(el("span", "fed-tile-label", "Alerts"));
+  alertsTile.appendChild(
+    el("span", "fed-tile-label", t("views.federation.tileAlerts", {}, "Alerts")),
+  );
   alertsTile.appendChild(
     el(
       "span",
@@ -372,22 +409,40 @@ function buildTaskBars(counts) {
  */
 function buildWriteControls(remote, status, summary) {
   const wrap = el("div", "fed-write-controls");
-  wrap.appendChild(el("div", "fed-write-controls-title", "Remote actions"));
+  wrap.appendChild(
+    el(
+      "div",
+      "fed-write-controls-title",
+      t("views.federation.remoteActions", {}, "Remote actions"),
+    ),
+  );
 
   // Gate control mirroring the remote gate state.
   const gate = summary && summary.evolution ? summary.evolution.gate : null;
   const gateRow = el("div", "fed-gate-row");
-  gateRow.appendChild(el("span", null, "Evolution gate:"));
+  gateRow.appendChild(
+    el("span", null, t("views.federation.evolutionGateLabel", {}, "Evolution gate:")),
+  );
   const gateClass = gate === true ? "on" : gate === false ? "off" : "unknown";
   gateRow.appendChild(
     el(
       "span",
       `fed-gate-badge ${gateClass}`,
-      gate === true ? "Gated" : gate === false ? "Open" : "—",
+      gate === true
+        ? t("views.federation.gateGated", {}, "Gated")
+        : gate === false
+          ? t("views.federation.gateOpen", {}, "Open")
+          : "—",
     ),
   );
   if (typeof gate === "boolean") {
-    const gateBtn = el("button", "fed-action-btn", gate ? "Open gate" : "Close gate");
+    const gateBtn = el(
+      "button",
+      "fed-action-btn",
+      gate
+        ? t("views.federation.openGate", {}, "Open gate")
+        : t("views.federation.closeGate", {}, "Close gate"),
+    );
     gateBtn.type = "button";
     gateBtn.addEventListener("click", () =>
       proxyAction(remote, "gate.set", { gate: !gate }, gateBtn),
@@ -407,14 +462,22 @@ function buildWriteControls(remote, status, summary) {
       row.appendChild(title);
       if (lesson.author) row.appendChild(el("span", "fed-lesson-author", lesson.author));
 
-      const approveBtn = el("button", "fed-action-btn approve", "Approve");
+      const approveBtn = el(
+        "button",
+        "fed-action-btn approve",
+        t("views.federation.approve", {}, "Approve"),
+      );
       approveBtn.type = "button";
       approveBtn.addEventListener("click", () =>
         proxyAction(remote, "lesson.approve", { lessonId: lesson.id }, approveBtn),
       );
       row.appendChild(approveBtn);
 
-      const rejectBtn = el("button", "fed-action-btn reject", "Reject");
+      const rejectBtn = el(
+        "button",
+        "fed-action-btn reject",
+        t("views.federation.reject", {}, "Reject"),
+      );
       rejectBtn.type = "button";
       rejectBtn.addEventListener("click", () =>
         proxyAction(remote, "lesson.reject", { lessonId: lesson.id }, rejectBtn),
@@ -424,7 +487,13 @@ function buildWriteControls(remote, status, summary) {
     }
     wrap.appendChild(list);
   } else {
-    wrap.appendChild(el("div", "fed-muted", "No pending lessons on this remote."));
+    wrap.appendChild(
+      el(
+        "div",
+        "fed-muted",
+        t("views.federation.noPendingLessons", {}, "No pending lessons on this remote."),
+      ),
+    );
   }
 
   return wrap;
@@ -436,16 +505,16 @@ function buildWriteControls(remote, status, summary) {
 async function toggleWrites(remote, button) {
   const name = remote.label || baseUrlHost(remote.baseUrl);
   const enabling = remote.allowWrites !== true;
-  if (
-    enabling &&
-    !window.confirm(
-      `Enable write actions against "${name}"?\n\n` +
-        "This dashboard will be able to approve/reject lessons, toggle the " +
-        "evolution gate, and move tasks ON THE REMOTE dashboard. Every action " +
-        "is audited on both sides under your identity. Only enable this for " +
-        "remotes you operate and trust.",
-    )
-  ) {
+  const confirmText = t(
+    "views.federation.confirmEnableWrites",
+    { name },
+    'Enable write actions against "{name}"?\n\n' +
+      "This dashboard will be able to approve/reject lessons, toggle the " +
+      "evolution gate, and move tasks ON THE REMOTE dashboard. Every action " +
+      "is audited on both sides under your identity. Only enable this for " +
+      "remotes you operate and trust.",
+  );
+  if (enabling && !window.confirm(confirmText)) {
     return;
   }
   button.disabled = true;
@@ -455,11 +524,27 @@ async function toggleWrites(remote, button) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ allowWrites: enabling }),
     });
-    showToast(`Write actions ${enabling ? "ENABLED" : "disabled"} for "${name}".`, "success");
+    showToast(
+      enabling
+        ? t("views.federation.writesEnabledToast", { name }, 'Write actions ENABLED for "{name}".')
+        : t(
+            "views.federation.writesDisabledToast",
+            { name },
+            'Write actions disabled for "{name}".',
+          ),
+      "success",
+    );
     await refresh({ initial: false });
   } catch (err) {
     button.disabled = false;
-    showToast(`Failed to update write access: ${err.message}`, "error");
+    showToast(
+      t(
+        "views.federation.writesUpdateFailed",
+        { message: err.message },
+        "Failed to update write access: {message}",
+      ),
+      "error",
+    );
   }
 }
 
@@ -483,14 +568,22 @@ async function proxyAction(remote, action, params, button) {
     const result = payload && payload.result ? payload.result : {};
     if (result.ok) {
       showToast(
-        `${action} succeeded on "${name}" (remote HTTP ${result.remoteStatus}).`,
+        t(
+          "views.federation.actionSucceeded",
+          { action, name, status: result.remoteStatus },
+          '{action} succeeded on "{name}" (remote HTTP {status}).',
+        ),
         "success",
       );
     } else {
       const detail =
         result.remoteBody && result.remoteBody.error ? ` — ${result.remoteBody.error}` : "";
       showToast(
-        `${action} failed on "${name}": remote HTTP ${result.remoteStatus}${detail}`,
+        t(
+          "views.federation.actionFailedRemote",
+          { action, name, status: result.remoteStatus, detail },
+          '{action} failed on "{name}": remote HTTP {status}{detail}',
+        ),
         "error",
       );
     }
@@ -498,7 +591,14 @@ async function proxyAction(remote, action, params, button) {
   } catch (err) {
     // Local rejections: 403 writes-disabled, 400 validation, 502 unreachable.
     button.disabled = false;
-    showToast(`${action} failed on "${name}": ${err.message}`, "error");
+    showToast(
+      t(
+        "views.federation.actionFailed",
+        { action, name, message: err.message },
+        '{action} failed on "{name}": {message}',
+      ),
+      "error",
+    );
   }
 }
 
@@ -516,7 +616,12 @@ function showToast(message, kind) {
 
 async function removeRemote(remote, button) {
   const name = remote.label || baseUrlHost(remote.baseUrl);
-  if (!window.confirm(`Remove remote dashboard "${name}" from federation?`)) return;
+  const confirmText = t(
+    "views.federation.confirmRemove",
+    { name },
+    'Remove remote dashboard "{name}" from federation?',
+  );
+  if (!window.confirm(confirmText)) return;
   button.disabled = true;
   try {
     await fetchJson(`/api/fleet/federation/remotes/${encodeURIComponent(remote.id)}`, {
@@ -525,7 +630,13 @@ async function removeRemote(remote, button) {
     await refresh({ initial: false });
   } catch (err) {
     button.disabled = false;
-    window.alert(`Failed to remove remote: ${err.message}`);
+    window.alert(
+      t(
+        "views.federation.removeFailed",
+        { message: err.message },
+        "Failed to remove remote: {message}",
+      ),
+    );
   }
 }
 
@@ -541,7 +652,7 @@ async function onAddSubmit(event) {
   if (token) body.token = token;
 
   refs.addBtn.disabled = true;
-  refs.addBtn.textContent = "Adding...";
+  refs.addBtn.textContent = t("views.federation.adding", {}, "Adding...");
   refs.addError.hidden = true;
 
   try {
@@ -556,11 +667,15 @@ async function onAddSubmit(event) {
   } catch (err) {
     if (!refs) return;
     refs.addError.hidden = false;
-    refs.addError.textContent = `Failed to add remote: ${err.message}`;
+    refs.addError.textContent = t(
+      "views.federation.addFailed",
+      { message: err.message },
+      "Failed to add remote: {message}",
+    );
   } finally {
     if (refs) {
       refs.addBtn.disabled = false;
-      refs.addBtn.textContent = "Add remote";
+      refs.addBtn.textContent = t("views.federation.addBtn", {}, "Add remote");
     }
   }
 }
@@ -588,11 +703,11 @@ function baseUrlHost(baseUrl) {
 }
 
 function formatAgo(stamp) {
-  if (!isFiniteNumber(stamp)) return "never";
+  if (!isFiniteNumber(stamp)) return t("time.never", {}, "never");
   const deltaSec = Math.max(0, Math.floor((Date.now() - stamp) / 1000));
-  if (deltaSec < 10) return "just now";
-  if (deltaSec < 60) return `${deltaSec}s ago`;
-  if (deltaSec < 3600) return `${Math.floor(deltaSec / 60)}m ago`;
-  if (deltaSec < 86400) return `${Math.floor(deltaSec / 3600)}h ago`;
+  if (deltaSec < 10) return t("time.relJustNow", {}, "just now");
+  if (deltaSec < 60) return t("time.agoSeconds", { n: deltaSec }, "{n}s ago");
+  if (deltaSec < 3600) return t("time.agoMinutes", { n: Math.floor(deltaSec / 60) }, "{n}m ago");
+  if (deltaSec < 86400) return t("time.agoHours", { n: Math.floor(deltaSec / 3600) }, "{n}h ago");
   return new Date(stamp).toLocaleDateString();
 }

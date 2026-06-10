@@ -10,6 +10,8 @@
  * here — raw HTML in brief content is never passed through.
  */
 
+import { t } from "../utils.js";
+
 const BRIEF_NAME_RE = /^[a-zA-Z0-9._-]+\.md$/;
 const TOAST_MS = 4000;
 
@@ -179,7 +181,7 @@ async function apiRequest(path, options) {
   try {
     response = await fetch(path, options);
   } catch (err) {
-    throw new Error("Network error — is the server running?");
+    throw new Error(t("views.briefs.networkError", {}, "Network error — is the server running?"));
   }
   let data = null;
   try {
@@ -284,7 +286,12 @@ export function init(container) {
   }
 
   function confirmDiscard() {
-    return !state.dirty || window.confirm("You have unsaved changes. Discard them?");
+    return (
+      !state.dirty ||
+      window.confirm(
+        t("views.briefs.confirmDiscard", {}, "You have unsaved changes. Discard them?"),
+      )
+    );
   }
 
   function renderList() {
@@ -361,7 +368,10 @@ export function init(container) {
       }
       renderList();
     } catch (err) {
-      toast(`Failed to load briefs: ${err.message}`, "error");
+      toast(
+        t("views.briefs.listFailed", { message: err.message }, "Failed to load briefs: {message}"),
+        "error",
+      );
     }
   }
 
@@ -374,7 +384,14 @@ export function init(container) {
       if (token !== state.loadToken) return; // stale response
       showEditor(brief.name, brief.content);
     } catch (err) {
-      toast(`Failed to open "${name}": ${err.message}`, "error");
+      toast(
+        t(
+          "views.briefs.openFailed",
+          { name, message: err.message },
+          'Failed to open "{name}": {message}',
+        ),
+        "error",
+      );
     }
   }
 
@@ -385,10 +402,13 @@ export function init(container) {
     try {
       await saveBrief(state.activeName, els.textarea.value);
       setDirty(false);
-      toast(`Saved "${state.activeName}"`);
+      toast(t("views.briefs.saved", { name: state.activeName }, 'Saved "{name}"'));
       await refreshList();
     } catch (err) {
-      toast(`Save failed: ${err.message}`, "error");
+      toast(
+        t("views.briefs.saveFailed", { message: err.message }, "Save failed: {message}"),
+        "error",
+      );
     } finally {
       state.busy = false;
       els.saveBtn.disabled = !state.dirty;
@@ -398,15 +418,23 @@ export function init(container) {
   async function handleDelete() {
     const name = state.activeName;
     if (!name || state.busy) return;
-    if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
+    const confirmText = t(
+      "views.briefs.confirmDelete",
+      { name },
+      'Delete "{name}"? This cannot be undone.',
+    );
+    if (!window.confirm(confirmText)) return;
     state.busy = true;
     try {
       await deleteBrief(name);
-      toast(`Deleted "${name}"`);
+      toast(t("views.briefs.deleted", { name }, 'Deleted "{name}"'));
       closeEditor();
       await refreshList();
     } catch (err) {
-      toast(`Delete failed: ${err.message}`, "error");
+      toast(
+        t("views.briefs.deleteFailed", { message: err.message }, "Delete failed: {message}"),
+        "error",
+      );
     } finally {
       state.busy = false;
     }
@@ -415,19 +443,30 @@ export function init(container) {
   async function handleNewBrief() {
     if (!confirmDiscard()) return;
     const rawInput = window.prompt(
-      "New brief filename (letters, digits, dot, underscore, dash; .md is appended):",
+      t(
+        "views.briefs.newPrompt",
+        {},
+        "New brief filename (letters, digits, dot, underscore, dash; .md is appended):",
+      ),
     );
     if (rawInput === null) return;
     const name = normalizeBriefName(rawInput);
     if (!name) {
       toast(
-        "Invalid name: only letters, digits, '.', '_', '-' are allowed, and it must not start with '.'",
+        t(
+          "views.briefs.invalidName",
+          {},
+          "Invalid name: only letters, digits, '.', '_', '-' are allowed, and it must not start with '.'",
+        ),
         "error",
       );
       return;
     }
     if (state.briefs.some((b) => b.name === name)) {
-      toast(`"${name}" already exists — opening it instead`, "error");
+      toast(
+        t("views.briefs.alreadyExists", { name }, '"{name}" already exists — opening it instead'),
+        "error",
+      );
       state.dirty = false; // already confirmed discard above
       await selectBrief(name);
       return;
@@ -435,13 +474,16 @@ export function init(container) {
     const title = name.replace(/\.md$/i, "").replace(/[-_]+/g, " ");
     try {
       await saveBrief(name, `# ${title}\n\n`);
-      toast(`Created "${name}"`);
+      toast(t("views.briefs.created", { name }, 'Created "{name}"'));
       state.dirty = false;
       await refreshList();
       state.activeName = null; // force selectBrief to load it
       await selectBrief(name);
     } catch (err) {
-      toast(`Create failed: ${err.message}`, "error");
+      toast(
+        t("views.briefs.createFailed", { message: err.message }, "Create failed: {message}"),
+        "error",
+      );
     }
   }
 

@@ -347,36 +347,72 @@
     </div>
     <div class="briefs-layout" id="briefs-layout" hidden>
       <aside class="briefs-list-pane">
-        <button class="btn-primary briefs-new-btn" id="briefs-new-btn" type="button">
+        <button
+          class="btn-primary briefs-new-btn"
+          id="briefs-new-btn"
+          type="button"
+          data-i18n="views.briefs.newBtn"
+        >
           + New brief
         </button>
         <div class="briefs-list" id="briefs-list"></div>
       </aside>
       <div class="briefs-editor-pane">
-        <div class="briefs-editor-placeholder" id="briefs-editor-placeholder">
+        <div
+          class="briefs-editor-placeholder"
+          id="briefs-editor-placeholder"
+          data-i18n="views.briefs.placeholder"
+        >
           Select a brief to view or edit
         </div>
         <div class="briefs-editor" id="briefs-editor" hidden>
           <div class="briefs-editor-toolbar">
             <div class="briefs-editor-name">
               <span id="briefs-editor-filename"></span>
-              <span class="briefs-dirty-dot" id="briefs-dirty-dot" hidden title="Unsaved changes"
+              <span
+                class="briefs-dirty-dot"
+                id="briefs-dirty-dot"
+                hidden
+                title="Unsaved changes"
+                data-i18n-title="views.briefs.unsaved"
                 >●</span
               >
             </div>
             <div class="briefs-editor-actions">
               <div class="briefs-mode-toggle" role="tablist">
-                <button class="briefs-mode-btn active" id="briefs-mode-edit" type="button">
+                <button
+                  class="briefs-mode-btn active"
+                  id="briefs-mode-edit"
+                  type="button"
+                  data-i18n="views.briefs.edit"
+                >
                   Edit
                 </button>
-                <button class="briefs-mode-btn" id="briefs-mode-preview" type="button">
+                <button
+                  class="briefs-mode-btn"
+                  id="briefs-mode-preview"
+                  type="button"
+                  data-i18n="views.briefs.preview"
+                >
                   Preview
                 </button>
               </div>
-              <button class="btn-primary briefs-save-btn" id="briefs-save-btn" type="button">
+              <button
+                class="btn-primary briefs-save-btn"
+                id="briefs-save-btn"
+                type="button"
+                data-i18n="views.briefs.save"
+              >
                 Save
               </button>
-              <button class="briefs-delete-btn" id="briefs-delete-btn" type="button">Delete</button>
+              <button
+                class="briefs-delete-btn"
+                id="briefs-delete-btn"
+                type="button"
+                data-i18n="views.briefs.delete"
+              >
+                Delete
+              </button>
             </div>
           </div>
           <textarea
@@ -384,6 +420,7 @@
             id="briefs-textarea"
             spellcheck="false"
             placeholder="Write markdown here..."
+            data-i18n-placeholder="views.briefs.markdownPlaceholder"
           ></textarea>
           <div class="briefs-preview" id="briefs-preview" hidden></div>
         </div>

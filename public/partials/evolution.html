@@ -216,10 +216,27 @@
     <div id="evo-board" hidden>
       <div class="evo-tabs" role="tablist">
         <button class="evo-tab active" type="button" role="tab" data-status="pending">
-          Pending <span class="evo-badge" id="evo-pending-badge">0</span>
+          <span data-i18n="views.evolution.tabPending">Pending</span>
+          <span class="evo-badge" id="evo-pending-badge">0</span>
         </button>
-        <button class="evo-tab" type="button" role="tab" data-status="approved">Approved</button>
-        <button class="evo-tab" type="button" role="tab" data-status="rejected">Rejected</button>
+        <button
+          class="evo-tab"
+          type="button"
+          role="tab"
+          data-status="approved"
+          data-i18n="views.evolution.tabApproved"
+        >
+          Approved
+        </button>
+        <button
+          class="evo-tab"
+          type="button"
+          role="tab"
+          data-status="rejected"
+          data-i18n="views.evolution.tabRejected"
+        >
+          Rejected
+        </button>
       </div>
       <div class="evo-lessons" id="evo-lessons"></div>
     </div>

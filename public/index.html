@@ -134,7 +134,8 @@
             tabindex="0"
             title="Validation gate: loading..."
           >
-            <span>VALIDATION GATE</span>
+            <!-- title is owned by the gate script below (gate.titleOn/Off/Loading) -->
+            <span data-i18n="gate.label">VALIDATION GATE</span>
             <span class="gate-track"><span class="gate-knob"></span></span>
           </div>
           <div class="status-pill" id="connection-status" title="SSE connection status">
@@ -4769,6 +4770,9 @@
         const toggle = document.getElementById("validation-gate-toggle");
         if (!toggle) return;
 
+        const t = (key, params = {}, fallback = key) =>
+          window.I18N?.t ? window.I18N.t(key, params, fallback) : fallback;
+
         let gateState = null; // null = unknown
         let busy = false;
 
@@ -4779,10 +4783,18 @@
           toggle.setAttribute("aria-checked", gateState === true ? "true" : "false");
           toggle.title =
             gateState === true
-              ? "Validation gate ON — lessons require approval (click to allow autonomous merge)"
+              ? t(
+                  "gate.titleOn",
+                  {},
+                  "Validation gate ON — lessons require approval (click to allow autonomous merge)",
+                )
               : gateState === false
-                ? "Validation gate OFF — autonomous merge (click to require approval)"
-                : "Validation gate: loading...";
+                ? t(
+                    "gate.titleOff",
+                    {},
+                    "Validation gate OFF — autonomous merge (click to require approval)",
+                  )
+                : t("gate.titleLoading", {}, "Validation gate: loading...");
         }
 
         function fetchGate() {
@@ -4812,15 +4824,18 @@
             if (typeof showToast === "function") {
               showToast(
                 gateState
-                  ? "Validation gate ON — lessons require approval"
-                  : "Validation gate OFF — autonomous merge",
+                  ? t("gate.toastOn", {}, "Validation gate ON — lessons require approval")
+                  : t("gate.toastOff", {}, "Validation gate OFF — autonomous merge"),
               );
             }
           } catch (e) {
             gateState = previous; // revert
             renderGate();
             if (typeof showToast === "function") {
-              showToast("Gate update failed: " + e.message, "error");
+              showToast(
+                t("gate.updateFailed", { message: e.message }, "Gate update failed: {message}"),
+                "error",
+              );
             }
           } finally {
             busy = false;
@@ -4834,6 +4849,9 @@
             flipGate();
           }
         });
+
+        // Re-render the localized title when the locale changes.
+        window.addEventListener("i18n:updated", renderGate);
 
         // Stay in sync with SSE evolution events (re-dispatched on window) —
         // gate.toggle events carry the new state; anything else, refetch.

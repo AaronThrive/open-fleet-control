@@ -15,6 +15,8 @@
  * All server data is rendered via textContent/createElement (no innerHTML).
  */
 
+import { t } from "../utils.js";
+
 const CHAT_API = "/api/fleet/chat";
 const ALERTS_API = "/api/fleet/alerts";
 const SSE_URL = "/api/events";
@@ -270,7 +272,9 @@ function buildPayload(rawPayload) {
   let expanded = false;
   const render = () => {
     text.textContent = expanded ? payload : `${payload.slice(0, COLLAPSE_THRESHOLD)}…`;
-    toggle.textContent = expanded ? "collapse" : `expand (${payload.length} chars)`;
+    toggle.textContent = expanded
+      ? t("views.fleetChat.collapse", {}, "collapse")
+      : t("views.fleetChat.expand", { n: payload.length }, "expand ({n} chars)");
   };
   toggle.addEventListener("click", () => {
     expanded = !expanded;
@@ -302,7 +306,7 @@ function safeToolTitle(call) {
   try {
     return typeof call === "object" ? JSON.stringify(call) : String(call);
   } catch (error) {
-    return "tool call";
+    return t("views.fleetChat.toolCall", {}, "tool call");
   }
 }
 
@@ -361,7 +365,9 @@ function showLoading() {
   emptyState.hidden = true;
   status.classList.remove("fc-status-error");
   clearChildren(status);
-  status.appendChild(document.createTextNode("Loading fleet messages…"));
+  status.appendChild(
+    document.createTextNode(t("views.fleetChat.loading", {}, "Loading fleet messages…")),
+  );
   status.hidden = false;
 }
 
@@ -371,11 +377,15 @@ function showError() {
   emptyState.hidden = true;
   status.classList.add("fc-status-error");
   clearChildren(status);
-  status.appendChild(document.createTextNode("Failed to load fleet chat — check the server."));
+  status.appendChild(
+    document.createTextNode(
+      t("views.fleetChat.loadError", {}, "Failed to load fleet chat — check the server."),
+    ),
+  );
   const retry = document.createElement("button");
   retry.type = "button";
   retry.className = "fc-retry";
-  retry.textContent = "Retry";
+  retry.textContent = t("views.fleetChat.retry", {}, "Retry");
   retry.addEventListener("click", () => loadMessages({ fullReload: true }));
   status.appendChild(retry);
   status.hidden = false;
@@ -406,7 +416,7 @@ function refreshEmptyState() {
       clearChildren(consoleEl);
       const note = document.createElement("div");
       note.className = "fc-console-note";
-      note.textContent = "No messages match the current filters.";
+      note.textContent = t("views.fleetChat.noMatch", {}, "No messages match the current filters.");
       consoleEl.appendChild(note);
     }
   }
@@ -486,7 +496,7 @@ function scrollToBottom() {
 function updateJumpButton() {
   const { jump } = state.els;
   if (!state.pinned && state.newCount > 0) {
-    jump.textContent = `↓ ${state.newCount} new`;
+    jump.textContent = t("views.fleetChat.jumpNew", { n: state.newCount }, "↓ {n} new");
     jump.hidden = false;
   } else {
     jump.hidden = true;
@@ -552,5 +562,7 @@ function ensureEventSource() {
 function setLiveBadge(isLive) {
   if (!state) return;
   state.els.liveBadge.classList.toggle("fc-live-on", isLive);
-  state.els.liveBadge.textContent = isLive ? "LIVE" : "POLL";
+  state.els.liveBadge.textContent = isLive
+    ? t("views.fleetChat.liveBadge", {}, "LIVE")
+    : t("views.fleetChat.pollBadge", {}, "POLL");
 }

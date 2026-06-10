@@ -568,31 +568,39 @@
     <div class="cx-avail-strip" id="cx-availability">
       <span class="cx-avail-item">
         <span class="cx-avail-dot" data-avail="memory"></span>
-        <span class="cx-avail-label">Memory</span>
-        <span class="cx-avail-state" data-avail-state="memory">checking…</span>
+        <span class="cx-avail-label" data-i18n="views.cortex.availMemory">Memory</span>
+        <span class="cx-avail-state" data-avail-state="memory" data-i18n="views.cortex.checking"
+          >checking…</span
+        >
       </span>
       <span class="cx-avail-item">
         <span class="cx-avail-dot" data-avail="gbrain"></span>
-        <span class="cx-avail-label">Graph (gbrain)</span>
-        <span class="cx-avail-state" data-avail-state="gbrain">checking…</span>
+        <span class="cx-avail-label" data-i18n="views.cortex.availGraph">Graph (gbrain)</span>
+        <span class="cx-avail-state" data-avail-state="gbrain" data-i18n="views.cortex.checking"
+          >checking…</span
+        >
       </span>
       <span class="cx-avail-item">
         <span class="cx-avail-dot" data-avail="gauges"></span>
-        <span class="cx-avail-label">Gauges</span>
-        <span class="cx-avail-state" data-avail-state="gauges">checking…</span>
+        <span class="cx-avail-label" data-i18n="views.cortex.availGauges">Gauges</span>
+        <span class="cx-avail-state" data-avail-state="gauges" data-i18n="views.cortex.checking"
+          >checking…</span
+        >
       </span>
     </div>
 
     <!-- Fuel gauges row -->
     <div class="cx-gauges" id="cx-gauges">
-      <div class="cx-loading">Loading compression gauges…</div>
+      <div class="cx-loading" data-i18n="views.cortex.loadingGauges">
+        Loading compression gauges…
+      </div>
     </div>
 
     <div class="cx-grid">
       <!-- Memory browser -->
       <div class="cx-card" id="cx-memory-card">
         <div class="cx-card-title">
-          <span>Memory</span>
+          <span data-i18n="views.cortex.memoryCardTitle">Memory</span>
           <span class="hint" id="cx-memory-stats"></span>
         </div>
         <div id="cx-memory-body">
@@ -601,22 +609,24 @@
             class="cx-mem-search"
             id="cx-memory-search"
             placeholder="Search memories… (empty shows recent)"
+            data-i18n-placeholder="views.cortex.searchPlaceholder"
             autocomplete="off"
           />
           <div class="cx-mem-list" id="cx-memory-list">
-            <div class="cx-loading">Loading memories…</div>
+            <div class="cx-loading" data-i18n="views.cortex.loadingMemories">Loading memories…</div>
           </div>
           <details class="cx-store" id="cx-store-details">
-            <summary>Store memory</summary>
+            <summary data-i18n="views.cortex.storeSummary">Store memory</summary>
             <form class="cx-store-form" id="cx-store-form">
               <textarea
                 id="cx-store-text"
                 placeholder="What should the fleet remember?"
+                data-i18n-placeholder="views.cortex.storeTextPlaceholder"
                 required
               ></textarea>
               <div class="cx-store-row">
                 <label>
-                  Category
+                  <span data-i18n="views.cortex.category">Category</span>
                   <select id="cx-store-category">
                     <option value="fact" selected>fact</option>
                     <option value="preference">preference</option>
@@ -627,11 +637,12 @@
                   </select>
                 </label>
                 <label>
-                  Scope
+                  <span data-i18n="views.cortex.scope">Scope</span>
                   <input type="text" id="cx-store-scope" placeholder="global" />
                 </label>
                 <label>
-                  Importance <span class="cx-imp-value" id="cx-store-imp-value">0.7</span>
+                  <span data-i18n="views.cortex.importance">Importance</span>
+                  <span class="cx-imp-value" id="cx-store-imp-value">0.7</span>
                   <input
                     type="range"
                     id="cx-store-importance"
@@ -643,8 +654,15 @@
                 </label>
               </div>
               <div class="cx-store-actions">
-                <button type="submit" class="cx-btn" id="cx-store-submit">Store</button>
-                <span class="cx-store-note">
+                <button
+                  type="submit"
+                  class="cx-btn"
+                  id="cx-store-submit"
+                  data-i18n="views.cortex.storeBtn"
+                >
+                  Store
+                </button>
+                <span class="cx-store-note" data-i18n="views.cortex.storeNote">
                   Stored via the OpenClaw CLI — may take a few seconds. Writes are audited.
                 </span>
               </div>
@@ -657,15 +675,37 @@
       <!-- Knowledge graph -->
       <div class="cx-card" id="cx-graph-card">
         <div class="cx-card-title">
-          <span>Knowledge graph</span>
+          <span data-i18n="views.cortex.graphCardTitle">Knowledge graph</span>
           <span class="hint" id="cx-graph-count"></span>
         </div>
         <div class="cx-graph-wrap" id="cx-graph-wrap">
           <svg class="cx-graph-svg" id="cx-graph-svg" xmlns="http://www.w3.org/2000/svg"></svg>
           <div class="cx-graph-controls">
-            <button class="cx-zoom-btn" id="cx-zoom-in" title="Zoom in" type="button">+</button>
-            <button class="cx-zoom-btn" id="cx-zoom-out" title="Zoom out" type="button">−</button>
-            <button class="cx-zoom-btn" id="cx-zoom-reset" title="Reset view" type="button">
+            <button
+              class="cx-zoom-btn"
+              id="cx-zoom-in"
+              title="Zoom in"
+              data-i18n-title="views.cortex.zoomIn"
+              type="button"
+            >
+              +
+            </button>
+            <button
+              class="cx-zoom-btn"
+              id="cx-zoom-out"
+              title="Zoom out"
+              data-i18n-title="views.cortex.zoomOut"
+              type="button"
+            >
+              −
+            </button>
+            <button
+              class="cx-zoom-btn"
+              id="cx-zoom-reset"
+              title="Reset view"
+              data-i18n-title="views.cortex.zoomReset"
+              type="button"
+            >
               ⤾
             </button>
           </div>
@@ -678,7 +718,9 @@
         </div>
         <div class="cx-graph-foot">
           <span id="cx-graph-note"></span>
-          <span>Drag to pan · buttons to zoom · click a node for details</span>
+          <span data-i18n="views.cortex.graphFootHint"
+            >Drag to pan · buttons to zoom · click a node for details</span
+          >
         </div>
         <div id="cx-graph-offline" style="display: none"></div>
       </div>

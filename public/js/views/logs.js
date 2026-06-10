@@ -14,6 +14,8 @@
  * trail is XSS-safe even with hostile user/target/detail strings.
  */
 
+import { t } from "../utils.js";
+
 const AUTO_REFRESH_MS = 60000;
 const FILTER_DEBOUNCE_MS = 350;
 
@@ -53,13 +55,13 @@ function relativeTime(iso) {
   const diff = Date.now() - ms;
   if (diff < 0) return new Date(ms).toLocaleString();
   const sec = Math.floor(diff / 1000);
-  if (sec < 60) return `${sec}s ago`;
+  if (sec < 60) return t("time.agoSeconds", { n: sec }, "{n}s ago");
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
+  if (min < 60) return t("time.agoMinutes", { n: min }, "{n}m ago");
   const hours = Math.floor(min / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return t("time.agoHours", { n: hours }, "{n}h ago");
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
+  if (days < 30) return t("time.agoDays", { n: days }, "{n}d ago");
   return new Date(ms).toLocaleDateString();
 }
 
@@ -151,7 +153,10 @@ function buildRow(entry) {
 function render(els, entries) {
   currentRows = entries;
   els.rows.replaceChildren(...entries.map(buildRow));
-  els.countLine.textContent = `${entries.length} ${entries.length === 1 ? "entry" : "entries"} shown`;
+  els.countLine.textContent =
+    entries.length === 1
+      ? t("views.logs.countOne", { n: entries.length }, "{n} entry shown")
+      : t("views.logs.countMany", { n: entries.length }, "{n} entries shown");
   els.table.hidden = entries.length === 0;
   els.emptyState.style.display = entries.length === 0 ? "" : "none";
 }
@@ -177,14 +182,25 @@ async function load(els) {
     const payload = await response.json().catch(() => ({}));
     if (seq !== requestSeq || !els.rows.isConnected) return; // stale response
     if (!response.ok) {
-      showError(els, payload.error || `Audit query failed (HTTP ${response.status})`);
+      showError(
+        els,
+        payload.error ||
+          t(
+            "views.logs.queryFailed",
+            { status: response.status },
+            "Audit query failed (HTTP {status})",
+          ),
+      );
       return;
     }
     clearError(els);
     render(els, Array.isArray(payload.entries) ? payload.entries : []);
   } catch (error) {
     if (seq !== requestSeq || !els.rows.isConnected) return;
-    showError(els, "Could not reach the audit API — is the server up?");
+    showError(
+      els,
+      t("views.logs.networkError", {}, "Could not reach the audit API — is the server up?"),
+    );
   }
 }
 
