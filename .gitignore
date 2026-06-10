@@ -108,3 +108,9 @@ docs/_build/
 *.bak
 *.backup
 config/dashboard.local.json
+
+# Fleet runtime data (default fleet.stateDir/briefsDir/workspaceDir locations)
+/state/
+/briefs/
+/lessons_learned.md
+/lessons_learned.approved.md

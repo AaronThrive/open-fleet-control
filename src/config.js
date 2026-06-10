@@ -185,6 +185,74 @@ function expandPath(p) {
 }
 
 /**
+ * Fleet defaults — see config/dashboard.example.json for documentation.
+ * Alerts default OFF; cortex paths default empty (adapter unavailable until
+ * the operator points them at real, user-specific locations).
+ */
+const FLEET_DEFAULTS = {
+  stateDir: "state",
+  logsDir: "logs",
+  briefsDir: "briefs",
+  workspaceDir: ".",
+  mesh: { intervalMs: 15000 },
+  watchdog: { thresholdMs: 1800000 },
+  alerts: {
+    enabled: false,
+    rules: {
+      nodeOffline: true,
+      nodeUnreachable: true,
+      taskFailed: true,
+      taskStale: true,
+      lessonPending: true,
+    },
+    sinks: {
+      slack: { enabled: false, gatewayUrl: "", channel: "" },
+      webhooks: [],
+    },
+  },
+  validationGate: { default: true },
+  cortex: { lancedbPath: "", gbrainCli: "", headroomStats: "", leanCtxStats: "", lcmDb: "" },
+  rateLimit: { windowMs: 60000, max: 120 },
+};
+
+/**
+ * Build the `fleet` config section: defaults <- dashboard(.local).json
+ * <- FLEET_CONFIG_JSON env override (a JSON blob, useful for tests and
+ * one-off deployments). Directory paths are expanded (~/$HOME) and resolved
+ * relative to the package root so the server behaves the same regardless of
+ * the working directory it was launched from.
+ *
+ * @param {object} [fileFleet] - `fleet` section from the config file
+ * @returns {object} resolved fleet configuration
+ */
+function buildFleetConfig(fileFleet) {
+  let fleet = deepMerge(FLEET_DEFAULTS, fileFleet || {});
+
+  if (process.env.FLEET_CONFIG_JSON) {
+    try {
+      fleet = deepMerge(fleet, JSON.parse(process.env.FLEET_CONFIG_JSON));
+    } catch (e) {
+      console.warn("[Config] Invalid FLEET_CONFIG_JSON, ignoring:", e.message);
+    }
+  }
+
+  const packageRoot = path.join(__dirname, "..");
+  const resolvedDirs = {};
+  for (const key of ["stateDir", "logsDir", "briefsDir", "workspaceDir"]) {
+    resolvedDirs[key] = path.resolve(packageRoot, expandPath(String(fleet[key])));
+  }
+
+  const resolvedCortex = { ...fleet.cortex };
+  for (const key of Object.keys(resolvedCortex)) {
+    if (typeof resolvedCortex[key] === "string" && resolvedCortex[key].length > 0) {
+      resolvedCortex[key] = expandPath(resolvedCortex[key]);
+    }
+  }
+
+  return { ...fleet, ...resolvedDirs, cortex: resolvedCortex };
+}
+
+/**
  * Build final configuration
  */
 function loadConfig() {
@@ -258,6 +326,9 @@ function loadConfig() {
         teamId: process.env.LINEAR_TEAM_ID || fileConfig.integrations?.linear?.teamId,
       },
     },
+
+    // Fleet (mesh / chat / kanban / briefs / evolution / cortex / alerts)
+    fleet: buildFleetConfig(fileConfig.fleet),
 
     // Billing - for cost savings calculation
     billing: {

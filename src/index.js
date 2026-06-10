@@ -86,6 +86,8 @@ const { getLlmUsage, getRoutingStats, startLlmUsageRefresh } = require("./llm-us
 const { executeAction } = require("./actions");
 const { migrateDataDir } = require("./data");
 const { createStateModule } = require("./state");
+const { createFleetRuntime } = require("./fleet");
+const { createFleetRoutes, isFleetRoute } = require("./fleet-routes");
 
 // ============================================================================
 // CONFIGURATION
@@ -156,10 +158,17 @@ const state = createStateModule({
   readTranscript: (sessionId) => sessions.readTranscript(sessionId),
 });
 
+// Fleet runtime (mesh, chat, kanban, briefs, evolution, cortex, alerts) +
+// REST routes. SSE events: fleet.mesh, fleet.chat, fleet.kanban,
+// fleet.evolution, fleet.alert (minimal payloads; clients refetch detail).
+const fleet = createFleetRuntime({ config: CONFIG.fleet, broadcast: broadcastSSE });
+const fleetRoutes = createFleetRoutes({ fleet });
+
 // ============================================================================
 // STARTUP: Data migration + background tasks
 // ============================================================================
 process.nextTick(() => migrateDataDir(DATA_DIR, LEGACY_DATA_DIR));
+fleet.start();
 startOperatorsRefresh(DATA_DIR, getOpenClawDir);
 startLlmUsageRefresh();
 startTokenUsageRefresh(getOpenClawDir);
@@ -430,9 +439,19 @@ const server = http.createServer((req, res) => {
       ),
     );
   } else if (pathname === "/api/state") {
+    // Attach the fleet summary (mesh.getState is async, so resolve first)
     const fullState = state.getFullState();
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(fullState, null, 2));
+    fleet
+      .getSummary()
+      .catch((e) => {
+        console.error("[Fleet] Summary failed:", e.message);
+        return null;
+      })
+      .then((fleetSummary) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ...(fullState || {}), fleet: fleetSummary }, null, 2));
+      });
+    return;
   } else if (pathname === "/api/vitals") {
     const vitals = getSystemVitals();
     const optionalDeps = getOptionalDeps();
@@ -600,6 +619,9 @@ const server = http.createServer((req, res) => {
       res.writeHead(405, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Method not allowed" }));
     }
+    return;
+  } else if (isFleetRoute(pathname)) {
+    fleetRoutes.handle(req, res, pathname, query);
     return;
   } else if (isJobsRoute(pathname)) {
     handleJobsRequest(req, res, pathname, query, req.method);
