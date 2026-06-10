@@ -211,7 +211,14 @@ const FLEET_DEFAULTS = {
     },
   },
   validationGate: { default: true },
-  cortex: { lancedbPath: "", gbrainCli: "", headroomStats: "", leanCtxStats: "", lcmDb: "" },
+  cortex: {
+    enabled: true,
+    lancedbPath: "",
+    gbrainCli: "",
+    headroomStats: "",
+    leanCtxStats: "",
+    lcmDb: "",
+  },
   rateLimit: { windowMs: 60000, max: 120 },
 };
 

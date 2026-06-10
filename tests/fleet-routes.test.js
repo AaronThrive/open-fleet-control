@@ -29,6 +29,8 @@ const fleetConfig = {
   briefsDir: path.join(tmpDir, "briefs"),
   workspaceDir: path.join(tmpDir, "workspace"),
   mesh: { intervalMs: 60000 },
+  // Never shell out to external CLIs (openclaw memory-pro / gbrain) in tests
+  cortex: { enabled: false },
   rateLimit: { windowMs: 60000, max: RATE_LIMIT_MAX },
 };
 
