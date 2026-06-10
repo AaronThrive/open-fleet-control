@@ -14,10 +14,15 @@ const MEMORY_LIST_LIMIT = 30;
 const GRAPH_NODE_CAP = 150;
 const SEARCH_DEBOUNCE_MS = 300;
 
+const MEMORY_CATEGORIES = ["fact", "preference", "decision", "entity", "reflection", "other"];
+
 // Module-scope handles cleaned up on every init (the DOM itself is replaced
 // by the view loader, so listeners die with it — only timers/aborts persist).
 let abortController = null;
 let searchTimer = null;
+// Memory write capabilities from the last /api/fleet/cortex state: editing
+// needs CLI + readable dataset (merge reads the row), delete needs the CLI.
+let memoryCaps = { cli: false, lancedb: false };
 
 /* ------------------------------------------------------------------ */
 /* Formatting helpers                                                  */
@@ -248,7 +253,195 @@ function renderGauges(root, gauges) {
 /* Memory browser                                                      */
 /* ------------------------------------------------------------------ */
 
-function buildMemoryItem(row) {
+/** Reload the memory list using whatever is in the search box. */
+function refreshMemoryList(root) {
+  loadMemories(root, root.querySelector("#cx-memory-search")?.value || "");
+}
+
+/** A labelled control for the inline editor (reuses .cx-store-row styles). */
+function editorField(labelText, control) {
+  const label = document.createElement("label");
+  label.appendChild(el("span", null, labelText));
+  label.appendChild(control);
+  return label;
+}
+
+function buildCategorySelect(current) {
+  const select = document.createElement("select");
+  const cats = MEMORY_CATEGORIES.includes(current)
+    ? MEMORY_CATEGORIES
+    : [current, ...MEMORY_CATEGORIES];
+  for (const cat of cats) {
+    const option = document.createElement("option");
+    option.value = cat;
+    option.textContent = cat;
+    option.selected = cat === current;
+    select.appendChild(option);
+  }
+  return select;
+}
+
+/** Diff the editor inputs against the row — only changed fields are sent. */
+function collectEditorChanges(row, inputs) {
+  const changes = {};
+  const text = inputs.textarea.value.trim();
+  if (text && text !== (row.text || "")) changes.text = text;
+  if (inputs.select.value !== (row.category || "fact")) changes.category = inputs.select.value;
+  const scope = inputs.scopeInput.value.trim();
+  if (scope && scope !== (row.scope || "global")) changes.scope = scope;
+  const importance = Number(inputs.slider.value);
+  const current = Number(row.importance);
+  if (!Number.isFinite(current) || Math.abs(importance - current) > 0.001) {
+    changes.importance = importance;
+  }
+  return changes;
+}
+
+async function submitMemoryEdit(root, row, item, form, inputs, saveBtn) {
+  if (!inputs.textarea.value.trim()) {
+    showToast(t("views.cortex.emptyTextError", {}, "Memory text cannot be empty."), "error");
+    return;
+  }
+  const changes = collectEditorChanges(row, inputs);
+  if (Object.keys(changes).length === 0) {
+    showToast(t("views.cortex.noChanges", {}, "No changes to save."), "success");
+    form.remove();
+    return;
+  }
+  // Optimistic: show the new text immediately; the refresh below reverts it
+  // if the server rejects the update.
+  const textEl = item.querySelector(".cx-mem-text");
+  if (changes.text && textEl) textEl.textContent = changes.text;
+  saveBtn.disabled = true;
+  clearChildren(saveBtn);
+  saveBtn.appendChild(el("span", "cx-spinner"));
+  saveBtn.append(` ${t("views.cortex.saving", {}, "Saving…")}`);
+  try {
+    await fetchJson(`${API_BASE}/memory/${encodeURIComponent(row.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(changes),
+    });
+    showToast(t("views.cortex.updated", {}, "Memory updated."), "success");
+    refreshMemoryList(root);
+  } catch (error) {
+    if (error.name === "AbortError") return;
+    showToast(
+      t(
+        "views.cortex.updateFailed",
+        { message: error.message },
+        "Failed to update memory: {message}",
+      ),
+      "error",
+    );
+    refreshMemoryList(root);
+  }
+}
+
+function buildEditor(root, row, item) {
+  const form = document.createElement("form");
+  form.className = "cx-mem-editor";
+
+  const textarea = document.createElement("textarea");
+  textarea.value = row.text || "";
+  form.appendChild(textarea);
+
+  const select = buildCategorySelect(row.category || "fact");
+  const scopeInput = document.createElement("input");
+  scopeInput.type = "text";
+  scopeInput.value = row.scope || "global";
+
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.min = "0";
+  slider.max = "1";
+  slider.step = "0.05";
+  const currentImp = Number(row.importance);
+  slider.value = String(Number.isFinite(currentImp) ? currentImp : 0.7);
+  const impValue = el("span", "cx-imp-value", Number(slider.value).toFixed(2));
+  slider.addEventListener("input", () => {
+    impValue.textContent = Number(slider.value).toFixed(2);
+  });
+  const impLabel = editorField(t("views.cortex.importance", {}, "Importance"), slider);
+  impLabel.insertBefore(impValue, slider);
+
+  const fieldsRow = el("div", "cx-store-row");
+  fieldsRow.appendChild(editorField(t("views.cortex.category", {}, "Category"), select));
+  fieldsRow.appendChild(editorField(t("views.cortex.scope", {}, "Scope"), scopeInput));
+  fieldsRow.appendChild(impLabel);
+  form.appendChild(fieldsRow);
+
+  const actions = el("div", "cx-store-actions");
+  const saveBtn = el("button", "cx-btn", t("views.cortex.saveBtn", {}, "Save"));
+  saveBtn.type = "submit";
+  const cancelBtn = el("button", "cx-mem-act", t("views.cortex.cancelBtn", {}, "Cancel"));
+  cancelBtn.type = "button";
+  cancelBtn.addEventListener("click", () => form.remove());
+  actions.append(saveBtn, cancelBtn);
+  form.appendChild(actions);
+
+  const inputs = { textarea, select, scopeInput, slider };
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitMemoryEdit(root, row, item, form, inputs, saveBtn);
+  });
+  return form;
+}
+
+function toggleEditor(root, row, item) {
+  const open = item.querySelector(".cx-mem-editor");
+  if (open) {
+    open.remove();
+    return;
+  }
+  item.appendChild(buildEditor(root, row, item));
+}
+
+async function deleteMemoryRow(root, row, item, btn) {
+  const confirmed = window.confirm(
+    t("views.cortex.deleteConfirm", {}, "Delete this memory permanently? This cannot be undone."),
+  );
+  if (!confirmed) return;
+  btn.disabled = true;
+  item.classList.add("cx-mem-removing");
+  try {
+    await fetchJson(`${API_BASE}/memory/${encodeURIComponent(row.id)}`, { method: "DELETE" });
+    showToast(t("views.cortex.deleted", {}, "Memory deleted."), "success");
+    item.remove();
+    refreshMemoryList(root);
+  } catch (error) {
+    if (error.name === "AbortError") return;
+    btn.disabled = false;
+    item.classList.remove("cx-mem-removing");
+    showToast(
+      t(
+        "views.cortex.deleteFailed",
+        { message: error.message },
+        "Failed to delete memory: {message}",
+      ),
+      "error",
+    );
+  }
+}
+
+function buildMemoryActions(root, row, item) {
+  const actions = el("div", "cx-mem-actions");
+  if (memoryCaps.cli && memoryCaps.lancedb) {
+    const editBtn = el("button", "cx-mem-act", t("views.cortex.editBtn", {}, "Edit"));
+    editBtn.type = "button";
+    editBtn.addEventListener("click", () => toggleEditor(root, row, item));
+    actions.appendChild(editBtn);
+  }
+  if (memoryCaps.cli) {
+    const deleteBtn = el("button", "cx-mem-act danger", t("views.cortex.deleteBtn", {}, "Delete"));
+    deleteBtn.type = "button";
+    deleteBtn.addEventListener("click", () => deleteMemoryRow(root, row, item, deleteBtn));
+    actions.appendChild(deleteBtn);
+  }
+  return actions;
+}
+
+function buildMemoryItem(root, row) {
   const item = el("div", "cx-mem-item");
 
   const text = el("div", "cx-mem-text", row.text || t("views.cortex.emptyMemory", {}, "(empty)"));
@@ -293,6 +486,11 @@ function buildMemoryItem(row) {
   const when = relativeTime(row.timestamp);
   if (when) meta.appendChild(el("span", "cx-mem-time", when));
   item.appendChild(meta);
+
+  if (row.id && (memoryCaps.cli || memoryCaps.lancedb)) {
+    const actions = buildMemoryActions(root, row, item);
+    if (actions.childElementCount > 0) item.appendChild(actions);
+  }
   return item;
 }
 
@@ -331,7 +529,7 @@ async function loadMemories(root, query) {
       );
       return;
     }
-    for (const row of rows) list.appendChild(buildMemoryItem(row));
+    for (const row of rows) list.appendChild(buildMemoryItem(root, row));
   } catch (error) {
     if (error.name === "AbortError") return;
     clearChildren(list);
@@ -353,6 +551,7 @@ function setupMemoryBrowser(root, memoryState) {
   const body = root.querySelector("#cx-memory-body");
   const offline = root.querySelector("#cx-memory-offline");
   const statsEl = root.querySelector("#cx-memory-stats");
+  memoryCaps = { cli: !!memoryState?.cli, lancedb: !!memoryState?.lancedb };
 
   if (!memoryState?.available) {
     if (body) body.style.display = "none";

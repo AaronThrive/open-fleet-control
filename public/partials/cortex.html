@@ -331,6 +331,46 @@
       margin-top: 4px;
     }
 
+    /* Memory row actions + inline editor ------------------------------- */
+    #cortex-view-section .cx-mem-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    #cortex-view-section .cx-mem-act {
+      background: none;
+      border: 1px solid var(--cx-border);
+      color: var(--cx-accent-2);
+      border-radius: 6px;
+      font-size: 0.68rem;
+      padding: 3px 10px;
+      cursor: pointer;
+    }
+    #cortex-view-section .cx-mem-act:hover:not(:disabled) {
+      border-color: var(--cx-accent-2);
+    }
+    #cortex-view-section .cx-mem-act.danger {
+      color: #f8a3a0;
+    }
+    #cortex-view-section .cx-mem-act.danger:hover:not(:disabled) {
+      border-color: #f85149;
+    }
+    #cortex-view-section .cx-mem-act:disabled {
+      opacity: 0.5;
+      cursor: wait;
+    }
+    #cortex-view-section .cx-mem-removing {
+      opacity: 0.45;
+    }
+    #cortex-view-section .cx-mem-editor {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 10px;
+      border-top: 1px dashed var(--cx-border);
+      padding-top: 10px;
+    }
+
     /* Store memory form ---------------------------------------------------- */
     #cortex-view-section .cx-store {
       margin-top: 14px;
@@ -357,7 +397,8 @@
       gap: 10px;
       margin-top: 12px;
     }
-    #cortex-view-section .cx-store-form textarea {
+    #cortex-view-section .cx-store-form textarea,
+    #cortex-view-section .cx-mem-editor textarea {
       width: 100%;
       box-sizing: border-box;
       min-height: 72px;
@@ -371,7 +412,8 @@
       padding: 9px 12px;
       outline: none;
     }
-    #cortex-view-section .cx-store-form textarea:focus {
+    #cortex-view-section .cx-store-form textarea:focus,
+    #cortex-view-section .cx-mem-editor textarea:focus {
       border-color: var(--cx-accent);
     }
     #cortex-view-section .cx-store-row {

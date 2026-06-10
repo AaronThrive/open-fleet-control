@@ -28,6 +28,7 @@
     "tokens",
     "settings",
     "docker",
+    "agents",
   ];
   const VIEW_HASH_PREFIX = "#view-";
 

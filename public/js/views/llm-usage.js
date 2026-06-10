@@ -20,10 +20,12 @@
 import { t } from "../utils.js";
 
 const POLL_MS = 30000;
+const SOURCES_POLL_MS = 45000;
 const SSE_FRESH_MS = 20000;
 
-// Keys of /api/llm-usage handled by the dedicated gauges above; everything
-// else is treated as an extra usage source.
+// Keys of /api/llm-usage handled by the dedicated gauges above (or by the
+// dedicated source sections below); everything else is treated as an extra
+// usage source and auto-rendered as a generic card.
 const KNOWN_KEYS = new Set([
   "timestamp",
   "source",
@@ -33,11 +35,23 @@ const KNOWN_KEYS = new Set([
   "error",
   "errorType",
   "needsSync",
+  // Sources with dedicated sections — never double-render generically.
+  "subscription",
+  "headroom",
+  "claudeCode",
+  "claude-code",
+  "nineRouter",
+  "nine-router",
+  "openrouter",
+  "openRouter",
+  "sources",
 ]);
 
 let pollTimer = null;
+let sourcesTimer = null;
 let stateListener = null;
 let requestSeq = 0;
+let sourcesSeq = 0;
 let lastSseAt = 0;
 
 /* ------------------------------------------------------------------ */
@@ -68,6 +82,58 @@ function setGauge(els, prefix, usedPct, remainingPct, reset) {
   if (bar) {
     bar.style.width = `${Math.min(100, Math.max(0, used))}%`;
     bar.className = "vital-bar-fill " + (used > 80 ? "red" : used > 50 ? "yellow" : "green");
+  }
+}
+
+function fmtNum(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  if (Math.abs(n) >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+  if (Math.abs(n) >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  if (Math.abs(n) >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
+  return `${n}`;
+}
+
+function fmtUsd(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  return `$${n.toFixed(2)}`;
+}
+
+function fmtCountdown(seconds) {
+  const s = Number(seconds);
+  if (!Number.isFinite(s) || s <= 0) return "-";
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function fmtAgo(iso) {
+  if (!iso) return "-";
+  const ts = new Date(iso).getTime();
+  if (!Number.isFinite(ts)) return "-";
+  const mins = Math.max(0, Math.round((Date.now() - ts) / 60000));
+  if (mins < 1) return "now";
+  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1440) return `${Math.round(mins / 60)}h ago`;
+  return `${Math.round(mins / 1440)}d ago`;
+}
+
+/**
+ * Fetch a usage-source endpoint. Returns the parsed body, or null when the
+ * endpoint is absent (older deployment), unreachable, or not JSON — callers
+ * keep their section hidden in that case so one source never blanks the page.
+ */
+async function fetchSource(url) {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
   }
 }
 
@@ -250,6 +316,277 @@ function renderRoutingStats(els, stats) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Dedicated usage-source sections                                     */
+/* ------------------------------------------------------------------ */
+
+function setRing(ringEl, pctEl, resetEl, slice) {
+  const pct = Number(slice?.utilizationPct);
+  const safe = Number.isFinite(pct) ? Math.min(100, Math.max(0, pct)) : 0;
+  if (ringEl) {
+    ringEl.style.setProperty("--pct", `${safe}`);
+    ringEl.classList.toggle("crit", safe > 80);
+    ringEl.classList.toggle("warn", safe > 50 && safe <= 80);
+  }
+  if (pctEl) pctEl.textContent = Number.isFinite(pct) ? `${pct}%` : "-%";
+  if (resetEl) {
+    const countdown = fmtCountdown(slice?.secondsToReset);
+    resetEl.textContent =
+      countdown === "-"
+        ? t("views.llmUsage.noReset", {}, "no reset pending")
+        : t("views.llmUsage.resetsIn", { time: countdown }, "resets in {time}");
+  }
+}
+
+function renderSubscription(els, data) {
+  if (!data) return; // endpoint absent → keep panel hidden
+  els.subPanel.hidden = false;
+
+  if (data.available === false) {
+    els.subStatus.hidden = false;
+    els.subStatus.textContent = t(
+      "views.llmUsage.subUnavailable",
+      { reason: data.reason || "unknown" },
+      "Subscription data unavailable: {reason}",
+    );
+    return;
+  }
+  els.subStatus.hidden = true;
+  els.subStale.hidden = !data.stale;
+  setText(els, "subPolled", data.polledAt ? `polled ${fmtAgo(data.polledAt)}` : "-");
+
+  setRing(els.sub5hRing, els.sub5hPct, els.sub5hReset, data.fiveHour);
+  setRing(els.sub7dRing, els.sub7dPct, els.sub7dReset, data.sevenDay);
+  setRing(els.subSonnetRing, els.subSonnetPct, els.subSonnetReset, data.sevenDaySonnet);
+
+  const extra = data.extraUsage || {};
+  if (extra.isEnabled === false) {
+    setText(els, "subExtraUsed", t("views.llmUsage.extraDisabled", {}, "disabled"));
+    setText(els, "subExtraLimit", "-");
+    setText(els, "subExtraPct", "-");
+    if (els.subExtraBar) els.subExtraBar.style.width = "0%";
+  } else {
+    setText(els, "subExtraUsed", fmtUsd(extra.usedCreditsUsd));
+    setText(
+      els,
+      "subExtraLimit",
+      Number.isFinite(Number(extra.monthlyLimitUsd)) ? `${fmtUsd(extra.monthlyLimitUsd)}/mo` : "-",
+    );
+    const pct = Number(extra.utilizationPct);
+    setText(els, "subExtraPct", Number.isFinite(pct) ? `${pct.toFixed(1)}%` : "-");
+    if (els.subExtraBar) {
+      const safe = Number.isFinite(pct) ? Math.min(100, Math.max(0, pct)) : 0;
+      els.subExtraBar.style.width = `${safe}%`;
+      els.subExtraBar.className =
+        "vital-bar-fill " + (safe > 80 ? "red" : safe > 50 ? "yellow" : "green");
+    }
+  }
+
+  const tokens = data.windowTokens || {};
+  setText(els, "subTokInput", fmtNum(tokens.input));
+  setText(els, "subTokOutput", fmtNum(tokens.output));
+  setText(els, "subTokCacher", fmtNum(tokens.cacheReads));
+  setText(els, "subTokCachew", fmtNum(tokens.cacheWritesTotal));
+  setText(els, "subTokTotal", fmtNum(tokens.totalRaw));
+
+  const models = Object.entries(data.byModel || {});
+  els.subModelTable.hidden = models.length === 0;
+  els.subModels.replaceChildren(
+    ...models.map(([model, usage]) => {
+      const row = el("tr");
+      row.appendChild(el("td", "", model));
+      row.appendChild(el("td", "", fmtNum(usage?.input)));
+      row.appendChild(el("td", "", fmtNum(usage?.output)));
+      row.appendChild(el("td", "", fmtNum(usage?.cacheReads)));
+      row.appendChild(el("td", "", fmtNum(usage?.cacheWritesTotal)));
+      return row;
+    }),
+  );
+}
+
+function renderClaudeCodeUsage(els, data) {
+  if (!data) return;
+  els.ccPanel.hidden = false;
+
+  if (data.available === false) {
+    els.ccStatus.hidden = false;
+    els.ccStatus.textContent = t(
+      "views.llmUsage.ccUnavailable",
+      { reason: data.reason || "unknown" },
+      "Claude Code usage unavailable: {reason}",
+    );
+    return;
+  }
+  els.ccStatus.hidden = true;
+
+  const liveCount = data.live?.count || 0;
+  els.ccLive.hidden = liveCount === 0;
+  els.ccLive.textContent = t("views.llmUsage.liveCount", { count: liveCount }, "● {count} live");
+  const ttys = Array.isArray(data.live?.ttys) ? data.live.ttys : [];
+  setText(els, "ccTtys", ttys.length > 0 ? ttys.join(", ") : "");
+
+  const windows = data.windows || {};
+  for (const [key, prefix] of [
+    ["h24", "ccH24"],
+    ["d3", "ccD3"],
+    ["d7", "ccD7"],
+  ]) {
+    const win = windows[key] || {};
+    const totalTokens =
+      (win.input || 0) + (win.output || 0) + (win.cacheRead || 0) + (win.cacheWrite || 0);
+    setText(els, `${prefix}Cost`, Number.isFinite(win.estCost) ? `~${fmtUsd(win.estCost)}` : "-");
+    setText(els, `${prefix}Tokens`, fmtNum(totalTokens));
+    setText(els, `${prefix}Req`, fmtNum(win.requests));
+  }
+}
+
+function renderCodexActivity(els, data) {
+  if (!data) return;
+  els.cxPanel.hidden = false;
+
+  if (data.available === false) {
+    els.cxStatus.hidden = false;
+    els.cxStatus.textContent = t(
+      "views.llmUsage.codexUnavailable",
+      { reason: data.reason || "unknown" },
+      "Codex activity unavailable: {reason}",
+    );
+    return;
+  }
+  els.cxStatus.hidden = true;
+
+  const liveCount = data.live?.count || 0;
+  els.cxLive.hidden = liveCount === 0;
+  els.cxLive.textContent = t(
+    "views.llmUsage.liveProcs",
+    { count: liveCount },
+    "● {count} processes",
+  );
+  setText(els, "cxProcs", `${liveCount}`);
+  setText(els, "cxEntries", fmtNum(data.activity?.entries));
+  setText(els, "cxSessions", fmtNum(data.activity?.sessions));
+  setText(els, "cxLast", fmtAgo(data.activity?.lastAt));
+}
+
+function renderNineRouter(els, data) {
+  if (!data) return;
+  els.nrPanel.hidden = false;
+
+  if (data.available === false) {
+    els.nrStatus.hidden = false;
+    els.nrStatus.textContent = t(
+      "views.llmUsage.nrUnavailable",
+      { reason: data.reason || "unknown" },
+      "Nine Router usage unavailable: {reason}",
+    );
+    els.nrEmpty.hidden = true;
+    els.nrTable.hidden = true;
+    return;
+  }
+  els.nrStatus.hidden = true;
+
+  const usage = data.usage || {};
+  const totals = usage.totals || {};
+  setText(
+    els,
+    "nrTotals",
+    `${fmtNum(totals.requests || 0)} req • ${fmtNum(totals.totalTokens || 0)} tok • ${fmtUsd(totals.cost || 0)}`,
+  );
+
+  const providers = Array.isArray(usage.byProvider) ? usage.byProvider : [];
+  if (providers.length === 0) {
+    els.nrEmpty.hidden = false;
+    els.nrEmpty.textContent = t(
+      "views.llmUsage.nrEmpty",
+      {},
+      "No routed traffic yet — the router has not logged any requests.",
+    );
+    els.nrTable.hidden = true;
+    return;
+  }
+  els.nrEmpty.hidden = true;
+  els.nrTable.hidden = false;
+  els.nrBody.replaceChildren(
+    ...providers.map((provider) => {
+      const row = el("tr");
+      row.appendChild(el("td", "", provider.provider || provider.name || "?"));
+      row.appendChild(el("td", "", fmtNum(provider.requests)));
+      row.appendChild(el("td", "", fmtNum(provider.totalTokens ?? provider.tokens)));
+      row.appendChild(el("td", "", fmtUsd(provider.cost || 0)));
+      return row;
+    }),
+  );
+}
+
+function renderOpenRouter(els, data) {
+  if (!data) return;
+  els.orPanel.hidden = false;
+
+  if (data.available === false) {
+    els.orStatus.hidden = false;
+    els.orStatus.textContent = t(
+      "views.llmUsage.orUnavailable",
+      { reason: data.reason || "unknown" },
+      "OpenRouter unavailable: {reason} — add OPENROUTER_API_KEY to the server environment to enable credit tracking.",
+    );
+    els.orBody.hidden = true;
+    return;
+  }
+  els.orStatus.hidden = true;
+  els.orBody.hidden = false;
+
+  // Render whatever numeric credit/usage fields the adapter exposes.
+  const source = data.credits || data.usage || data;
+  const chips = [];
+  for (const [key, value] of Object.entries(source)) {
+    if (typeof value === "object" || typeof value === "boolean") continue;
+    const chip = el("div", "lvx-token-chip");
+    const isMoney = /usd|cost|credit|spend|limit/i.test(key);
+    chip.appendChild(
+      el(
+        "span",
+        "chip-value",
+        isMoney && Number.isFinite(Number(value)) ? fmtUsd(value) : fmtNum(value),
+      ),
+    );
+    chip.appendChild(el("span", "chip-label", key));
+    chips.push(chip);
+  }
+  els.orBody.replaceChildren(...chips);
+}
+
+/**
+ * Fetch + render the dedicated usage-source sections. Each endpoint is
+ * fetched independently and each render is try/caught so a single failing
+ * source never blanks the rest of the page.
+ */
+async function loadSources(els) {
+  const seq = ++sourcesSeq;
+  const [subscription, claudeCode, codex, nineRouter, openrouter] = await Promise.all([
+    fetchSource("/api/usage/subscription"),
+    fetchSource("/api/usage/claude-code"),
+    fetchSource("/api/usage/codex"),
+    fetchSource("/api/usage/nine-router"),
+    fetchSource("/api/usage/openrouter"),
+  ]);
+  if (seq !== sourcesSeq || !els.root.isConnected) return;
+
+  const renders = [
+    () => renderSubscription(els, subscription),
+    () => renderClaudeCodeUsage(els, claudeCode),
+    () => renderCodexActivity(els, codex),
+    () => renderNineRouter(els, nineRouter),
+    () => renderOpenRouter(els, openrouter),
+  ];
+  for (const render of renders) {
+    try {
+      render();
+    } catch (error) {
+      console.error("[LLM Usage] Source section render failed:", error);
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Data loading                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -285,6 +622,10 @@ function teardown() {
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
+  }
+  if (sourcesTimer) {
+    clearInterval(sourcesTimer);
+    sourcesTimer = null;
   }
   if (stateListener) {
     window.removeEventListener("fleet:state", stateListener);
@@ -329,6 +670,64 @@ export function init(container) {
     routingLatency: container.querySelector("#lv-routing-latency"),
     codexFloor: container.querySelector("#lv-codex-floor"),
     extraSources: container.querySelector("#lv-extra-sources"),
+    // Claude Max subscription
+    subPanel: container.querySelector("#lvx-sub-panel"),
+    subStatus: container.querySelector("#lvx-sub-status"),
+    subStale: container.querySelector("#lvx-sub-stale"),
+    subPolled: container.querySelector("#lvx-sub-polled"),
+    sub5hRing: container.querySelector("#lvx-sub-5h-ring"),
+    sub5hPct: container.querySelector("#lvx-sub-5h-pct"),
+    sub5hReset: container.querySelector("#lvx-sub-5h-reset"),
+    sub7dRing: container.querySelector("#lvx-sub-7d-ring"),
+    sub7dPct: container.querySelector("#lvx-sub-7d-pct"),
+    sub7dReset: container.querySelector("#lvx-sub-7d-reset"),
+    subSonnetRing: container.querySelector("#lvx-sub-sonnet-ring"),
+    subSonnetPct: container.querySelector("#lvx-sub-sonnet-pct"),
+    subSonnetReset: container.querySelector("#lvx-sub-sonnet-reset"),
+    subExtraUsed: container.querySelector("#lvx-sub-extra-used"),
+    subExtraLimit: container.querySelector("#lvx-sub-extra-limit"),
+    subExtraPct: container.querySelector("#lvx-sub-extra-pct"),
+    subExtraBar: container.querySelector("#lvx-sub-extra-bar"),
+    subTokInput: container.querySelector("#lvx-sub-tok-input"),
+    subTokOutput: container.querySelector("#lvx-sub-tok-output"),
+    subTokCacher: container.querySelector("#lvx-sub-tok-cacher"),
+    subTokCachew: container.querySelector("#lvx-sub-tok-cachew"),
+    subTokTotal: container.querySelector("#lvx-sub-tok-total"),
+    subModelTable: container.querySelector("#lvx-sub-model-table"),
+    subModels: container.querySelector("#lvx-sub-models"),
+    // Terminal sessions (Claude Code)
+    ccPanel: container.querySelector("#lvx-cc-panel"),
+    ccStatus: container.querySelector("#lvx-cc-status"),
+    ccLive: container.querySelector("#lvx-cc-live"),
+    ccTtys: container.querySelector("#lvx-cc-ttys"),
+    ccH24Cost: container.querySelector("#lvx-cc-h24-cost"),
+    ccH24Tokens: container.querySelector("#lvx-cc-h24-tokens"),
+    ccH24Req: container.querySelector("#lvx-cc-h24-req"),
+    ccD3Cost: container.querySelector("#lvx-cc-d3-cost"),
+    ccD3Tokens: container.querySelector("#lvx-cc-d3-tokens"),
+    ccD3Req: container.querySelector("#lvx-cc-d3-req"),
+    ccD7Cost: container.querySelector("#lvx-cc-d7-cost"),
+    ccD7Tokens: container.querySelector("#lvx-cc-d7-tokens"),
+    ccD7Req: container.querySelector("#lvx-cc-d7-req"),
+    // Codex activity
+    cxPanel: container.querySelector("#lvx-cx-panel"),
+    cxStatus: container.querySelector("#lvx-cx-status"),
+    cxLive: container.querySelector("#lvx-cx-live"),
+    cxProcs: container.querySelector("#lvx-cx-procs"),
+    cxEntries: container.querySelector("#lvx-cx-entries"),
+    cxSessions: container.querySelector("#lvx-cx-sessions"),
+    cxLast: container.querySelector("#lvx-cx-last"),
+    // Nine Router
+    nrPanel: container.querySelector("#lvx-nr-panel"),
+    nrStatus: container.querySelector("#lvx-nr-status"),
+    nrTotals: container.querySelector("#lvx-nr-totals"),
+    nrEmpty: container.querySelector("#lvx-nr-empty"),
+    nrTable: container.querySelector("#lvx-nr-table"),
+    nrBody: container.querySelector("#lvx-nr-body"),
+    // OpenRouter
+    orPanel: container.querySelector("#lvx-or-panel"),
+    orStatus: container.querySelector("#lvx-or-status"),
+    orBody: container.querySelector("#lvx-or-body"),
   };
   if (!els.root || !els.error || !els.extraSources) {
     console.error("[LLM Usage] Partial markup is missing expected elements; aborting init.");
@@ -358,5 +757,17 @@ export function init(container) {
     load(els);
   }, POLL_MS);
 
+  // Dedicated usage-source sections poll on their own cadence (SSE does not
+  // carry these slices).
+  sourcesTimer = setInterval(() => {
+    if (!els.root.isConnected) {
+      teardown();
+      return;
+    }
+    if (document.hidden) return;
+    loadSources(els);
+  }, SOURCES_POLL_MS);
+
   load(els);
+  loadSources(els);
 }

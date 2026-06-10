@@ -28,6 +28,173 @@
       color: #f59e0b;
       font-size: 0.8rem;
     }
+    /* ---- New usage-source sections (scoped) ---- */
+    #llm-view-section .lvx-panel {
+      margin-top: 16px;
+    }
+    #llm-view-section .lvx-status {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      padding: 6px 0;
+    }
+    #llm-view-section .lvx-status.warn {
+      color: #f59e0b;
+    }
+    #llm-view-section .lvx-badge {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 2px 8px;
+      border-radius: 10px;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+    #llm-view-section .lvx-badge.stale {
+      background: rgba(245, 158, 11, 0.15);
+      border: 1px solid rgba(245, 158, 11, 0.5);
+      color: #f59e0b;
+    }
+    #llm-view-section .lvx-badge.live {
+      background: rgba(63, 185, 80, 0.12);
+      border: 1px solid rgba(63, 185, 80, 0.45);
+      color: var(--green, #3fb950);
+    }
+    #llm-view-section .lvx-rings {
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+      align-items: stretch;
+    }
+    #llm-view-section .lvx-ring-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      padding: 12px 18px;
+      min-width: 140px;
+    }
+    #llm-view-section .lvx-ring {
+      --pct: 0;
+      --ring-color: var(--green, #3fb950);
+      width: 88px;
+      height: 88px;
+      border-radius: 50%;
+      background: conic-gradient(
+        var(--ring-color) calc(var(--pct) * 1%),
+        rgba(128, 128, 128, 0.18) 0
+      );
+      display: grid;
+      place-items: center;
+    }
+    #llm-view-section .lvx-ring.warn {
+      --ring-color: #f59e0b;
+    }
+    #llm-view-section .lvx-ring.crit {
+      --ring-color: var(--red, #f85149);
+    }
+    #llm-view-section .lvx-ring-inner {
+      width: 66px;
+      height: 66px;
+      border-radius: 50%;
+      background: var(--card-bg, var(--bg));
+      display: grid;
+      place-items: center;
+      font-size: 1.05rem;
+      font-weight: 700;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    #llm-view-section .lvx-ring-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      text-align: center;
+    }
+    #llm-view-section .lvx-ring-reset {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    #llm-view-section .lvx-token-strip {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    #llm-view-section .lvx-token-chip {
+      flex: 1 1 120px;
+      min-width: 120px;
+      padding: 8px 12px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      text-align: center;
+    }
+    #llm-view-section .lvx-token-chip .chip-value {
+      font-size: 0.95rem;
+      font-weight: 700;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      display: block;
+    }
+    #llm-view-section .lvx-token-chip .chip-label {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    #llm-view-section .lvx-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 0.78rem;
+    }
+    #llm-view-section .lvx-table th {
+      text-align: left;
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      padding: 4px 10px 4px 0;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+    }
+    #llm-view-section .lvx-table td {
+      padding: 5px 10px 5px 0;
+      border-bottom: 1px solid var(--border);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--text);
+    }
+    #llm-view-section .lvx-table td:first-child {
+      font-family: inherit;
+      color: var(--text-muted);
+    }
+    #llm-view-section .lvx-note {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin-top: 8px;
+      font-style: italic;
+    }
+    #llm-view-section .lvx-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 12px;
+      margin-top: 10px;
+    }
+    #llm-view-section .lvx-empty {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      padding: 10px 0;
+    }
+    #llm-view-section .lvx-flex-split {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      align-items: flex-start;
+    }
+    #llm-view-section .lvx-flex-split > .vital-card {
+      flex: 1 1 240px;
+    }
   </style>
   <section class="view-panel">
     <div class="view-header">
@@ -177,8 +344,231 @@
       </div>
     </div>
 
-    <!-- Additional usage sources (headroom / nine-router / openrouter / future
-         adapters) render here from whatever /api/llm-usage exposes. -->
+    <!-- ============ Claude Max Subscription (headroom) ============ -->
+    <div class="vitals-panel lvx-panel" id="lvx-sub-panel" hidden>
+      <div class="vitals-header">
+        <div class="vitals-title">
+          👑 <span>Claude Max Subscription</span>
+          <span class="lvx-badge stale" id="lvx-sub-stale" hidden>STALE</span>
+          <span class="vitals-hostname" id="lvx-sub-polled">-</span>
+        </div>
+      </div>
+      <div class="lvx-status warn" id="lvx-sub-status" hidden></div>
+      <div class="lvx-flex-split">
+        <div class="vital-card lvx-rings" style="flex: 2 1 420px; justify-content: space-around">
+          <div class="lvx-ring-card">
+            <div class="lvx-ring" id="lvx-sub-5h-ring">
+              <div class="lvx-ring-inner" id="lvx-sub-5h-pct">-%</div>
+            </div>
+            <div class="lvx-ring-label">5-hour window</div>
+            <div class="lvx-ring-reset" id="lvx-sub-5h-reset">-</div>
+          </div>
+          <div class="lvx-ring-card">
+            <div class="lvx-ring" id="lvx-sub-7d-ring">
+              <div class="lvx-ring-inner" id="lvx-sub-7d-pct">-%</div>
+            </div>
+            <div class="lvx-ring-label">7-day (all)</div>
+            <div class="lvx-ring-reset" id="lvx-sub-7d-reset">-</div>
+          </div>
+          <div class="lvx-ring-card">
+            <div class="lvx-ring" id="lvx-sub-sonnet-ring">
+              <div class="lvx-ring-inner" id="lvx-sub-sonnet-pct">-%</div>
+            </div>
+            <div class="lvx-ring-label">7-day Sonnet</div>
+            <div class="lvx-ring-reset" id="lvx-sub-sonnet-reset">-</div>
+          </div>
+        </div>
+        <div class="vital-card" id="lvx-sub-extra-card">
+          <div class="vital-header">
+            <span class="vital-label">💳 <span>Extra usage</span></span>
+            <span class="vital-value" id="lvx-sub-extra-used">-</span>
+          </div>
+          <div class="vital-bar">
+            <div class="vital-bar-fill green" id="lvx-sub-extra-bar" style="width: 0%"></div>
+          </div>
+          <div class="vital-detail">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-sub-extra-limit">-</span>
+              <span class="vital-detail-label">monthly limit</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-sub-extra-pct">-</span>
+              <span class="vital-detail-label">used</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="lvx-token-strip" id="lvx-sub-tokens">
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-sub-tok-input">-</span>
+          <span class="chip-label">Input</span>
+        </div>
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-sub-tok-output">-</span>
+          <span class="chip-label">Output</span>
+        </div>
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-sub-tok-cacher">-</span>
+          <span class="chip-label">Cache reads</span>
+        </div>
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-sub-tok-cachew">-</span>
+          <span class="chip-label">Cache writes</span>
+        </div>
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-sub-tok-total">-</span>
+          <span class="chip-label">Total (raw)</span>
+        </div>
+      </div>
+      <table class="lvx-table" id="lvx-sub-model-table" hidden>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Input</th>
+            <th>Output</th>
+            <th>Cache reads</th>
+            <th>Cache writes</th>
+          </tr>
+        </thead>
+        <tbody id="lvx-sub-models"></tbody>
+      </table>
+    </div>
+
+    <!-- ============ Terminal Sessions (Claude Code) ============ -->
+    <div class="vitals-panel lvx-panel" id="lvx-cc-panel" hidden>
+      <div class="vitals-header">
+        <div class="vitals-title">
+          💻
+          <span>Terminal Sessions (Claude Code)</span>
+          <span class="lvx-badge live" id="lvx-cc-live" hidden></span>
+          <span class="vitals-hostname" id="lvx-cc-ttys"></span>
+        </div>
+      </div>
+      <div class="lvx-status warn" id="lvx-cc-status" hidden></div>
+      <div class="lvx-cards">
+        <div class="vital-card">
+          <div class="vital-header">
+            <span class="vital-label">🕐 24h</span>
+            <span class="vital-value" id="lvx-cc-h24-cost">-</span>
+          </div>
+          <div class="vital-detail">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-cc-h24-tokens">-</span>
+              <span class="vital-detail-label">tokens</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-cc-h24-req">-</span>
+              <span class="vital-detail-label">requests</span>
+            </div>
+          </div>
+        </div>
+        <div class="vital-card">
+          <div class="vital-header">
+            <span class="vital-label">📆 3d</span>
+            <span class="vital-value" id="lvx-cc-d3-cost">-</span>
+          </div>
+          <div class="vital-detail">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-cc-d3-tokens">-</span>
+              <span class="vital-detail-label">tokens</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-cc-d3-req">-</span>
+              <span class="vital-detail-label">requests</span>
+            </div>
+          </div>
+        </div>
+        <div class="vital-card">
+          <div class="vital-header">
+            <span class="vital-label">🗓️ 7d</span>
+            <span class="vital-value" id="lvx-cc-d7-cost">-</span>
+          </div>
+          <div class="vital-detail">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-cc-d7-tokens">-</span>
+              <span class="vital-detail-label">tokens</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-cc-d7-req">-</span>
+              <span class="vital-detail-label">requests</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="lvx-note">
+        Cost figures are estimates priced at Opus rates — actual subscription usage is covered by
+        the Claude Max plan.
+      </div>
+    </div>
+
+    <!-- ============ Codex (activity only) ============ -->
+    <div class="vitals-panel lvx-panel" id="lvx-cx-panel" hidden>
+      <div class="vitals-header">
+        <div class="vitals-title">
+          ⚡ <span>Codex Activity</span>
+          <span class="lvx-badge live" id="lvx-cx-live" hidden></span>
+        </div>
+      </div>
+      <div class="lvx-status warn" id="lvx-cx-status" hidden></div>
+      <div class="lvx-token-strip">
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-cx-procs">-</span>
+          <span class="chip-label">Live processes</span>
+        </div>
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-cx-entries">-</span>
+          <span class="chip-label">Activity entries</span>
+        </div>
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-cx-sessions">-</span>
+          <span class="chip-label">Sessions</span>
+        </div>
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-cx-last">-</span>
+          <span class="chip-label">Last activity</span>
+        </div>
+      </div>
+      <div class="lvx-note">
+        Token counts are not available from Codex activity logs — counts reflect prompts/sessions
+        only.
+      </div>
+    </div>
+
+    <!-- ============ Nine Router ============ -->
+    <div class="vitals-panel lvx-panel" id="lvx-nr-panel" hidden>
+      <div class="vitals-header">
+        <div class="vitals-title">
+          🔀 <span>Nine Router</span>
+          <span class="vitals-hostname" id="lvx-nr-totals"></span>
+        </div>
+      </div>
+      <div class="lvx-status warn" id="lvx-nr-status" hidden></div>
+      <div class="lvx-empty" id="lvx-nr-empty" hidden></div>
+      <table class="lvx-table" id="lvx-nr-table" hidden>
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Requests</th>
+            <th>Tokens</th>
+            <th>Cost</th>
+          </tr>
+        </thead>
+        <tbody id="lvx-nr-body"></tbody>
+      </table>
+    </div>
+
+    <!-- ============ OpenRouter ============ -->
+    <div class="vitals-panel lvx-panel" id="lvx-or-panel" hidden>
+      <div class="vitals-header">
+        <div class="vitals-title">🌐 <span>OpenRouter</span></div>
+      </div>
+      <div class="lvx-status warn" id="lvx-or-status" hidden></div>
+      <div class="lvx-token-strip" id="lvx-or-body" hidden></div>
+    </div>
+
+    <!-- Additional usage sources (future adapters) render here from whatever
+         /api/llm-usage exposes; sources with dedicated sections above are
+         excluded to avoid double-rendering. -->
     <div class="llm-extra-grid" id="lv-extra-sources"></div>
   </section>
 </div>

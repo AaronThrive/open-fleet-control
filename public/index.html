@@ -464,13 +464,70 @@
                 margin-top: 16px;
                 padding-top: 16px;
                 border-top: 1px solid var(--border);
-                text-align: center;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+                flex-wrap: wrap;
               "
             >
-              <span style="font-size: 0.75rem; color: var(--text-muted)">
-                🔒 Memory editing UI coming soon (Inside Out style!)
-              </span>
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+                <span style="font-size: 0.8rem; color: var(--text-muted)">
+                  🧠 Long-term memories:
+                </span>
+                <span id="memory-cortex-total" style="font-size: 0.85rem; font-weight: 600">–</span>
+                <span
+                  id="memory-cortex-scopes"
+                  style="display: inline-flex; gap: 6px; flex-wrap: wrap"
+                ></span>
+              </div>
+              <a
+                href="/#view-cortex"
+                style="
+                  font-size: 0.8rem;
+                  color: var(--accent);
+                  text-decoration: none;
+                  font-weight: 600;
+                  white-space: nowrap;
+                "
+                >Open Memory Browser →</a
+              >
             </div>
+            <script>
+              // Live long-term memory summary (cortex stats). Self-contained:
+              // builds DOM via textContent only, fails quietly to "offline".
+              (function () {
+                const totalEl = document.getElementById("memory-cortex-total");
+                const scopesEl = document.getElementById("memory-cortex-scopes");
+                if (!totalEl || !scopesEl) return;
+                fetch("/api/fleet/cortex")
+                  .then((res) => (res.ok ? res.json() : null))
+                  .then((state) => {
+                    const stats = state && state.memory && state.memory.stats;
+                    if (!stats || typeof stats.totalMemories !== "number") {
+                      totalEl.textContent = "offline";
+                      totalEl.style.color = "var(--text-muted)";
+                      return;
+                    }
+                    totalEl.textContent = `${stats.totalMemories} memories`;
+                    const scopes = Object.entries(stats.byScope || {})
+                      .sort((a, b) => b[1] - a[1])
+                      .slice(0, 4);
+                    for (const [scope, count] of scopes) {
+                      const chip = document.createElement("span");
+                      chip.textContent = `${scope} · ${count}`;
+                      chip.style.cssText =
+                        "border: 1px solid var(--border); border-radius: 999px; " +
+                        "padding: 1px 8px; font-size: 0.7rem; color: var(--text-muted)";
+                      scopesEl.appendChild(chip);
+                    }
+                  })
+                  .catch(() => {
+                    totalEl.textContent = "offline";
+                    totalEl.style.color = "var(--text-muted)";
+                  });
+              })();
+            </script>
           </div>
         </div>
 

@@ -15,10 +15,19 @@ const os = require("os");
 const path = require("path");
 const { createRequire } = require("node:module");
 
-const CLI_TIMEOUT_MS = 15000;
+// The openclaw CLI loads its full plugin stack on every invocation, which
+// alone can take ~30s on a busy host (measured live). Writes additionally
+// re-embed imported text through a remote embedding API, so they get a
+// larger budget than reads.
+const CLI_TIMEOUT_MS = 60000;
+const CLI_WRITE_TIMEOUT_MS = 120000;
 const EXPORT_FORMAT_VERSION = "1.0";
 const DEFAULT_SEARCH_LIMIT = 10;
 const DEFAULT_LIST_LIMIT = 20;
+const METADATA_SOURCE = "open-fleet-control-cortex";
+
+/** Fields callers may change via update(). */
+const EDITABLE_FIELDS = ["text", "category", "scope", "importance"];
 
 /**
  * Default exec function: execFile semantics (args array, never a shell).
@@ -126,6 +135,75 @@ function parseMetadata(metadata) {
     }
   }
   return metadata ?? null;
+}
+
+/**
+ * Validate the change-set passed to update(). Returns { fields } with only
+ * the editable fields present, or { error } on the first invalid value.
+ */
+function validateUpdateChanges(changes) {
+  if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
+    return { error: "update changes must be an object" };
+  }
+  const fields = {};
+  for (const key of EDITABLE_FIELDS) {
+    if (changes[key] !== undefined) fields[key] = changes[key];
+  }
+  if (Object.keys(fields).length === 0) {
+    return { error: `update requires at least one editable field (${EDITABLE_FIELDS.join(", ")})` };
+  }
+  if (fields.text !== undefined && (typeof fields.text !== "string" || fields.text.trim() === "")) {
+    return { error: "memory text must be a non-empty string" };
+  }
+  for (const key of ["category", "scope"]) {
+    if (
+      fields[key] !== undefined &&
+      (typeof fields[key] !== "string" || fields[key].trim() === "")
+    ) {
+      return { error: `memory ${key} must be a non-empty string` };
+    }
+  }
+  if (fields.importance !== undefined) {
+    const value = Number(fields.importance);
+    if (!Number.isFinite(value) || value < 0 || value > 1) {
+      return { error: "memory importance must be a number between 0 and 1" };
+    }
+    fields.importance = value;
+  }
+  return { fields };
+}
+
+/**
+ * Merge a row's (already parsed) metadata with an edit marker and return the
+ * JSON string the export format expects. Non-object metadata is preserved
+ * under `legacyMetadata` instead of being silently dropped.
+ */
+function buildUpdatedMetadata(currentMetadata) {
+  const base =
+    currentMetadata && typeof currentMetadata === "object" && !Array.isArray(currentMetadata)
+      ? { ...currentMetadata }
+      : currentMetadata !== null && currentMetadata !== undefined
+        ? { legacyMetadata: currentMetadata }
+        : {};
+  return JSON.stringify({
+    ...base,
+    updatedBy: METADATA_SOURCE,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/** Re-serialize a normalized row back into an export-format record. */
+function toExportRecord(item) {
+  return {
+    id: item.id,
+    text: item.text,
+    category: item.category || "fact",
+    scope: item.scope || "global",
+    importance: item.importance ?? 0.7,
+    timestamp: item.timestamp ?? Date.now(),
+    metadata:
+      typeof item.metadata === "string" ? item.metadata : JSON.stringify(item.metadata ?? {}),
+  };
 }
 
 /** Normalize a raw memory row (drops the embedding vector). */
@@ -335,9 +413,57 @@ function createLanceMemory(options = {}) {
   }
 
   /**
-   * Store a memory. Writes a temp JSON file matching the
-   * `openclaw memory-pro export` envelope, then imports it via the CLI
+   * Import export-format records via the CLI through a temp JSON file
    * (direct table.add is unsafe — single-writer through the CLI only).
+   * Record ids are preserved by the import, which is what makes update()
+   * possible as delete + re-import.
+   */
+  async function importViaCli(memories, scope) {
+    const payload = {
+      version: EXPORT_FORMAT_VERSION,
+      exportedAt: new Date().toISOString(),
+      count: memories.length,
+      filters: {},
+      memories,
+    };
+    const tmpFile = path.join(
+      os.tmpdir(),
+      `cortex-import-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`,
+    );
+    try {
+      fs.writeFileSync(tmpFile, JSON.stringify(payload, null, 2), "utf8");
+      const args = ["memory-pro", "import", tmpFile];
+      if (scope) args.push("--scope", String(scope));
+      const res = await execFn(cliCommand, args, { timeoutMs: CLI_WRITE_TIMEOUT_MS });
+      if (res.error) {
+        return { error: `memory-pro import failed: ${res.error.message || res.error}` };
+      }
+      return { ok: true };
+    } catch (e) {
+      return { error: `import failed: ${e.message}` };
+    } finally {
+      try {
+        fs.unlinkSync(tmpFile);
+      } catch (e) {
+        // Temp file may already be gone - nothing to clean up
+      }
+    }
+  }
+
+  /** Delete a memory by id via the CLI (scope narrows access control). */
+  async function deleteViaCli(id, scope) {
+    const args = ["memory-pro", "delete", id];
+    if (scope) args.push("--scope", String(scope));
+    const res = await execFn(cliCommand, args, { timeoutMs: CLI_WRITE_TIMEOUT_MS });
+    if (res.error) {
+      return { error: `memory-pro delete failed: ${res.error.message || res.error}` };
+    }
+    return { ok: true };
+  }
+
+  /**
+   * Store a memory. Writes a temp JSON file matching the
+   * `openclaw memory-pro export` envelope, then imports it via the CLI.
    */
   async function store(text, { category = "fact", scope, importance = 0.7 } = {}) {
     if (typeof text !== "string" || text.trim() === "") {
@@ -350,37 +476,91 @@ function createLanceMemory(options = {}) {
       scope: scope || "global",
       importance,
       timestamp: Date.now(),
-      metadata: JSON.stringify({ source: "open-fleet-control-cortex" }),
+      metadata: JSON.stringify({ source: METADATA_SOURCE }),
     };
-    const payload = {
-      version: EXPORT_FORMAT_VERSION,
-      exportedAt: new Date().toISOString(),
-      count: 1,
-      filters: {},
-      memories: [memory],
+    const imported = await importViaCli([memory], scope);
+    if (imported.error) return { error: imported.error };
+    return { ok: true, id: memory.id };
+  }
+
+  /**
+   * Update a memory in place. The CLI has no update/edit command, so this is
+   * delete + re-import of the merged record. The import format carries the
+   * record id, and imports preserve it — so the id is stable across updates
+   * (verified live against `openclaw memory-pro`). Unspecified fields and
+   * the original timestamp are preserved; metadata gains an edit marker.
+   * Requires a readable LanceDB dataset (the merge needs the current row).
+   */
+  async function update(id, changes = {}) {
+    if (!id || typeof id !== "string") {
+      return { error: "memory id must be a non-empty string" };
+    }
+    const validated = validateUpdateChanges(changes);
+    if (validated.error) return { error: validated.error };
+    const { fields } = validated;
+
+    const existing = await get(id);
+    if (existing.error) return { error: existing.error };
+    const current = existing.item;
+
+    const updated = {
+      ...toExportRecord(current),
+      ...(fields.text !== undefined ? { text: fields.text } : {}),
+      ...(fields.category !== undefined ? { category: fields.category } : {}),
+      ...(fields.scope !== undefined ? { scope: fields.scope } : {}),
+      ...(fields.importance !== undefined ? { importance: fields.importance } : {}),
+      metadata: buildUpdatedMetadata(current.metadata),
     };
-    const tmpFile = path.join(
-      os.tmpdir(),
-      `cortex-import-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`,
-    );
-    try {
-      fs.writeFileSync(tmpFile, JSON.stringify(payload, null, 2), "utf8");
-      const args = ["memory-pro", "import", tmpFile];
-      if (scope) args.push("--scope", String(scope));
-      const res = await execFn(cliCommand, args, { timeoutMs: CLI_TIMEOUT_MS });
-      if (res.error) {
-        return { error: `memory-pro import failed: ${res.error.message || res.error}` };
+
+    const deleted = await deleteViaCli(id, current.scope || null);
+    if (deleted.error) return { error: `update failed (delete step): ${deleted.error}` };
+
+    const imported = await importViaCli([updated], updated.scope);
+    if (imported.error) {
+      // The original row is already deleted — restore it so a failed
+      // re-import never loses data.
+      const restored = await importViaCli([toExportRecord(current)], current.scope || null);
+      if (restored.error) {
+        return {
+          error:
+            `update failed (import step): ${imported.error}; ` +
+            `ROLLBACK FAILED — original memory may be lost: ${restored.error}`,
+        };
       }
-      return { ok: true, id: memory.id };
-    } catch (e) {
-      return { error: `store failed: ${e.message}` };
-    } finally {
-      try {
-        fs.unlinkSync(tmpFile);
-      } catch (e) {
-        // Temp file may already be gone - nothing to clean up
+      return { error: `update failed (import step): ${imported.error}; original memory restored` };
+    }
+    return { ok: true, id, item: { ...updated, metadata: parseMetadata(updated.metadata) } };
+  }
+
+  /**
+   * Delete a memory by id. Existence and scope are resolved via a direct
+   * read when the dataset is readable (404-style error for unknown ids,
+   * post-delete verification); otherwise the CLI delete runs blind.
+   */
+  async function remove(id) {
+    if (!id || typeof id !== "string") {
+      return { error: "memory id must be a non-empty string" };
+    }
+    let scope = null;
+    let confirmedExists = false;
+    const existing = await get(id);
+    if (existing.item) {
+      scope = existing.item.scope || null;
+      confirmedExists = true;
+    } else if (existing.error && existing.error.startsWith("memory not found")) {
+      return { error: existing.error };
+    }
+
+    const deleted = await deleteViaCli(id, scope);
+    if (deleted.error) return { error: deleted.error };
+
+    if (confirmedExists) {
+      const check = await get(id);
+      if (check.item) {
+        return { error: `delete did not take effect: memory ${id} is still present` };
       }
     }
+    return { ok: true, id };
   }
 
   /**
@@ -422,7 +602,7 @@ function createLanceMemory(options = {}) {
     }
   }
 
-  return { available, search, list, get, store, stats };
+  return { available, search, list, get, store, update, remove, stats };
 }
 
 module.exports = {

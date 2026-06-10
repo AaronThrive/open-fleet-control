@@ -23,16 +23,22 @@ import { t, formatTimeAgo } from "../utils.js";
 
 const PAGE_SIZE = 20;
 const POLL_MS = 15000;
+const TERMINAL_POLL_MS = 45000;
 const SSE_FRESH_MS = 20000;
+const TERMINAL_MAX_ROWS = 30;
 
 // Module-scope state (module is cached; only init() re-runs per visit)
 let pollTimer = null;
+let terminalTimer = null;
 let stateListener = null;
 let requestSeq = 0;
+let terminalSeq = 0;
 let lastSseAt = 0;
-const filters = { status: "all", channel: "all", kind: "all" };
+const filters = { status: "all", channel: "all", kind: "all", source: "all" };
 let page = 1;
 let pagination = null;
+// null = endpoint never answered (absent on older deployments); object = data.
+let terminalData = null;
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -305,6 +311,136 @@ function renderSubagentStrip(els, subagents, sessions) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Terminal Sessions (Claude Code)                                     */
+/* ------------------------------------------------------------------ */
+
+function agoFromIso(iso) {
+  if (!iso) return "-";
+  const ts = new Date(iso).getTime();
+  if (!Number.isFinite(ts)) return "-";
+  const ago = formatTimeAgo(Math.max(0, Math.round((Date.now() - ts) / 60000)));
+  return ago === "now" ? t("views.sessions.justNow", {}, "just now") : `${ago} ago`;
+}
+
+function buildTerminalRow(session) {
+  const row = el("div", "sessions-terminal-row");
+  if (session.live) {
+    row.appendChild(el("span", "tr-live", t("views.sessions.terminalLive", {}, "● LIVE")));
+  }
+  if (session.subagent) {
+    row.appendChild(
+      el("span", "tr-subagent", t("views.sessions.terminalSubagent", {}, "↳ subagent")),
+    );
+  }
+  const cwd = el("span", "tr-cwd", session.cwd || "?");
+  cwd.title = session.file || session.cwd || "";
+  row.appendChild(cwd);
+
+  const tokens = session.tokens || {};
+  const totalTok = (tokens.input || 0) + (tokens.output || 0);
+  row.appendChild(
+    el(
+      "span",
+      "tr-meta",
+      t(
+        "views.sessions.terminalMeta",
+        {
+          started: agoFromIso(session.startedAt),
+          active: agoFromIso(session.lastActiveAt),
+          msgs: session.messages || 0,
+          tokens: `${(totalTok / 1000).toFixed(1)}k`,
+        },
+        "started {started} • active {active} • {msgs} msgs • {tokens} tok",
+      ),
+    ),
+  );
+  return row;
+}
+
+function renderTerminal(els) {
+  const data = terminalData;
+  const wantsTerminal = filters.source === "all" || filters.source === "terminal";
+
+  if (!data) {
+    // Endpoint absent (older deployment) or unreachable: only surface a
+    // message when the user explicitly selected the Terminal source.
+    els.terminalSection.hidden = filters.source !== "terminal";
+    els.terminalList.replaceChildren();
+    els.terminalEmpty.hidden = filters.source !== "terminal";
+    els.terminalEmpty.textContent = t(
+      "views.sessions.terminalUnavailable",
+      {},
+      "Terminal session data is unavailable on this deployment.",
+    );
+    els.terminalCount.textContent = "0";
+    els.terminalLive.hidden = true;
+    els.terminalTtys.textContent = "";
+    return;
+  }
+
+  const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+  els.terminalFilterCount.textContent = `${sessions.length}`;
+  els.terminalSection.hidden = !wantsTerminal;
+  els.terminalCount.textContent = `${sessions.length}`;
+
+  const liveCount = data.live?.count || 0;
+  els.terminalLive.hidden = liveCount === 0;
+  els.terminalLive.textContent = t(
+    "views.sessions.terminalLiveCount",
+    { count: liveCount },
+    "● {count} live",
+  );
+  const ttys = Array.isArray(data.live?.ttys) ? data.live.ttys : [];
+  els.terminalTtys.textContent = ttys.join(", ");
+
+  if (sessions.length === 0) {
+    els.terminalEmpty.hidden = false;
+    els.terminalEmpty.textContent = t(
+      "views.sessions.terminalEmpty",
+      {},
+      "No Claude Code terminal sessions found.",
+    );
+    els.terminalList.replaceChildren();
+    return;
+  }
+  els.terminalEmpty.hidden = true;
+  els.terminalList.replaceChildren(
+    ...sessions
+      .slice()
+      .sort((a, b) => new Date(b.lastActiveAt || 0) - new Date(a.lastActiveAt || 0))
+      .slice(0, TERMINAL_MAX_ROWS)
+      .map((session) => buildTerminalRow(session)),
+  );
+}
+
+async function loadTerminal(els) {
+  const seq = ++terminalSeq;
+  let data = null;
+  try {
+    const response = await fetch("/api/usage/claude-code");
+    if (response.ok) data = await response.json();
+  } catch {
+    data = null;
+  }
+  if (seq !== terminalSeq || !els.grid.isConnected) return;
+  terminalData = data && data.available !== false ? data : null;
+  try {
+    renderTerminal(els);
+  } catch (error) {
+    console.error("[Sessions] Terminal section render failed:", error);
+  }
+}
+
+function applySourceVisibility(els) {
+  const showOpenClaw = filters.source === "all" || filters.source === "openclaw";
+  els.grid.style.display = showOpenClaw ? "" : "none";
+  els.pagination.style.display = showOpenClaw && pagination ? "" : "none";
+  if (showOpenClaw) renderPagination(els);
+  els.subagentStrip.style.display = showOpenClaw ? "" : "none";
+  renderTerminal(els);
+}
+
+/* ------------------------------------------------------------------ */
 /* Grid + pagination                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -349,6 +485,10 @@ function renderGrid(els, sessions) {
 }
 
 function renderPagination(els) {
+  if (filters.source === "terminal") {
+    els.pagination.style.display = "none";
+    return;
+  }
   if (!pagination || pagination.total <= pagination.pageSize) {
     els.pagination.style.display = "none";
     return;
@@ -432,6 +572,10 @@ function teardown() {
     clearInterval(pollTimer);
     pollTimer = null;
   }
+  if (terminalTimer) {
+    clearInterval(terminalTimer);
+    terminalTimer = null;
+  }
   if (stateListener) {
     window.removeEventListener("fleet:state", stateListener);
     stateListener = null;
@@ -448,7 +592,9 @@ export function init(container) {
   filters.status = "all";
   filters.channel = "all";
   filters.kind = "all";
+  filters.source = "all";
   pagination = null;
+  terminalData = null;
 
   const els = {
     grid: container.querySelector("#sessions-view-grid"),
@@ -466,7 +612,15 @@ export function init(container) {
     countIdle: container.querySelector("#sessions-filter-idle-count"),
     subagentChips: container.querySelector("#sessions-subagent-chips"),
     subagentEmpty: container.querySelector("#sessions-subagent-empty"),
+    subagentStrip: container.querySelector("#sessions-subagent-strip"),
     inlineDetail: container.querySelector("#sessions-inline-detail"),
+    terminalSection: container.querySelector("#sessions-terminal-section"),
+    terminalCount: container.querySelector("#sessions-terminal-count"),
+    terminalLive: container.querySelector("#sessions-terminal-live"),
+    terminalTtys: container.querySelector("#sessions-terminal-ttys"),
+    terminalEmpty: container.querySelector("#sessions-terminal-empty"),
+    terminalList: container.querySelector("#sessions-terminal-list"),
+    terminalFilterCount: container.querySelector("#sessions-filter-terminal-count"),
   };
   if (Object.values(els).some((node) => !node)) {
     console.error("[Sessions] Partial markup is missing expected elements; aborting init.");
@@ -485,6 +639,8 @@ export function init(container) {
         if (groupName === "status") {
           page = 1;
           load(els);
+        } else if (groupName === "source") {
+          applySourceVisibility(els);
         } else {
           applyClientFilters(els);
         }
@@ -537,5 +693,17 @@ export function init(container) {
     load(els);
   }, POLL_MS);
 
+  // Terminal sessions (Claude Code) poll independently — SSE does not carry
+  // this slice, and the endpoint may be absent on older deployments.
+  terminalTimer = setInterval(() => {
+    if (!els.grid.isConnected) {
+      teardown();
+      return;
+    }
+    if (document.hidden) return;
+    loadTerminal(els);
+  }, TERMINAL_POLL_MS);
+
   load(els);
+  loadTerminal(els);
 }

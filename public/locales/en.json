@@ -45,7 +45,8 @@
     "ops": "Ops",
     "tokensCost": "Tokens",
     "settingsView": "Settings",
-    "docker": "Docker"
+    "docker": "Docker",
+    "agents": "Agents"
   },
   "stats": {
     "totalTokens": "Total Tokens",
@@ -500,6 +501,28 @@
       "noModelData": "No model data for this window",
       "loadError": "Could not reach the cost-breakdown API — is the server up?",
       "honestyNote": "Costs marked EST are computed locally from token counts and public per-model rates; REPORTED costs come straight from provider usage records. Cache reads are billed at a steep discount and cache writes at a premium, so they are shown separately and never lumped into raw input/output totals."
+    },
+    "agents": {
+      "activeOnly": "Active only",
+      "activeTooltip": "Active in the last 10 minutes",
+      "ago": "{span} ago",
+      "emptyText": "No agents are configured in openclaw.json on this host or any online fleet node yet.",
+      "emptyTitle": "No agents",
+      "filterAllNodes": "All nodes",
+      "idleTooltip": "Idle",
+      "lastActive": "active {ago}",
+      "loadError": "Failed to load the agents roster: {message}. Retrying automatically...",
+      "loading": "Loading agents...",
+      "never": "never active",
+      "noMatch": "No agents match the current filter.",
+      "nodeCount": "{n} agents",
+      "sessions": "{n} sessions",
+      "subagents": "{n} subagents max",
+      "subtitle": "Unified roster of OpenClaw agents across every fleet node — model, activity, and sessions",
+      "summaryActive": "Active",
+      "summaryAgents": "Agents",
+      "summaryNodes": "Nodes",
+      "title": "Agents"
     },
     "docker": {
       "cpu": "CPU",
