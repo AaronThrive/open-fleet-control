@@ -114,3 +114,6 @@ config/dashboard.local.json
 /briefs/
 /lessons_learned.md
 /lessons_learned.approved.md
+
+# E2E artifacts (failure screenshots)
+tests-e2e/artifacts/
