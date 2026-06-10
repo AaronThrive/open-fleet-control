@@ -1,5 +1,210 @@
 <!-- Logs (Audit Log) View Partial -->
 <div class="section" id="logs-view-section">
+  <style>
+    #logs-view-section .logs-filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: flex-end;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    #logs-view-section .logs-filter-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    #logs-view-section .logs-filter-field label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    #logs-view-section .logs-filter-field input,
+    #logs-view-section .logs-filter-field select {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 0.85rem;
+      font-family: inherit;
+      min-width: 130px;
+      color-scheme: dark;
+    }
+    #logs-view-section .logs-filter-field input:focus,
+    #logs-view-section .logs-filter-field select:focus {
+      outline: none;
+      border-color: var(--accent-2);
+    }
+    #logs-view-section .logs-filter-actions {
+      display: flex;
+      gap: 8px;
+      margin-left: auto;
+    }
+    #logs-view-section .logs-meta-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+    #logs-view-section .logs-error {
+      color: var(--red);
+    }
+    #logs-view-section .logs-table {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--card-bg);
+    }
+    #logs-view-section .logs-table-head,
+    #logs-view-section .logs-row-main {
+      display: grid;
+      grid-template-columns: 130px 200px 150px 1fr 28px;
+      gap: 10px;
+      align-items: center;
+      padding: 8px 12px;
+    }
+    #logs-view-section .logs-table-head {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      background: var(--card-hover);
+    }
+    #logs-view-section .logs-row {
+      border-bottom: 1px solid var(--border);
+    }
+    #logs-view-section .logs-row:last-child {
+      border-bottom: none;
+    }
+    #logs-view-section .logs-row-main {
+      cursor: pointer;
+      transition: background 0.1s ease;
+    }
+    #logs-view-section .logs-row-main:hover {
+      background: var(--card-hover);
+    }
+    #logs-view-section .logs-time {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    #logs-view-section .logs-user-chip {
+      display: inline-block;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 0.75rem;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: rgba(var(--accent-2-rgb), 0.1);
+      border: 1px solid rgba(var(--accent-2-rgb), 0.3);
+      color: var(--accent-2);
+    }
+    #logs-view-section .logs-action-badge {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 1px solid;
+      white-space: nowrap;
+    }
+    #logs-view-section .logs-action-task {
+      color: var(--accent);
+      border-color: rgba(var(--accent-rgb), 0.4);
+      background: rgba(var(--accent-rgb), 0.08);
+    }
+    #logs-view-section .logs-action-brief {
+      color: var(--accent-2);
+      border-color: rgba(var(--accent-2-rgb), 0.4);
+      background: rgba(var(--accent-2-rgb), 0.08);
+    }
+    #logs-view-section .logs-action-lesson {
+      color: #a371f7;
+      border-color: rgba(163, 113, 247, 0.4);
+      background: rgba(163, 113, 247, 0.08);
+    }
+    #logs-view-section .logs-action-gate {
+      color: #ffb224;
+      border-color: rgba(255, 178, 36, 0.4);
+      background: rgba(255, 178, 36, 0.08);
+    }
+    #logs-view-section .logs-action-node {
+      color: #58a6ff;
+      border-color: rgba(88, 166, 255, 0.4);
+      background: rgba(88, 166, 255, 0.08);
+    }
+    #logs-view-section .logs-action-alerts {
+      color: #db6d28;
+      border-color: rgba(219, 109, 40, 0.4);
+      background: rgba(219, 109, 40, 0.08);
+    }
+    #logs-view-section .logs-action-memory {
+      color: #f778ba;
+      border-color: rgba(247, 120, 186, 0.4);
+      background: rgba(247, 120, 186, 0.08);
+    }
+    #logs-view-section .logs-target {
+      font-size: 0.82rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #logs-view-section .logs-target-empty {
+      color: var(--text-muted);
+    }
+    #logs-view-section .logs-caret {
+      color: var(--text-muted);
+      font-size: 0.7rem;
+      text-align: center;
+      transition: transform 0.15s ease;
+    }
+    #logs-view-section .logs-row.expanded .logs-caret {
+      transform: rotate(90deg);
+      color: var(--accent);
+    }
+    #logs-view-section .logs-detail {
+      display: none;
+      padding: 0 12px 10px 152px;
+    }
+    #logs-view-section .logs-row.expanded .logs-detail {
+      display: block;
+    }
+    #logs-view-section .logs-detail pre {
+      margin: 0;
+      padding: 10px;
+      font-size: 0.75rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--text-muted);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    @media (max-width: 900px) {
+      #logs-view-section .logs-table-head {
+        display: none;
+      }
+      #logs-view-section .logs-row-main {
+        grid-template-columns: 1fr 1fr;
+      }
+      #logs-view-section .logs-detail {
+        padding: 0 12px 10px 12px;
+      }
+    }
+  </style>
   <section class="view-panel">
     <div class="view-header">
       <div class="view-title">
@@ -10,6 +215,86 @@
         Immutable trail of every action taken by the fleet and its operators
       </div>
     </div>
+
+    <div class="logs-filter-bar" id="logs-filter-bar">
+      <div class="logs-filter-field">
+        <label for="logs-filter-user">User</label>
+        <input type="text" id="logs-filter-user" placeholder="user@tailnet" autocomplete="off" />
+      </div>
+      <div class="logs-filter-field">
+        <label for="logs-filter-action">Action</label>
+        <select id="logs-filter-action">
+          <option value="">All actions</option>
+          <optgroup label="Tasks">
+            <option value="task.create">task.create</option>
+            <option value="task.move">task.move</option>
+            <option value="task.update">task.update</option>
+            <option value="task.delete">task.delete</option>
+            <option value="task.comment">task.comment</option>
+          </optgroup>
+          <optgroup label="Briefs">
+            <option value="brief.write">brief.write</option>
+            <option value="brief.delete">brief.delete</option>
+          </optgroup>
+          <optgroup label="Lessons">
+            <option value="lesson.add">lesson.add</option>
+            <option value="lesson.approve">lesson.approve</option>
+            <option value="lesson.reject">lesson.reject</option>
+          </optgroup>
+          <optgroup label="Gates">
+            <option value="gate.toggle">gate.toggle</option>
+          </optgroup>
+          <optgroup label="Nodes">
+            <option value="node.register">node.register</option>
+            <option value="node.unregister">node.unregister</option>
+          </optgroup>
+          <optgroup label="Alerts">
+            <option value="alerts.config">alerts.config</option>
+          </optgroup>
+          <optgroup label="Memory">
+            <option value="memory.write">memory.write</option>
+          </optgroup>
+        </select>
+      </div>
+      <div class="logs-filter-field">
+        <label for="logs-filter-since">Since</label>
+        <input type="date" id="logs-filter-since" />
+      </div>
+      <div class="logs-filter-field">
+        <label for="logs-filter-until">Until</label>
+        <input type="date" id="logs-filter-until" />
+      </div>
+      <div class="logs-filter-field">
+        <label for="logs-filter-limit">Limit</label>
+        <select id="logs-filter-limit">
+          <option value="50">50</option>
+          <option value="200" selected>200</option>
+          <option value="500">500</option>
+          <option value="1000">1000</option>
+        </select>
+      </div>
+      <div class="logs-filter-actions">
+        <button class="btn-secondary" id="logs-export-btn" type="button">Export view</button>
+        <button class="btn-primary" id="logs-refresh-btn" type="button">Refresh</button>
+      </div>
+    </div>
+
+    <div class="logs-meta-row">
+      <span id="logs-count-line">0 entries shown</span>
+      <span class="logs-error" id="logs-error" hidden></span>
+    </div>
+
+    <div class="logs-table" id="logs-table" hidden>
+      <div class="logs-table-head">
+        <span>Time</span>
+        <span>User</span>
+        <span>Action</span>
+        <span>Target</span>
+        <span></span>
+      </div>
+      <div id="logs-rows"></div>
+    </div>
+
     <div class="empty-state" id="logs-empty-state">
       <div class="empty-state-icon">📜</div>
       <div class="empty-state-title" data-i18n="views.logs.emptyTitle">No audit entries yet</div>
@@ -17,7 +302,11 @@
         Every command, mutation, and agent action will be recorded here as soon as the fleet starts
         acting.
       </p>
-      <button class="btn-primary empty-state-cta" data-i18n="views.logs.cta">
+      <button
+        class="btn-primary empty-state-cta"
+        id="logs-empty-refresh"
+        data-i18n="views.logs.cta"
+      >
         Refresh the log →
       </button>
     </div>

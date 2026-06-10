@@ -1,4 +1,246 @@
 <!-- Fleet Chat View Partial -->
+<style>
+  /* Fleet Chat panel — scoped under #fleet-chat-view-section */
+  #fleet-chat-view-section .fc-alerts {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    margin: 0 16px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    overflow-x: auto;
+    white-space: nowrap;
+    scrollbar-width: thin;
+  }
+  #fleet-chat-view-section .fc-alerts-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  #fleet-chat-view-section .fc-alert {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  #fleet-chat-view-section .fc-alert-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  #fleet-chat-view-section .fc-alert.fc-sev-critical {
+    border-color: rgba(248, 81, 73, 0.5);
+    color: var(--red);
+  }
+  #fleet-chat-view-section .fc-alert.fc-sev-critical .fc-alert-dot {
+    background: var(--red);
+  }
+  #fleet-chat-view-section .fc-alert.fc-sev-warn {
+    border-color: rgba(255, 178, 36, 0.5);
+    color: var(--yellow);
+  }
+  #fleet-chat-view-section .fc-alert.fc-sev-warn .fc-alert-dot {
+    background: var(--yellow);
+  }
+  #fleet-chat-view-section .fc-alert.fc-sev-info {
+    border-color: rgba(var(--accent-2-rgb), 0.5);
+    color: var(--accent-2);
+  }
+  #fleet-chat-view-section .fc-alert.fc-sev-info .fc-alert-dot {
+    background: var(--accent-2);
+  }
+  #fleet-chat-view-section .fc-alert-msg {
+    color: var(--text-muted);
+  }
+  #fleet-chat-view-section .fc-alert-time {
+    color: var(--text-muted);
+    opacity: 0.7;
+  }
+
+  /* Filter bar */
+  #fleet-chat-view-section .fc-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0 16px 10px;
+  }
+  #fleet-chat-view-section .fc-filters input,
+  #fleet-chat-view-section .fc-filters select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 12px;
+    padding: 6px 10px;
+    outline: none;
+    min-width: 0;
+  }
+  #fleet-chat-view-section .fc-filters input:focus,
+  #fleet-chat-view-section .fc-filters select:focus {
+    border-color: var(--accent-2);
+  }
+  #fleet-chat-view-section .fc-filters input::placeholder {
+    color: var(--text-muted);
+  }
+  #fleet-chat-view-section .fc-filter-sender,
+  #fleet-chat-view-section .fc-filter-receiver {
+    width: 130px;
+  }
+  #fleet-chat-view-section .fc-filter-text {
+    flex: 1;
+    min-width: 160px;
+  }
+  #fleet-chat-view-section .fc-live-badge {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  #fleet-chat-view-section .fc-live-badge.fc-live-on {
+    border-color: rgba(var(--accent-rgb), 0.5);
+    color: var(--accent);
+  }
+
+  /* Console */
+  #fleet-chat-view-section .fc-console-wrap {
+    position: relative;
+    margin: 0 16px 16px;
+  }
+  #fleet-chat-view-section .fc-console {
+    height: 480px;
+    overflow-y: auto;
+    background: #07080c;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family:
+      "SF Mono", SFMono-Regular, ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 12px;
+    line-height: 1.55;
+    scrollbar-width: thin;
+  }
+  #fleet-chat-view-section .fc-entry {
+    padding: 2px 0;
+    word-break: break-word;
+    white-space: pre-wrap;
+  }
+  #fleet-chat-view-section .fc-ts {
+    color: var(--text-muted);
+    opacity: 0.8;
+    margin-right: 8px;
+  }
+  #fleet-chat-view-section .fc-sender {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  #fleet-chat-view-section .fc-arrow {
+    color: var(--text-muted);
+    margin: 0 4px;
+  }
+  #fleet-chat-view-section .fc-receiver {
+    color: var(--accent-2);
+    font-weight: 600;
+  }
+  #fleet-chat-view-section .fc-payload {
+    color: var(--text);
+    margin-left: 8px;
+  }
+  #fleet-chat-view-section .fc-expand {
+    background: none;
+    border: none;
+    color: var(--accent-2);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    padding: 0 0 0 6px;
+    text-decoration: underline;
+  }
+  #fleet-chat-view-section .fc-expand:hover {
+    color: var(--accent);
+  }
+  #fleet-chat-view-section .fc-tools {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+  #fleet-chat-view-section .fc-tool-chip {
+    font-size: 10px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid rgba(var(--accent-2-rgb), 0.45);
+    color: var(--accent-2);
+    background: rgba(var(--accent-2-rgb), 0.08);
+    white-space: nowrap;
+  }
+  #fleet-chat-view-section .fc-console-note {
+    color: var(--text-muted);
+    font-style: italic;
+    padding: 4px 0;
+  }
+
+  /* Jump-to-live pill */
+  #fleet-chat-view-section .fc-jump {
+    position: absolute;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--accent);
+    color: var(--on-accent);
+    border: none;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 5px 14px;
+    cursor: pointer;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  }
+  #fleet-chat-view-section .fc-jump:hover {
+    background: var(--accent-2);
+  }
+
+  /* Status / error */
+  #fleet-chat-view-section .fc-status {
+    margin: 0 16px 12px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  #fleet-chat-view-section .fc-status.fc-status-error {
+    color: var(--red);
+  }
+  #fleet-chat-view-section .fc-retry {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 12px;
+    padding: 3px 10px;
+    margin-left: 8px;
+    cursor: pointer;
+  }
+  #fleet-chat-view-section .fc-retry:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+</style>
+
 <div class="section" id="fleet-chat-view-section">
   <section class="view-panel">
     <div class="view-header">
@@ -10,7 +252,59 @@
         Broadcast channel between you and every agent in the fleet
       </div>
     </div>
-    <div class="empty-state" id="fleet-chat-empty-state">
+
+    <!-- Alerts ribbon (populated by fleet-chat.js) -->
+    <div class="fc-alerts" id="fc-alerts" hidden>
+      <span class="fc-alerts-label">Alerts</span>
+      <span id="fc-alerts-items"></span>
+    </div>
+
+    <!-- Filter bar -->
+    <div class="fc-filters" id="fc-filters">
+      <input
+        type="text"
+        class="fc-filter-sender"
+        id="fc-filter-sender"
+        placeholder="Sender"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <input
+        type="text"
+        class="fc-filter-receiver"
+        id="fc-filter-receiver"
+        placeholder="Receiver"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <input
+        type="text"
+        class="fc-filter-text"
+        id="fc-filter-text"
+        placeholder="Search message text…"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <select id="fc-limit" title="Max messages to load">
+        <option value="25">25</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+        <option value="200">200</option>
+      </select>
+      <span class="fc-live-badge" id="fc-live-badge">LIVE</span>
+    </div>
+
+    <!-- Console stream -->
+    <div class="fc-console-wrap" id="fc-console-wrap" hidden>
+      <div class="fc-console" id="fc-console" role="log" aria-live="polite"></div>
+      <button class="fc-jump" id="fc-jump" type="button" hidden>↓ new</button>
+    </div>
+
+    <!-- Loading / error status line -->
+    <div class="fc-status" id="fc-status" hidden></div>
+
+    <!-- Empty state (zero messages, no filters) -->
+    <div class="empty-state" id="fleet-chat-empty-state" hidden>
       <div class="empty-state-icon">💬</div>
       <div class="empty-state-title" data-i18n="views.fleetChat.emptyTitle">
         No fleet messages yet
@@ -18,9 +312,6 @@
       <p class="empty-state-text" data-i18n="views.fleetChat.emptyText">
         When agents report in or you broadcast an order, the conversation will appear here.
       </p>
-      <button class="btn-primary empty-state-cta" data-i18n="views.fleetChat.cta">
-        Send your first broadcast →
-      </button>
     </div>
   </section>
 </div>
