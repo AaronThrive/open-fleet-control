@@ -43,6 +43,21 @@ function isHostnameHidden() {
   return typeof window.isHostnameHidden === "function" ? window.isHostnameHidden() : false;
 }
 
+function formatAge(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  if (ms < 5000) return "just now";
+  if (ms < 60000) return `${Math.round(ms / 1000)}s ago`;
+  if (ms < 3600000) return `${Math.round(ms / 60000)}m ago`;
+  return `${Math.round(ms / 3600000)}h ago`;
+}
+
+function renderCollectedAge(els, vitals) {
+  if (!els.collectedAge) return;
+  const collectedAt = vitals?.collectedAt;
+  const age = collectedAt ? Date.now() - collectedAt : NaN;
+  els.collectedAge.textContent = Number.isFinite(age) ? `· collected ${formatAge(age)}` : "";
+}
+
 /* ------------------------------------------------------------------ */
 /* Rendering                                                           */
 /* ------------------------------------------------------------------ */
@@ -63,6 +78,7 @@ function renderDepHint(node, affects) {
 function render(els, vitals) {
   if (!vitals) return;
 
+  renderCollectedAge(els, vitals);
   setText(els, "hostname", vitals.hostname || "-");
   if (els.hostname) {
     // Respect the dashboard-wide hostname privacy setting
@@ -192,10 +208,10 @@ function render(els, vitals) {
 /* Data loading                                                        */
 /* ------------------------------------------------------------------ */
 
-async function load(els) {
+async function load(els, { refresh = false } = {}) {
   const seq = ++requestSeq;
   try {
-    const response = await fetch("/api/vitals");
+    const response = await fetch(refresh ? "/api/vitals?refresh=1" : "/api/vitals");
     const payload = await response.json();
     if (seq !== requestSeq || !els.root.isConnected) return;
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -271,10 +287,23 @@ export function init(container) {
     tempValue: container.querySelector("#vv-temp-value"),
     tempStatus: container.querySelector("#vv-temp-status"),
     tempHint: container.querySelector("#vv-temp-hint"),
+    collectedAge: container.querySelector("#vv-collected-age"),
+    refreshBtn: container.querySelector("#vv-refresh-btn"),
   };
   if (!els.root || !els.error || !els.hostname) {
     console.error("[Vitals] Partial markup is missing expected elements; aborting init.");
     return;
+  }
+
+  if (els.refreshBtn) {
+    els.refreshBtn.addEventListener("click", async () => {
+      els.refreshBtn.disabled = true;
+      try {
+        await load(els, { refresh: true });
+      } finally {
+        if (els.refreshBtn.isConnected) els.refreshBtn.disabled = false;
+      }
+    });
   }
 
   stateListener = (event) => {

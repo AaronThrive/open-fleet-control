@@ -11,6 +11,10 @@
  *         {success, applied, restartRequired: ["mesh.intervalMs", ...]}
  *   POST  /api/fleet/settings/test-alert      — fires a test alert through
  *         the saved sink config, returns {success, result: {dispatched, delivered}}
+ *   GET   /api/privacy                        — privacy settings (src/privacy.js):
+ *         {hiddenTopics, hiddenSessions, hiddenCrons, hideHostname}
+ *   POST  /api/privacy                        — merge-update privacy settings,
+ *         returns {success, settings}
  *
  * Saves are per-section and optimistic-with-server-truth: the PATCH response's
  * `applied` object re-populates the form, so the UI always converges on what
@@ -33,6 +37,7 @@ const MIN = 60000;
 
 let refs = null; // DOM references for the active visit
 let restartPaths = new Set(); // accumulated restartRequired paths (until restart)
+let privacySettings = null; // last privacy settings fetched from the server
 
 // --- Entry point ------------------------------------------------------------
 
@@ -82,25 +87,53 @@ export function init(containerEl) {
     gateDefault: root.querySelector("#set-gate-default"),
     gateSave: root.querySelector("#set-gate-save"),
     gateError: root.querySelector("#set-gate-error"),
+    // Privacy
+    privHideHostname: root.querySelector("#set-priv-hide-hostname"),
+    privTopics: root.querySelector("#set-priv-topics"),
+    privTopicsEmpty: root.querySelector("#set-priv-topics-empty"),
+    privSessions: root.querySelector("#set-priv-sessions"),
+    privSessionsEmpty: root.querySelector("#set-priv-sessions-empty"),
+    privCrons: root.querySelector("#set-priv-crons"),
+    privCronsEmpty: root.querySelector("#set-priv-crons-empty"),
+    privacySave: root.querySelector("#set-privacy-save"),
+    privacyError: root.querySelector("#set-privacy-error"),
   };
 
   buildRuleToggles();
   buildWebhookEventToggles();
+  setupCollapsibles(root);
 
   refs.alertsSave?.addEventListener("click", saveAlerts);
   refs.intervalsSave?.addEventListener("click", saveIntervals);
   refs.gateSave?.addEventListener("click", saveGate);
   refs.ntfyTest?.addEventListener("click", sendTestAlert);
   refs.whAdd?.addEventListener("click", addWebhook);
+  refs.privacySave?.addEventListener("click", savePrivacy);
 
   refs.alertsSave.textContent = t("views.settings.saveAlerts", {}, "Save alerts");
   refs.intervalsSave.textContent = t("views.settings.saveIntervals", {}, "Save intervals");
   refs.gateSave.textContent = t("views.settings.saveGate", {}, "Save gate");
   refs.ntfyTest.textContent = t("views.settings.ntfyTest", {}, "Send test alert");
   refs.whAdd.textContent = t("views.settings.webhookAdd", {}, "Add webhook");
+  if (refs.privacySave) {
+    refs.privacySave.textContent = t("views.settings.savePrivacy", {}, "Save privacy");
+  }
 
   renderRestartBanner();
   refresh();
+  refreshPrivacy();
+}
+
+/** Wire collapsible section headers (chevron + title toggles the card body). */
+function setupCollapsibles(root) {
+  for (const toggle of root.querySelectorAll("[data-collapse-toggle]")) {
+    toggle.addEventListener("click", () => {
+      const card = toggle.closest(".set-card");
+      if (!card) return;
+      const collapsed = card.classList.toggle("collapsed");
+      toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    });
+  }
 }
 
 function teardown() {
@@ -343,6 +376,116 @@ function saveGate() {
   patchSettings(
     { validationGate: { default: refs.gateDefault.checked } },
     { button: refs.gateSave, errorEl: refs.gateError },
+  );
+}
+
+// --- Privacy (GET/POST /api/privacy, src/privacy.js schema) -------------------
+
+const PRIVACY_LISTS = [
+  { key: "hiddenTopics", listRef: "privTopics", emptyRef: "privTopicsEmpty" },
+  { key: "hiddenSessions", listRef: "privSessions", emptyRef: "privSessionsEmpty" },
+  { key: "hiddenCrons", listRef: "privCrons", emptyRef: "privCronsEmpty" },
+];
+
+async function refreshPrivacy() {
+  if (!refs || !refs.privHideHostname) return;
+  try {
+    const settings = await fetchJson("/api/privacy");
+    if (!refs) return;
+    privacySettings = settings;
+    populatePrivacy(settings);
+  } catch (err) {
+    if (!refs || !refs.privacyError) return;
+    console.error("[Settings] Failed to load privacy settings:", err);
+    refs.privacyError.hidden = false;
+    refs.privacyError.textContent = t(
+      "views.settings.privacyLoadError",
+      { message: err.message },
+      "Failed to load privacy settings: {message}",
+    );
+  }
+}
+
+function populatePrivacy(settings) {
+  refs.privHideHostname.checked = settings.hideHostname === true;
+  for (const { key, listRef, emptyRef } of PRIVACY_LISTS) {
+    const items = Array.isArray(settings[key]) ? settings[key] : [];
+    renderPrivacyList(key, refs[listRef], refs[emptyRef], items);
+  }
+}
+
+function renderPrivacyList(key, listEl, emptyEl, items) {
+  if (!listEl || !emptyEl) return;
+  listEl.replaceChildren();
+  emptyEl.hidden = items.length > 0;
+
+  for (const item of items) {
+    const row = el("div", "set-priv-row");
+    const value = el("span", "set-priv-value", String(item));
+    value.title = String(item);
+    row.appendChild(value);
+
+    const removeBtn = el("button", "set-action-btn danger", t("actions.remove", {}, "Remove"));
+    removeBtn.type = "button";
+    removeBtn.addEventListener("click", () => removePrivacyItem(key, item, removeBtn));
+    row.appendChild(removeBtn);
+
+    listEl.appendChild(row);
+  }
+}
+
+/** POST a privacy update; the server merges and returns the persisted settings. */
+async function postPrivacy(update, { button, successMessage }) {
+  if (button) button.disabled = true;
+  if (refs.privacyError) refs.privacyError.hidden = true;
+  try {
+    const payload = await fetchJson("/api/privacy", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(update),
+    });
+    if (!refs) return null;
+    if (payload && payload.settings) {
+      privacySettings = payload.settings;
+      populatePrivacy(payload.settings);
+    }
+    showToast(successMessage, "success");
+    return payload;
+  } catch (err) {
+    if (refs && refs.privacyError) {
+      refs.privacyError.hidden = false;
+      refs.privacyError.textContent = t(
+        "views.settings.saveFailed",
+        { message: err.message },
+        "Save failed: {message}",
+      );
+    }
+    return null;
+  } finally {
+    if (refs && button) button.disabled = false;
+  }
+}
+
+function savePrivacy() {
+  postPrivacy(
+    { hideHostname: refs.privHideHostname.checked },
+    {
+      button: refs.privacySave,
+      successMessage: t("views.settings.privacySaved", {}, "Privacy settings saved."),
+    },
+  );
+}
+
+/** Remove one hidden item (unhide) — applies immediately, like webhooks. */
+async function removePrivacyItem(key, item, button) {
+  const current =
+    privacySettings && Array.isArray(privacySettings[key]) ? privacySettings[key] : [];
+  await postPrivacy(
+    { [key]: current.filter((entry) => entry !== item) },
+    {
+      button,
+      successMessage: t("views.settings.privacyUnhidden", {}, "Item is visible again."),
+    },
   );
 }
 

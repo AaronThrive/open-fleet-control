@@ -1,0 +1,358 @@
+<!-- Alerts View Partial -->
+<div class="section" id="alerts-view-section">
+  <style>
+    /* display:flex would defeat the UA [hidden] rule without this override */
+    #alerts-view-section .alerts-banner[hidden] {
+      display: none;
+    }
+    #alerts-view-section .alerts-banner {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      margin-bottom: 12px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+    }
+    #alerts-view-section .alerts-banner-rules {
+      background: rgba(255, 178, 36, 0.08);
+      border: 1px solid rgba(255, 178, 36, 0.4);
+      color: #ffb224;
+    }
+    #alerts-view-section .alerts-banner-mutes {
+      background: rgba(88, 166, 255, 0.06);
+      border: 1px solid rgba(88, 166, 255, 0.35);
+      color: #58a6ff;
+    }
+    #alerts-view-section .alerts-banner code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.8rem;
+    }
+    #alerts-view-section .alerts-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--card-bg);
+      color: var(--text);
+      font-size: 0.78rem;
+    }
+    #alerts-view-section .alerts-chip button {
+      background: none;
+      border: none;
+      color: var(--accent-2);
+      cursor: pointer;
+      font-size: 0.75rem;
+      padding: 0;
+    }
+    #alerts-view-section .alerts-filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: flex-end;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    #alerts-view-section .alerts-filter-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    #alerts-view-section .alerts-filter-field label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    #alerts-view-section .alerts-filter-field input,
+    #alerts-view-section .alerts-filter-field select {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 0.85rem;
+      font-family: inherit;
+      min-width: 130px;
+      color-scheme: dark;
+    }
+    #alerts-view-section .alerts-filter-field input:focus,
+    #alerts-view-section .alerts-filter-field select:focus {
+      outline: none;
+      border-color: var(--accent-2);
+    }
+    #alerts-view-section .alerts-filter-actions {
+      display: flex;
+      gap: 8px;
+      margin-left: auto;
+    }
+    #alerts-view-section .alerts-meta-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+    #alerts-view-section .alerts-live-badge {
+      font-size: 0.68rem;
+      letter-spacing: 0.08em;
+      padding: 2px 8px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+    }
+    #alerts-view-section .alerts-live-badge.alerts-live-on {
+      color: #3fb950;
+      border-color: rgba(63, 185, 80, 0.5);
+      background: rgba(63, 185, 80, 0.08);
+    }
+    #alerts-view-section .alerts-error {
+      color: var(--red);
+    }
+    #alerts-view-section .alerts-table {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--card-bg);
+    }
+    #alerts-view-section .alerts-table-head,
+    #alerts-view-section .alerts-row {
+      display: grid;
+      grid-template-columns: 110px 92px 150px 170px 1fr 150px;
+      gap: 10px;
+      align-items: center;
+      padding: 8px 12px;
+    }
+    #alerts-view-section .alerts-table-head {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      background: var(--card-hover);
+    }
+    #alerts-view-section .alerts-row {
+      border-bottom: 1px solid var(--border);
+      transition: background 0.1s ease;
+    }
+    #alerts-view-section .alerts-row:last-child {
+      border-bottom: none;
+    }
+    #alerts-view-section .alerts-row:hover {
+      background: var(--card-hover);
+    }
+    #alerts-view-section .alerts-time {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    #alerts-view-section .alerts-severity {
+      display: inline-block;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 1px solid;
+      text-align: center;
+      white-space: nowrap;
+    }
+    #alerts-view-section .alerts-severity-critical {
+      color: #f85149;
+      border-color: rgba(248, 81, 73, 0.45);
+      background: rgba(248, 81, 73, 0.08);
+    }
+    #alerts-view-section .alerts-severity-warn {
+      color: #ffb224;
+      border-color: rgba(255, 178, 36, 0.45);
+      background: rgba(255, 178, 36, 0.08);
+    }
+    #alerts-view-section .alerts-severity-info {
+      color: #58a6ff;
+      border-color: rgba(88, 166, 255, 0.45);
+      background: rgba(88, 166, 255, 0.08);
+    }
+    #alerts-view-section .alerts-type {
+      font-size: 0.75rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #alerts-view-section .alerts-target {
+      font-size: 0.8rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #alerts-view-section .alerts-target-empty {
+      color: var(--text-muted);
+    }
+    #alerts-view-section .alerts-message {
+      font-size: 0.82rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #alerts-view-section .alerts-row-actions {
+      display: flex;
+      gap: 6px;
+      justify-content: flex-end;
+    }
+    #alerts-view-section .alerts-mini-btn {
+      background: var(--bg);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 0.72rem;
+      font-family: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #alerts-view-section .alerts-mini-btn:hover {
+      color: var(--accent-2);
+      border-color: var(--accent-2);
+    }
+    @media (max-width: 1000px) {
+      #alerts-view-section .alerts-table-head {
+        display: none;
+      }
+      #alerts-view-section .alerts-row {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+  </style>
+  <section class="view-panel">
+    <div class="view-header">
+      <div class="view-title">
+        <span class="view-icon">🔔</span>
+        <span data-i18n="views.alerts.title">Alerts</span>
+      </div>
+      <div class="view-subtitle" data-i18n="views.alerts.subtitle">
+        Fired alert history with live updates, filters, and mute controls
+      </div>
+    </div>
+
+    <div class="alerts-banner alerts-banner-rules" id="alerts-muted-rules" hidden>
+      <span data-i18n="views.alerts.mutedRulesBanner">Disabled alert rules:</span>
+      <code id="alerts-muted-rules-list"></code>
+      <span data-i18n="views.alerts.mutedRulesHint">
+        These node alerts will not fire until re-enabled.
+      </span>
+      <button
+        class="alerts-mini-btn"
+        id="alerts-reenable-btn"
+        type="button"
+        data-i18n="views.alerts.reEnable"
+      >
+        Re-enable
+      </button>
+    </div>
+
+    <div class="alerts-banner alerts-banner-mutes" id="alerts-active-mutes" hidden>
+      <span data-i18n="views.alerts.activeMutesBanner">Active mutes:</span>
+      <span id="alerts-mute-chips"></span>
+    </div>
+
+    <div class="alerts-filter-bar" id="alerts-filter-bar">
+      <div class="alerts-filter-field">
+        <label for="alerts-filter-severity" data-i18n="views.alerts.filterSeverity">Severity</label>
+        <select id="alerts-filter-severity">
+          <option value="" data-i18n="views.alerts.allSeverities">All severities</option>
+          <option value="critical">critical</option>
+          <option value="warn">warn</option>
+          <option value="info">info</option>
+        </select>
+      </div>
+      <div class="alerts-filter-field">
+        <label for="alerts-filter-type" data-i18n="views.alerts.filterType">Type</label>
+        <select id="alerts-filter-type">
+          <option value="" data-i18n="views.alerts.allTypes">All types</option>
+          <option value="nodeOffline">nodeOffline</option>
+          <option value="nodeUnreachable">nodeUnreachable</option>
+          <option value="nodeRecovered">nodeRecovered</option>
+          <option value="taskFailed">taskFailed</option>
+          <option value="taskStale">taskStale</option>
+          <option value="lessonPending">lessonPending</option>
+          <option value="testAlert">testAlert</option>
+        </select>
+      </div>
+      <div class="alerts-filter-field">
+        <label for="alerts-filter-node" data-i18n="views.alerts.filterNode">Node</label>
+        <input type="text" id="alerts-filter-node" placeholder="hostname" autocomplete="off" />
+      </div>
+      <div class="alerts-filter-field">
+        <label for="alerts-filter-source" data-i18n="views.alerts.filterSource">Source</label>
+        <select id="alerts-filter-source">
+          <option value="history" selected data-i18n="views.alerts.sourceHistory">
+            History (disk)
+          </option>
+          <option value="memory" data-i18n="views.alerts.sourceRecent">Recent (memory)</option>
+        </select>
+      </div>
+      <div class="alerts-filter-field">
+        <label for="alerts-filter-limit" data-i18n="views.alerts.filterLimit">Limit</label>
+        <select id="alerts-filter-limit">
+          <option value="50">50</option>
+          <option value="100" selected>100</option>
+          <option value="200">200</option>
+          <option value="500">500</option>
+        </select>
+      </div>
+      <div class="alerts-filter-actions">
+        <button
+          class="btn-primary"
+          id="alerts-refresh-btn"
+          type="button"
+          data-i18n="views.alerts.refreshBtn"
+        >
+          Refresh
+        </button>
+      </div>
+    </div>
+
+    <div class="alerts-meta-row">
+      <!-- count line is owned by alerts.js (views.alerts.countOne/countMany) -->
+      <span id="alerts-count-line">0 alerts shown</span>
+      <span class="alerts-live-badge" id="alerts-live-badge">POLL</span>
+      <span class="alerts-error" id="alerts-error" hidden></span>
+    </div>
+
+    <div class="alerts-table" id="alerts-table" hidden>
+      <div class="alerts-table-head">
+        <span data-i18n="views.alerts.colTime">Time</span>
+        <span data-i18n="views.alerts.colSeverity">Severity</span>
+        <span data-i18n="views.alerts.colType">Type</span>
+        <span data-i18n="views.alerts.colTarget">Node / Task</span>
+        <span data-i18n="views.alerts.colMessage">Message</span>
+        <span></span>
+      </div>
+      <div id="alerts-rows"></div>
+    </div>
+
+    <div class="empty-state" id="alerts-empty-state">
+      <div class="empty-state-icon">🔔</div>
+      <div class="empty-state-title" data-i18n="views.alerts.emptyTitle">No alerts yet</div>
+      <p class="empty-state-text" data-i18n="views.alerts.emptyText">
+        Fired alerts will appear here — node outages, recoveries, failed tasks, stale work, and
+        pending lessons.
+      </p>
+      <button
+        class="btn-primary empty-state-cta"
+        id="alerts-empty-refresh"
+        data-i18n="views.alerts.cta"
+      >
+        Refresh alerts →
+      </button>
+    </div>
+  </section>
+</div>

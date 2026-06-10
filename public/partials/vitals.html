@@ -16,6 +16,28 @@
       color: var(--text-muted);
       line-height: 1.4;
     }
+    #vitals-view-section .vitals-refresh-btn {
+      margin-left: 10px;
+      padding: 2px 10px;
+      background: rgba(136, 192, 208, 0.1);
+      border: 1px solid rgba(136, 192, 208, 0.3);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.75rem;
+      cursor: pointer;
+    }
+    #vitals-view-section .vitals-refresh-btn:hover {
+      background: rgba(136, 192, 208, 0.2);
+    }
+    #vitals-view-section .vitals-refresh-btn[disabled] {
+      opacity: 0.5;
+      cursor: wait;
+    }
+    #vitals-view-section .vitals-collected-age {
+      margin-left: 8px;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
   </style>
   <section class="view-panel">
     <div class="view-header">
@@ -36,7 +58,22 @@
           🖥️ <span data-i18n="views.vitals.host">Host</span>
           <span class="vitals-hostname" id="vv-hostname">-</span>
         </div>
-        <div class="vitals-uptime">Uptime: <span id="vv-uptime">-</span></div>
+        <div class="vitals-uptime">
+          Uptime: <span id="vv-uptime">-</span>
+          <span
+            class="vitals-collected-age"
+            id="vv-collected-age"
+            title="Age of vitals sample"
+          ></span>
+          <button
+            type="button"
+            class="vitals-refresh-btn"
+            id="vv-refresh-btn"
+            title="Force a fresh vitals collection"
+          >
+            ↻ <span data-i18n="views.vitals.refresh">Refresh</span>
+          </button>
+        </div>
       </div>
       <div class="vitals-grid">
         <!-- CPU -->

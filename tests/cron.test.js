@@ -1,6 +1,14 @@
-const { describe, it } = require("node:test");
+const { describe, it, beforeEach, afterEach } = require("node:test");
 const assert = require("node:assert");
-const { cronToHuman } = require("../src/cron");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const {
+  cronToHuman,
+  getCronJobs,
+  _resetForTesting,
+  _waitForCliRefreshForTesting,
+} = require("../src/cron");
 
 describe("cron module", () => {
   describe("cronToHuman()", () => {
@@ -74,6 +82,174 @@ describe("cron module", () => {
       const expr = "* * * 6 *";
       const result = cronToHuman(expr);
       assert.strictEqual(typeof result, "string");
+    });
+  });
+
+  describe("getCronJobs()", () => {
+    let tmpDir;
+    const NO_HERMES = path.join(os.tmpdir(), "nonexistent-hermes", "jobs.json");
+    const hostname = os.hostname();
+
+    const OPENCLAW_JOB = {
+      id: "job-1",
+      name: "Morning Briefing",
+      enabled: true,
+      agentId: "morning_briefing",
+      schedule: { kind: "cron", expr: "0 6 * * 1-5", tz: "America/Los_Angeles" },
+      state: {
+        nextRunAtMs: Date.now() + 3600000,
+        lastStatus: "ok",
+        lastRunStatus: "ok",
+      },
+    };
+
+    const HERMES_JOB = {
+      id: "h-1",
+      name: "ECC readiness check",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 8 * * *", display: "0 8 * * *" },
+      schedule_display: "0 8 * * *",
+      next_run_at: new Date(Date.now() + 7200000).toISOString(),
+      last_status: "ok",
+      profile: null,
+    };
+
+    function writeOpenClawFixture(jobs) {
+      fs.mkdirSync(path.join(tmpDir, "cron"), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, "cron", "jobs.json"), JSON.stringify({ jobs }));
+    }
+
+    function writeHermesFixture(jobs) {
+      const hermesPath = path.join(tmpDir, "hermes-cron.json");
+      fs.writeFileSync(hermesPath, JSON.stringify({ jobs }));
+      return hermesPath;
+    }
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-test-"));
+      _resetForTesting();
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      _resetForTesting();
+    });
+
+    it("maps file-source jobs with agent, node and source", () => {
+      writeOpenClawFixture([OPENCLAW_JOB]);
+      const jobs = getCronJobs(() => tmpDir, { hermesCronPath: NO_HERMES });
+
+      assert.strictEqual(jobs.length, 1);
+      const job = jobs[0];
+      assert.strictEqual(job.id, "job-1");
+      assert.strictEqual(job.name, "Morning Briefing");
+      assert.strictEqual(job.schedule, "0 6 * * 1-5");
+      assert.strictEqual(job.scheduleHuman, "Weekdays at 6am");
+      assert.strictEqual(job.enabled, true);
+      assert.strictEqual(job.lastStatus, "ok");
+      assert.strictEqual(job.agent, "morning_briefing");
+      assert.strictEqual(job.node, hostname);
+      assert.strictEqual(job.source, "openclaw");
+      assert.notStrictEqual(job.nextRun, "—");
+    });
+
+    it("uses the CLI source when the legacy file is absent (cached, non-blocking)", async () => {
+      let cliCalls = 0;
+      _resetForTesting({
+        cliRunner: async () => {
+          cliCalls += 1;
+          return JSON.stringify({ jobs: [OPENCLAW_JOB] });
+        },
+      });
+
+      // First call: cache cold → returns immediately (empty) and kicks off refresh
+      const first = getCronJobs(() => tmpDir, { hermesCronPath: NO_HERMES });
+      assert.deepStrictEqual(first, []);
+
+      await _waitForCliRefreshForTesting();
+
+      const second = getCronJobs(() => tmpDir, { hermesCronPath: NO_HERMES });
+      assert.strictEqual(second.length, 1);
+      assert.strictEqual(second[0].agent, "morning_briefing");
+      assert.strictEqual(second[0].source, "openclaw");
+      assert.strictEqual(second[0].node, hostname);
+
+      // Within the TTL no additional CLI invocations happen
+      getCronJobs(() => tmpDir, { hermesCronPath: NO_HERMES });
+      assert.strictEqual(cliCalls, 1);
+    });
+
+    it("survives CLI failures and keeps serving (empty) data", async () => {
+      _resetForTesting({
+        cliRunner: async () => {
+          throw new Error("openclaw not found");
+        },
+      });
+
+      const first = getCronJobs(() => tmpDir, { hermesCronPath: NO_HERMES });
+      assert.deepStrictEqual(first, []);
+      await _waitForCliRefreshForTesting();
+      const second = getCronJobs(() => tmpDir, { hermesCronPath: NO_HERMES });
+      assert.deepStrictEqual(second, []);
+    });
+
+    it("merges Hermes jobs as a second source", () => {
+      writeOpenClawFixture([OPENCLAW_JOB]);
+      const hermesPath = writeHermesFixture([HERMES_JOB]);
+
+      const jobs = getCronJobs(() => tmpDir, { hermesCronPath: hermesPath });
+      assert.strictEqual(jobs.length, 2);
+
+      const hermes = jobs.find((j) => j.source === "hermes");
+      assert.ok(hermes, "hermes job should be present");
+      assert.strictEqual(hermes.id, "h-1");
+      assert.strictEqual(hermes.name, "ECC readiness check");
+      assert.strictEqual(hermes.schedule, "0 8 * * *");
+      assert.strictEqual(hermes.scheduleHuman, "Daily at 8am");
+      assert.strictEqual(hermes.enabled, true);
+      assert.strictEqual(hermes.lastStatus, "ok");
+      assert.strictEqual(hermes.node, hostname);
+      assert.notStrictEqual(hermes.nextRun, "—");
+    });
+
+    it("renders only OpenClaw jobs when the Hermes source is absent", () => {
+      writeOpenClawFixture([OPENCLAW_JOB]);
+      const jobs = getCronJobs(() => tmpDir, { hermesCronPath: NO_HERMES });
+      assert.strictEqual(jobs.length, 1);
+      assert.ok(jobs.every((j) => j.source === "openclaw"));
+    });
+
+    it("handles disabled jobs and missing state fields", () => {
+      writeOpenClawFixture([
+        {
+          id: "job-2",
+          name: "Disabled Job",
+          enabled: false,
+          schedule: { kind: "cron", expr: "0 9 * * *" },
+        },
+      ]);
+      const jobs = getCronJobs(() => tmpDir, { hermesCronPath: NO_HERMES });
+      assert.strictEqual(jobs.length, 1);
+      assert.strictEqual(jobs[0].enabled, false);
+      assert.strictEqual(jobs[0].lastStatus, null);
+      assert.strictEqual(jobs[0].agent, null);
+      assert.strictEqual(jobs[0].nextRun, "—");
+    });
+
+    it("returns [] without crashing on a corrupt jobs file", () => {
+      fs.mkdirSync(path.join(tmpDir, "cron"), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, "cron", "jobs.json"), "{not json");
+      const jobs = getCronJobs(() => tmpDir, { hermesCronPath: NO_HERMES });
+      assert.deepStrictEqual(jobs, []);
+    });
+
+    it("maps one-time schedules", () => {
+      writeOpenClawFixture([
+        { id: "job-3", name: "Once", enabled: true, schedule: { kind: "once" } },
+      ]);
+      const jobs = getCronJobs(() => tmpDir, { hermesCronPath: NO_HERMES });
+      assert.strictEqual(jobs[0].schedule, "once");
+      assert.strictEqual(jobs[0].scheduleHuman, "One-time");
     });
   });
 });

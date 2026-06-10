@@ -1,5 +1,23 @@
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
+const { execFile } = require("child_process");
+
+// ---------------------------------------------------------------------------
+// Cron sources (OpenClaw 2026.6.5+):
+//   1. Legacy file  — <openclawDir>/cron/jobs.json (pre-2026.6.5; read sync).
+//   2. CLI          — `openclaw cron list --json`. Storage moved into
+//                     ~/.openclaw/state/openclaw.sqlite (cron_jobs table);
+//                     the CLI is the supported reader. It takes seconds, so a
+//                     background refresh keeps a 60s-TTL cache and the request
+//                     path never blocks.
+//   3. Hermes       — ~/.hermes/cron/jobs.json (best-effort second source).
+// Each job: { id, name, schedule, scheduleHuman, enabled, nextRun,
+//             lastStatus, agent, node, source: 'openclaw'|'hermes' }
+// ---------------------------------------------------------------------------
+
+const CLI_CACHE_TTL_MS = 60000;
+const CLI_TIMEOUT_MS = 30000;
 
 // Convert cron expression to human-readable text
 function cronToHuman(expr) {
@@ -98,62 +116,211 @@ function cronToHuman(expr) {
   return expr; // Return original as fallback
 }
 
-// Get cron jobs - reads directly from file for speed (CLI takes 11s+)
-function getCronJobs(getOpenClawDir) {
+// Format a future timestamp (ms) as a compact relative string
+function formatNextRun(nextRunAtMs) {
+  if (!nextRunAtMs || !Number.isFinite(nextRunAtMs)) return "—";
+  const diffMins = Math.round((nextRunAtMs - Date.now()) / 60000);
+  if (diffMins < 0) return "overdue";
+  if (diffMins < 60) return `${diffMins}m`;
+  if (diffMins < 1440) return `${Math.round(diffMins / 60)}h`;
+  return `${Math.round(diffMins / 1440)}d`;
+}
+
+// Parse an OpenClaw schedule object into { schedule, scheduleHuman }
+function parseOpenClawSchedule(schedule) {
+  if (!schedule) return { schedule: "—", scheduleHuman: null };
+  if (schedule.kind === "cron" && schedule.expr) {
+    return { schedule: schedule.expr, scheduleHuman: cronToHuman(schedule.expr) };
+  }
+  if (schedule.kind === "once" || schedule.kind === "at") {
+    return { schedule: "once", scheduleHuman: "One-time" };
+  }
+  if (schedule.kind === "every" && Number.isFinite(schedule.everyMs)) {
+    const mins = Math.round(schedule.everyMs / 60000);
+    return {
+      schedule: `every ${mins}m`,
+      scheduleHuman: mins >= 60 ? `Every ${Math.round(mins / 60)} hours` : `Every ${mins} minutes`,
+    };
+  }
+  return { schedule: schedule.kind || "—", scheduleHuman: null };
+}
+
+// Map a raw OpenClaw job (identical shape in legacy file and CLI output)
+function mapOpenClawJob(job, node) {
+  const { schedule, scheduleHuman } = parseOpenClawSchedule(job.schedule);
+  const state = job.state || {};
+  return {
+    id: job.id,
+    name: job.name || String(job.id || "").slice(0, 8),
+    schedule,
+    scheduleHuman,
+    enabled: job.enabled !== false,
+    nextRun: formatNextRun(state.nextRunAtMs),
+    lastStatus: state.lastStatus ?? state.lastRunStatus ?? null,
+    agent: job.agentId || null,
+    node,
+    source: "openclaw",
+  };
+}
+
+// Map a Hermes job from ~/.hermes/cron/jobs.json
+function mapHermesJob(job, node) {
+  let schedule = "—";
+  let scheduleHuman = null;
+  if (job.schedule?.kind === "cron" && job.schedule.expr) {
+    schedule = job.schedule.expr;
+    scheduleHuman = cronToHuman(job.schedule.expr);
+  } else if (job.schedule_display) {
+    schedule = String(job.schedule_display);
+    scheduleHuman = cronToHuman(schedule);
+  }
+
+  let nextRunAtMs = null;
+  if (job.next_run_at) {
+    const parsed = Date.parse(job.next_run_at);
+    if (Number.isFinite(parsed)) nextRunAtMs = parsed;
+  }
+
+  return {
+    id: job.id,
+    name: job.name || String(job.id || "").slice(0, 8),
+    schedule,
+    scheduleHuman,
+    enabled: job.enabled !== false,
+    nextRun: formatNextRun(nextRunAtMs),
+    lastStatus: job.last_status ?? null,
+    agent: job.profile || null,
+    node,
+    source: "hermes",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// CLI source — async cached runner. getCronJobs() stays synchronous: it
+// returns whatever is cached and kicks off a background refresh when stale.
+// ---------------------------------------------------------------------------
+
+function defaultCliRunner() {
+  return new Promise((resolve, reject) => {
+    const profile = process.env.OPENCLAW_PROFILE || "";
+    const args = [...(profile ? ["--profile", profile] : []), "cron", "list", "--json"];
+    execFile(
+      "openclaw",
+      args,
+      {
+        encoding: "utf8",
+        timeout: CLI_TIMEOUT_MS,
+        maxBuffer: 16 * 1024 * 1024,
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          USER: process.env.USER,
+          LANG: process.env.LANG,
+          NO_COLOR: "1",
+          TERM: "dumb",
+          OPENCLAW_PROFILE: process.env.OPENCLAW_PROFILE || "",
+          OPENCLAW_HOME: process.env.OPENCLAW_HOME || "",
+        },
+      },
+      (error, stdout) => (error ? reject(error) : resolve(stdout)),
+    );
+  });
+}
+
+let cliRunner = defaultCliRunner;
+let cliCache = { rawJobs: null, fetchedAt: 0, refreshing: false, promise: null };
+
+function refreshCliCache() {
+  if (cliCache.refreshing) return cliCache.promise;
+  const promise = Promise.resolve()
+    .then(() => cliRunner())
+    .then((stdout) => {
+      const parsed = JSON.parse(String(stdout));
+      cliCache = {
+        rawJobs: Array.isArray(parsed.jobs) ? parsed.jobs : [],
+        fetchedAt: Date.now(),
+        refreshing: false,
+        promise: null,
+      };
+    })
+    .catch((e) => {
+      console.error("[Cron] CLI refresh failed:", e.message);
+      // Keep stale data (if any) and back off for a full TTL window
+      cliCache = { ...cliCache, fetchedAt: Date.now(), refreshing: false, promise: null };
+    });
+  cliCache = { ...cliCache, refreshing: true, promise };
+  return promise;
+}
+
+function getOpenClawRawJobs(getOpenClawDir) {
+  // Legacy file source (pre-2026.6.5 installs, fixtures)
+  const cronPath = path.join(getOpenClawDir(), "cron", "jobs.json");
+  if (fs.existsSync(cronPath)) {
+    const data = JSON.parse(fs.readFileSync(cronPath, "utf8"));
+    return Array.isArray(data.jobs) ? data.jobs : [];
+  }
+
+  // CLI source (cached, background-refreshed)
+  if (Date.now() - cliCache.fetchedAt > CLI_CACHE_TTL_MS) {
+    refreshCliCache();
+  }
+  return cliCache.rawJobs || [];
+}
+
+function getHermesRawJobs(hermesCronPath) {
+  const target = hermesCronPath || path.join(os.homedir(), ".hermes", "cron", "jobs.json");
+  if (!fs.existsSync(target)) return [];
+  const data = JSON.parse(fs.readFileSync(target, "utf8"));
+  return Array.isArray(data.jobs) ? data.jobs : [];
+}
+
+/**
+ * Get cron jobs from all sources. Synchronous and non-blocking: the OpenClaw
+ * CLI source is served from a 60s-TTL cache refreshed in the background.
+ *
+ * @param {function} getOpenClawDir - resolves the OpenClaw home directory
+ * @param {object} [opts]
+ * @param {string} [opts.hermesCronPath] - override Hermes jobs.json path (tests)
+ * @returns {Array<object>} jobs
+ */
+function getCronJobs(getOpenClawDir, opts = {}) {
+  const node = os.hostname();
+
+  let openclawJobs = [];
   try {
-    const cronPath = path.join(getOpenClawDir(), "cron", "jobs.json");
-    if (fs.existsSync(cronPath)) {
-      const data = JSON.parse(fs.readFileSync(cronPath, "utf8"));
-      return (data.jobs || []).map((j) => {
-        // Parse schedule
-        let scheduleStr = "—";
-        let scheduleHuman = null;
-        if (j.schedule) {
-          if (j.schedule.kind === "cron" && j.schedule.expr) {
-            scheduleStr = j.schedule.expr;
-            scheduleHuman = cronToHuman(j.schedule.expr);
-          } else if (j.schedule.kind === "once") {
-            scheduleStr = "once";
-            scheduleHuman = "One-time";
-          }
-        }
-
-        // Format next run
-        let nextRunStr = "—";
-        if (j.state?.nextRunAtMs) {
-          const next = new Date(j.state.nextRunAtMs);
-          const now = new Date();
-          const diffMs = next - now;
-          const diffMins = Math.round(diffMs / 60000);
-          if (diffMins < 0) {
-            nextRunStr = "overdue";
-          } else if (diffMins < 60) {
-            nextRunStr = `${diffMins}m`;
-          } else if (diffMins < 1440) {
-            nextRunStr = `${Math.round(diffMins / 60)}h`;
-          } else {
-            nextRunStr = `${Math.round(diffMins / 1440)}d`;
-          }
-        }
-
-        return {
-          id: j.id,
-          name: j.name || j.id.slice(0, 8),
-          schedule: scheduleStr,
-          scheduleHuman: scheduleHuman,
-          nextRun: nextRunStr,
-          enabled: j.enabled !== false,
-          lastStatus: j.state?.lastStatus,
-        };
-      });
-    }
+    openclawJobs = getOpenClawRawJobs(getOpenClawDir).map((j) => mapOpenClawJob(j, node));
   } catch (e) {
     console.error("Failed to get cron:", e.message);
   }
-  return [];
+
+  let hermesJobs = [];
+  try {
+    hermesJobs = getHermesRawJobs(opts.hermesCronPath).map((j) => mapHermesJob(j, node));
+  } catch (e) {
+    console.error("Failed to get Hermes cron:", e.message);
+  }
+
+  return [...openclawJobs, ...hermesJobs];
+}
+
+/**
+ * Reset module state for testing.
+ * @param {object} [options]
+ * @param {function} [options.cliRunner] - replacement async runner returning CLI stdout
+ */
+function _resetForTesting(options = {}) {
+  cliCache = { rawJobs: null, fetchedAt: 0, refreshing: false, promise: null };
+  cliRunner = options.cliRunner || defaultCliRunner;
+}
+
+/** Await any in-flight background CLI refresh (tests only). */
+function _waitForCliRefreshForTesting() {
+  return cliCache.promise || Promise.resolve();
 }
 
 module.exports = {
   cronToHuman,
   getCronJobs,
+  _resetForTesting,
+  _waitForCliRefreshForTesting,
 };

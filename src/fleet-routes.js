@@ -621,9 +621,24 @@ function createFleetRoutes({ fleet, settings = null }) {
     return true;
   }
 
+  /**
+   * GET /api/fleet/alerts?limit&type&node&severity&since[&history=1]
+   * Default: in-memory ring buffer (newest first). history=1 reads the
+   * persistent JSONL history from disk instead (limit capped at 500).
+   */
   function handleAlerts(res, method, segments, query) {
     if (segments.length !== 1 || method !== "GET") return false;
-    json(res, 200, { alerts: fleet.alerts.getRecent(parseIntParam(query, "limit", 50)) });
+    const limit = parseIntParam(query, "limit", 50);
+    const filters = {};
+    if (query.get("type")) filters.type = query.get("type");
+    if (query.get("node")) filters.node = query.get("node");
+    if (query.get("severity")) filters.severity = query.get("severity");
+    if (query.get("since")) filters.since = query.get("since");
+    if (query.get("history") === "1") {
+      json(res, 200, { alerts: fleet.alerts.query({ ...filters, limit }), source: "history" });
+    } else {
+      json(res, 200, { alerts: fleet.alerts.getRecent(limit, filters), source: "memory" });
+    }
     return true;
   }
 

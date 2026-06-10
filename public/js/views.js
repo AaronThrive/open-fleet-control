@@ -21,6 +21,7 @@
     "cortex",
     "evolution",
     "logs",
+    "alerts",
     "sessions",
     "cron",
     "vitals",

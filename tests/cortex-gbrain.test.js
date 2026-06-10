@@ -53,7 +53,12 @@ describe("cortex-gbrain module", () => {
         "projects/alpha\tproject\tTue Jun 09\tProject Alpha\n" +
         "people/bob\tperson\tMon Jun 08\tBob\n";
       assert.deepStrictEqual(parseTsvPages(tsv), [
-        { slug: "projects/alpha", type: "project", updated_at: "Tue Jun 09", title: "Project Alpha" },
+        {
+          slug: "projects/alpha",
+          type: "project",
+          updated_at: "Tue Jun 09",
+          title: "Project Alpha",
+        },
         { slug: "people/bob", type: "person", updated_at: "Mon Jun 08", title: "Bob" },
       ]);
     });
@@ -85,7 +90,8 @@ describe("cortex-gbrain module", () => {
     });
 
     it("returns [] for a bare summary object with zero candidates", () => {
-      const out = '{\n  "links_created": 0,\n  "timeline_entries_created": 0,\n  "pages_processed": 383\n}\n';
+      const out =
+        '{\n  "links_created": 0,\n  "timeline_entries_created": 0,\n  "pages_processed": 383\n}\n';
       assert.deepStrictEqual(parseExtractLinks(out), []);
     });
 
@@ -238,7 +244,8 @@ describe("cortex-gbrain module", () => {
         }
         return {
           error: null,
-          stdout: '{\n  "links_created": 0,\n  "timeline_entries_created": 0,\n  "pages_processed": 1\n}\n',
+          stdout:
+            '{\n  "links_created": 0,\n  "timeline_entries_created": 0,\n  "pages_processed": 1\n}\n',
           stderr: "",
         };
       });

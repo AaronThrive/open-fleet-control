@@ -65,7 +65,7 @@ describe("jobs module", () => {
       _resetForTesting();
     });
 
-    it("returns 500 when jobs API is not available", async () => {
+    it("returns 200 { available: false } when jobs API is not available", async () => {
       // Force API to be unavailable for this test
       _resetForTesting({ forceUnavailable: true });
 
@@ -86,13 +86,37 @@ describe("jobs module", () => {
 
       await handleJobsRequest(mockReq, mockRes, "/api/jobs", query, "GET");
 
-      assert.strictEqual(statusCode, 500);
+      assert.strictEqual(statusCode, 200);
       const parsed = JSON.parse(body);
-      assert.ok(parsed.error, "should have an error message");
+      assert.strictEqual(parsed.available, false);
+      assert.ok(parsed.reason, "should include a reason");
       assert.ok(
-        parsed.error.includes("not available"),
-        `Error should mention not available: ${parsed.error}`,
+        parsed.reason.includes("not installed"),
+        `Reason should mention not installed: ${parsed.reason}`,
       );
+      assert.deepStrictEqual(parsed.jobs, [], "should include an empty jobs array");
+    });
+
+    it("degrades gracefully for sub-routes when jobs API is not available", async () => {
+      _resetForTesting({ forceUnavailable: true });
+
+      let statusCode = null;
+      let body = null;
+
+      const mockRes = {
+        writeHead(code, _headers) {
+          statusCode = code;
+        },
+        end(data) {
+          body = data;
+        },
+      };
+
+      await handleJobsRequest({}, mockRes, "/api/jobs/stats", new URLSearchParams(), "GET");
+
+      assert.strictEqual(statusCode, 200);
+      const parsed = JSON.parse(body);
+      assert.strictEqual(parsed.available, false);
     });
   });
 });

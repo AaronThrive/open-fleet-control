@@ -62,6 +62,32 @@
     align-items: center;
     gap: 10px;
   }
+  /* Collapsible section headers */
+  #settings-view-section .set-collapse-toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+    color: inherit;
+    font: inherit;
+  }
+  #settings-view-section .set-collapse-chevron {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    transition: transform 0.15s ease;
+  }
+  #settings-view-section .set-card.collapsed .set-collapse-chevron {
+    transform: rotate(-90deg);
+  }
+  #settings-view-section .set-card.collapsed > :not(.set-card-head) {
+    display: none;
+  }
   #settings-view-section .set-card-title {
     font-size: 0.95rem;
     font-weight: 600;
@@ -242,6 +268,32 @@
     font-size: 0.76rem;
     color: var(--text-muted);
   }
+
+  /* Privacy hidden-item lists */
+  #settings-view-section .set-priv-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  #settings-view-section .set-priv-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    font-size: 0.76rem;
+  }
+  #settings-view-section .set-priv-value {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text);
+  }
 </style>
 <div class="section" id="settings-view-section">
   <section class="view-panel">
@@ -278,7 +330,15 @@
       <!-- ============================ Alerts ============================ -->
       <div class="set-card">
         <div class="set-card-head">
-          <span class="set-card-title" data-i18n="views.settings.alertsTitle">🔔 Alerts</span>
+          <button
+            type="button"
+            class="set-collapse-toggle"
+            data-collapse-toggle
+            aria-expanded="true"
+          >
+            <span class="set-collapse-chevron" aria-hidden="true">▼</span>
+            <span class="set-card-title" data-i18n="views.settings.alertsTitle">🔔 Alerts</span>
+          </button>
           <button type="button" class="set-save-btn" id="set-alerts-save">Save alerts</button>
         </div>
 
@@ -386,7 +446,17 @@
       <!-- =========================== Intervals ========================== -->
       <div class="set-card">
         <div class="set-card-head">
-          <span class="set-card-title" data-i18n="views.settings.intervalsTitle">⏱️ Intervals</span>
+          <button
+            type="button"
+            class="set-collapse-toggle"
+            data-collapse-toggle
+            aria-expanded="true"
+          >
+            <span class="set-collapse-chevron" aria-hidden="true">▼</span>
+            <span class="set-card-title" data-i18n="views.settings.intervalsTitle"
+              >⏱️ Intervals</span
+            >
+          </button>
           <button type="button" class="set-save-btn" id="set-intervals-save">Save intervals</button>
         </div>
         <div class="set-row">
@@ -424,9 +494,17 @@
       <!-- ============================= Gate ============================= -->
       <div class="set-card">
         <div class="set-card-head">
-          <span class="set-card-title" data-i18n="views.settings.gateTitle"
-            >🚦 Validation gate</span
+          <button
+            type="button"
+            class="set-collapse-toggle"
+            data-collapse-toggle
+            aria-expanded="true"
           >
+            <span class="set-collapse-chevron" aria-hidden="true">▼</span>
+            <span class="set-card-title" data-i18n="views.settings.gateTitle"
+              >🚦 Validation gate</span
+            >
+          </button>
           <button type="button" class="set-save-btn" id="set-gate-save">Save gate</button>
         </div>
         <div class="set-row">
@@ -438,6 +516,65 @@
           </label>
         </div>
         <div class="set-inline-error" id="set-gate-error" hidden></div>
+      </div>
+
+      <!-- ============================ Privacy =========================== -->
+      <div class="set-card">
+        <div class="set-card-head">
+          <button
+            type="button"
+            class="set-collapse-toggle"
+            data-collapse-toggle
+            aria-expanded="true"
+          >
+            <span class="set-collapse-chevron" aria-hidden="true">▼</span>
+            <span class="set-card-title" data-i18n="views.settings.privacyTitle">🔒 Privacy</span>
+          </button>
+          <button type="button" class="set-save-btn" id="set-privacy-save">Save privacy</button>
+        </div>
+
+        <div class="set-row">
+          <label class="set-toggle">
+            <input type="checkbox" id="set-priv-hide-hostname" />
+            <span data-i18n="views.settings.privacyHideHostname"
+              >Hide hostname (mask node hostnames in the UI)</span
+            >
+          </label>
+        </div>
+
+        <div class="set-subtitle" data-i18n="views.settings.privacyHiddenTopics">Hidden topics</div>
+        <div class="set-priv-list" id="set-priv-topics"></div>
+        <div
+          class="set-muted"
+          id="set-priv-topics-empty"
+          data-i18n="views.settings.privacyNoTopics"
+        >
+          No hidden topics.
+        </div>
+
+        <div class="set-subtitle" data-i18n="views.settings.privacyHiddenSessions">
+          Hidden sessions
+        </div>
+        <div class="set-priv-list" id="set-priv-sessions"></div>
+        <div
+          class="set-muted"
+          id="set-priv-sessions-empty"
+          data-i18n="views.settings.privacyNoSessions"
+        >
+          No hidden sessions.
+        </div>
+
+        <div class="set-subtitle" data-i18n="views.settings.privacyHiddenCrons">Hidden crons</div>
+        <div class="set-priv-list" id="set-priv-crons"></div>
+        <div class="set-muted" id="set-priv-crons-empty" data-i18n="views.settings.privacyNoCrons">
+          No hidden crons.
+        </div>
+
+        <div class="set-hint" data-i18n="views.settings.privacyHint">
+          Items are added via the quick-hide (👁️) actions on sessions, crons, and topics. Removing
+          an item here makes it visible again immediately.
+        </div>
+        <div class="set-inline-error" id="set-privacy-error" hidden></div>
       </div>
     </div>
   </section>

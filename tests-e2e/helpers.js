@@ -17,12 +17,7 @@ const REPO_ROOT = path.join(__dirname, "..");
 // Chrome discovery
 // ---------------------------------------------------------------------------
 
-const CHROME_CANDIDATES = [
-  "google-chrome",
-  "google-chrome-stable",
-  "chromium",
-  "chromium-browser",
-];
+const CHROME_CANDIDATES = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"];
 
 /**
  * Locate a system Chrome/Chromium executable on PATH.
@@ -105,7 +100,10 @@ function sleep(ms) {
  * @param {number} [options.intervalMs]
  * @returns {Promise<any>} the truthy predicate result
  */
-async function waitFor(predicate, { label = "condition", timeoutMs = 10000, intervalMs = 150 } = {}) {
+async function waitFor(
+  predicate,
+  { label = "condition", timeoutMs = 10000, intervalMs = 150 } = {},
+) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
   while (Date.now() < deadline) {
@@ -147,10 +145,20 @@ function makeTempDirs() {
 /**
  * Build the FLEET_CONFIG_JSON blob for the e2e server.
  * Cortex disabled; fast mesh polling so SSE-driven refetches are quick.
+ *
+ * Alerts are EXPLICITLY disabled (engine + every sink) so a server that
+ * inherits config/dashboard.local.json can never deliver real notifications
+ * (e.g. ntfy pushes to the operator's phone) from a test run. Keep all
+ * three knobs: FLEET_CONFIG_JSON deep-merges over the local config, so
+ * `sinks: {}` alone would NOT clear an ntfy topic configured there.
+ *
  * @param {object} dirs - result of makeTempDirs()
+ * @param {object} [overrides] - top-level keys spread over the base blob
+ *   (an `alerts` override REPLACES the safe default — it must itself keep
+ *   every sink disabled)
  * @returns {string} JSON string
  */
-function buildFleetConfigJson(dirs) {
+function buildFleetConfigJson(dirs, overrides = {}) {
   return JSON.stringify({
     stateDir: dirs.stateDir,
     logsDir: dirs.logsDir,
@@ -158,6 +166,15 @@ function buildFleetConfigJson(dirs) {
     workspaceDir: dirs.workspaceDir,
     mesh: { intervalMs: 1000 },
     cortex: { enabled: false },
+    alerts: {
+      enabled: false,
+      sinks: {
+        ntfy: { enabled: false, topic: "" },
+        slack: { enabled: false, gatewayUrl: "" },
+        webhooks: [],
+      },
+    },
+    ...overrides,
   });
 }
 
@@ -182,6 +199,9 @@ async function startServer({ port, fleetConfigJson }) {
       HOST: "localhost",
       DASHBOARD_AUTH_MODE: "none",
       FLEET_CONFIG_JSON: fleetConfigJson,
+      // Defense in depth: even if a config slips through with alerts + a
+      // real sink enabled, the engine's test-mode guard makes sinks no-op.
+      OFC_DISABLE_ALERT_DELIVERY: "1",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

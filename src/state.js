@@ -20,8 +20,8 @@ const { formatBytes, formatTimeAgo } = require("./utils");
  * @param {function} deps.getTokenStats - function from tokens module
  * @param {function} deps.getCerebroTopics - function from cerebro module
  * @param {function} deps.getMemoryStats - function (defined in this module, uses CONFIG.paths)
- * @param {function} deps.runOpenClaw - function from openclaw module
- * @param {function} deps.extractJSON - function from openclaw module
+ * @param {function} deps.runOpenClawAsync - async function from openclaw module
+ * @param {boolean} [deps.openclawEnabled] - when false, never spawn openclaw CLI
  * @param {function} deps.readTranscript - function from sessions module
  */
 function createStateModule(deps) {
@@ -37,10 +37,10 @@ function createStateModule(deps) {
     getDailyTokenUsage,
     getTokenStats,
     getCerebroTopics,
-    runOpenClaw,
-    extractJSON,
+    runOpenClawAsync,
     readTranscript,
   } = deps;
+  const openclawEnabled = deps.openclawEnabled !== false;
 
   const PATHS = CONFIG.paths;
 
@@ -50,29 +50,44 @@ function createStateModule(deps) {
   const STATE_CACHE_TTL = 30000; // 30 seconds - reduce blocking from CLI calls
   let stateRefreshInterval = null;
 
-  // Get system status
+  // Gateway status cache \u2014 refreshed off the request path (the openclaw CLI
+  // takes seconds to start; spawning it per request froze the event loop).
+  let gatewayStatusCache = { value: "Unknown", timestamp: 0, refreshing: false };
+  const GATEWAY_STATUS_TTL = 60000;
+
+  function refreshGatewayStatus() {
+    if (!openclawEnabled || !runOpenClawAsync) return Promise.resolve();
+    if (gatewayStatusCache.refreshing) return Promise.resolve();
+    gatewayStatusCache.refreshing = true;
+    return runOpenClawAsync("gateway status 2>/dev/null")
+      .then((status) => {
+        let value = "Unknown";
+        if (status && status.includes("running")) value = "Running";
+        else if (status && status.includes("stopped")) value = "Stopped";
+        gatewayStatusCache = { value, timestamp: Date.now(), refreshing: false };
+      })
+      .catch(() => {
+        gatewayStatusCache.refreshing = false;
+      });
+  }
+
+  // Get system status (cache-served; stale-while-revalidate for gateway)
   function getSystemStatus() {
     const hostname = os.hostname();
     let uptime = "\u2014";
     try {
-      const uptimeRaw = execFileSync("uptime", [], { encoding: "utf8" });
+      const uptimeRaw = execFileSync("uptime", [], { encoding: "utf8", timeout: 1000 });
       const match = uptimeRaw.match(/up\s+([^,]+)/);
       if (match) uptime = match[1].trim();
     } catch (e) {}
 
-    let gateway = "Unknown";
-    try {
-      const status = runOpenClaw("gateway status 2>/dev/null");
-      if (status && status.includes("running")) {
-        gateway = "Running";
-      } else if (status && status.includes("stopped")) {
-        gateway = "Stopped";
-      }
-    } catch (e) {}
+    if (Date.now() - gatewayStatusCache.timestamp > GATEWAY_STATUS_TTL) {
+      refreshGatewayStatus();
+    }
 
     return {
       hostname,
-      gateway,
+      gateway: gatewayStatusCache.value,
       model: "claude-opus-4-5",
       uptime,
     };
@@ -134,27 +149,16 @@ function createStateModule(deps) {
       // Fall back to defaults
     }
 
-    // Try to get active counts from sessions (preferred - has full session keys)
+    // Get active counts from the background-refreshed sessions cache
+    // (no CLI spawn on the request path). sessionType is derived from the
+    // store/CLI `kind` field (spawn-child/cron), not just key matching.
     try {
-      const output = runOpenClaw("sessions --json 2>/dev/null");
-      const jsonStr = extractJSON(output);
-      if (jsonStr) {
-        const data = JSON.parse(jsonStr);
-        const sessions = data.sessions || [];
-        const fiveMinMs = 5 * 60 * 1000;
-
-        for (const s of sessions) {
+      const cached = getSessions({ limit: null }) || [];
+      if (cached.length > 0) {
+        for (const s of cached) {
           // Only count sessions active in last 5 minutes
-          if (s.ageMs > fiveMinMs) continue;
-
-          const key = s.key || "";
-          // Session key patterns:
-          //   agent:main:slack:... = main (human-initiated)
-          //   agent:main:telegram:... = main
-          //   agent:main:discord:... = main
-          //   agent:main:subagent:... = subagent (spawned task)
-          //   agent:main:cron:... = cron job (count as subagent)
-          if (key.includes(":subagent:") || key.includes(":cron:")) {
+          if ((s.minutesAgo ?? Infinity) >= 5) continue;
+          if (s.sessionType === "subagent" || s.sessionType === "cron") {
             result.subagent.active++;
           } else {
             result.main.active++;
@@ -165,6 +169,10 @@ function createStateModule(deps) {
     } catch (e) {
       console.error("Failed to get capacity from sessions, falling back to filesystem:", e.message);
     }
+
+    // Second-instance economy: never scan OpenClaw session files when this
+    // instance does not own the openclaw sources.
+    if (!openclawEnabled) return result;
 
     // Count active sessions from filesystem (workaround for CLI returning styled text)
     // Sessions active in last 5 minutes are considered "active"
@@ -447,10 +455,10 @@ function createStateModule(deps) {
       const retentionHours = parseInt(process.env.SUBAGENT_RETENTION_HOURS || "12", 10);
       const retentionMs = retentionHours * 60 * 60 * 1000;
       subagents = allSessions
-        .filter((s) => s.sessionKey && s.sessionKey.includes(":subagent:"))
+        .filter((s) => s.sessionType === "subagent")
         .filter((s) => (s.minutesAgo || 0) * 60000 < retentionMs)
         .map((s) => {
-          const match = s.sessionKey.match(/:subagent:([a-f0-9-]+)$/);
+          const match = (s.sessionKey || "").match(/:subagent:([a-f0-9-]+)$/);
           const subagentId = match ? match[1] : s.sessionId;
           return {
             id: subagentId,
@@ -524,18 +532,22 @@ function createStateModule(deps) {
     }
   }
 
-  // Get detailed sub-agent status
+  // Get detailed sub-agent status (served from the sessions cache —
+  // classification uses the kind-derived sessionType, not key matching)
   function getSubagentStatus() {
     const subagents = [];
     try {
-      const output = runOpenClaw("sessions --json 2>/dev/null");
-      const jsonStr = extractJSON(output);
-      if (jsonStr) {
-        const data = JSON.parse(jsonStr);
-        const subagentSessions = (data.sessions || []).filter(
-          (s) => s.key && s.key.includes(":subagent:"),
-        );
-
+      const cached = getSessions({ limit: null }) || [];
+      const subagentSessions = cached
+        .filter((s) => s.sessionType === "subagent")
+        .map((s) => ({
+          key: s.sessionKey,
+          sessionId: s.sessionId,
+          ageMs: (s.minutesAgo ?? Infinity) * 60000,
+          totalTokens: s.tokens || 0,
+          model: s.model,
+        }));
+      {
         for (const s of subagentSessions) {
           const ageMs = s.ageMs || Infinity;
           const isActive = ageMs < 5 * 60 * 1000; // Active if < 5 min

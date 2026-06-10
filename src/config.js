@@ -194,6 +194,15 @@ const FLEET_DEFAULTS = {
   logsDir: "logs",
   briefsDir: "briefs",
   workspaceDir: ".",
+  // Session list source: "files" reads the OpenClaw session store JSON
+  // directly (fast, no CLI spawn); "cli" shells out to `openclaw sessions
+  // --json` via the async background worker.
+  sessionsSource: "files",
+  // Background sessions-cache refresh interval (ms).
+  sessionsRefreshMs: 30000,
+  // When false this instance never spawns the openclaw CLI nor parses
+  // OpenClaw session/usage data (secondary-instance economy mode).
+  openclawSources: true,
   mesh: { intervalMs: 15000 },
   federation: { intervalMs: 30000 },
   watchdog: { thresholdMs: 1800000 },

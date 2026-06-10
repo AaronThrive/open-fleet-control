@@ -23,7 +23,7 @@ const { createBriefs } = require("./briefs");
 const { createEvolution } = require("./evolution");
 const { createAudit } = require("./audit");
 const { createCortex } = require("./cortex");
-const { createAlerts } = require("./alerts");
+const { createAlerts, createNodeAlertTracker } = require("./alerts");
 const { createRateLimiter } = require("./rate-limit");
 
 const CORTEX_SUMMARY_TTL_MS = 60000;
@@ -112,17 +112,20 @@ function createFleetRuntime({ config, broadcast }) {
   // (fireAlert, getSummary) reads the closed-over variable at call time, and
   // the runtime exposes it through a getter, so mesh / watchdog / kanban /
   // evolution hooks and the REST routes always use the current instance.
-  let alerts = createAlerts({ config: config.alerts });
+  let alerts = createAlerts({ config: config.alerts, logsDir });
 
   /**
    * Rebuild the alert engine from a new effective alerts config (hot-apply
    * path for PATCH /api/fleet/settings). The ring buffer of the previous
-   * instance is dropped by design — recent alerts are transient UI state.
+   * instance is dropped by design — recent alerts are transient UI state;
+   * the persistent history (logs/alerts.jsonl) survives rebuilds. The flap
+   * tracker keeps its per-node streak state and only swaps thresholds.
    *
    * @param {object} alertsConfig - effective fleet.alerts config (with secrets)
    */
   function applyAlertsConfig(alertsConfig) {
-    alerts = createAlerts({ config: alertsConfig });
+    alerts = createAlerts({ config: alertsConfig, logsDir });
+    nodeAlertTracker.setFlapConfig(alertsConfig && alertsConfig.flap);
     console.log("[Fleet] Alerts engine rebuilt from updated settings");
   }
 
@@ -150,6 +153,17 @@ function createFleetRuntime({ config, broadcast }) {
     }
   }
 
+  // Flap suppression + recovery for node health alerts: nodeOffline /
+  // nodeUnreachable fire only after `flap.consecutive` failed polls (default
+  // 3) sustained for >= `flap.minDurationMs` (default 60s); a nodeRecovered
+  // (info) alert fires once when a previously-alerted node comes back online.
+  // Fed from mesh's per-poll onHealth hook (transitions alone cannot see the
+  // streak grow). Policy lives in createNodeAlertTracker (src/alerts.js).
+  const nodeAlertTracker = createNodeAlertTracker({
+    flap: config.alerts && config.alerts.flap,
+    fire: fireAlert,
+  });
+
   const mesh = createMesh({
     stateDir,
     intervalMs: config.mesh.intervalMs,
@@ -158,21 +172,9 @@ function createFleetRuntime({ config, broadcast }) {
     tailscale: createNonBlockingTailscale(),
     onChange: ({ node, previousStatus, status }) => {
       emit("fleet.mesh", { id: node.id, hostname: node.hostname, previousStatus, status });
-      if (status === "offline") {
-        fireAlert({
-          type: "nodeOffline",
-          severity: "critical",
-          node: node.hostname,
-          message: `Node ${node.hostname} went offline (was ${previousStatus})`,
-        });
-      } else if (status === "unreachable") {
-        fireAlert({
-          type: "nodeUnreachable",
-          severity: "warn",
-          node: node.hostname,
-          message: `Node ${node.hostname} is unreachable (was ${previousStatus})`,
-        });
-      }
+    },
+    onHealth: ({ node, status, health }) => {
+      nodeAlertTracker.observe(node, status, health);
     },
   });
 

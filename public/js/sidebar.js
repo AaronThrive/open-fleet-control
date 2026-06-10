@@ -16,11 +16,6 @@
     memory: 0,
     cerebro: 0,
     operators: 0,
-    tokens: "-",
-    cost: "-",
-    monthlyCost: "-",
-    avgTokens: "-",
-    avgCost: "-",
     lastUpdated: null,
   };
 
@@ -232,16 +227,6 @@
         : 0;
     }
 
-    // Update token stats
-    if (data.tokenStats) {
-      sidebarState.tokens = data.tokenStats.totalFormatted || data.tokenStats.total || "-";
-      sidebarState.cost = data.tokenStats.estCostFormatted || data.tokenStats.estCost || "-";
-      sidebarState.monthlyCost =
-        data.tokenStats.estMonthlyCostFormatted || data.tokenStats.estMonthlyCost || "-";
-      sidebarState.avgTokens = data.tokenStats.avgTokensPerSession || "-";
-      sidebarState.avgCost = data.tokenStats.avgCostPerSession || "-";
-    }
-
     sidebarState.lastUpdated = new Date();
 
     // Update the DOM
@@ -260,11 +245,6 @@
       "nav-memory-count": sidebarState.memory,
       "nav-cerebro-count": sidebarState.cerebro,
       "nav-operator-count": sidebarState.operators,
-      "nav-tokens": sidebarState.tokens,
-      "nav-cost": sidebarState.cost,
-      "nav-monthly-cost": sidebarState.monthlyCost,
-      "nav-avg-tokens": sidebarState.avgTokens,
-      "nav-avg-cost": sidebarState.avgCost,
     };
 
     for (const [id, value] of Object.entries(updates)) {
@@ -323,15 +303,32 @@
     } catch (e) {}
   }
 
-  // Fetch jobs count separately (since it's a different API)
+  // Fetch jobs count separately (since it's a different API).
+  // When the optional jobs library is not installed the API answers
+  // 200 { available: false } — hide the AI Jobs nav entry entirely.
   async function fetchJobsCount() {
     try {
       const response = await fetch("/api/jobs");
       const data = await response.json();
+      if (data && data.available === false) {
+        setJobsNavVisible(false);
+        return;
+      }
+      setJobsNavVisible(true);
       sidebarState.jobs = data.jobs?.length || 0;
       updateBadges();
     } catch (error) {
-      // Jobs API may not be available
+      // Jobs API may not be reachable — leave the nav as-is
+    }
+  }
+
+  /**
+   * Show or hide the AI Jobs nav entry
+   */
+  function setJobsNavVisible(visible) {
+    const navItem = document.querySelector('.nav-item[data-page="/jobs.html"]');
+    if (navItem) {
+      navItem.style.display = visible ? "" : "none";
     }
   }
 
