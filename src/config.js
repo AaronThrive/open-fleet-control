@@ -322,7 +322,7 @@ function loadConfig() {
 
     // Branding
     branding: {
-      name: fileConfig.branding?.name || "OpenClaw Command Center",
+      name: fileConfig.branding?.name || "OpenFleetControl",
       theme: fileConfig.branding?.theme || "default",
     },
 

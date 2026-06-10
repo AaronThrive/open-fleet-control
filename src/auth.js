@@ -100,7 +100,7 @@ function getUnauthorizedPage(reason, user, authConfig) {
   return `<!DOCTYPE html>
 <html>
 <head>
-    <title>Access Denied - Command Center</title>
+    <title>Access Denied - OpenFleetControl</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {

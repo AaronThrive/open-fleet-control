@@ -1487,6 +1487,10 @@
           <h3>🔥 Top Sessions by Tokens (24h)</h3>
           <div class="detail-box" id="cost-top-sessions" style="font-size: 0.85rem"></div>
         </div>
+        <div class="detail-section">
+          <h3>🤖 By Model (24h)</h3>
+          <div class="detail-box" id="cost-by-model" style="font-size: 0.85rem"></div>
+        </div>
       </div>
     </div>
 
@@ -3918,6 +3922,17 @@
       }
 
       function renderCostBreakdown(data) {
+        const byModel = (data.windows && data.windows["24h"] && data.windows["24h"].byModel) || [];
+        const byModelEl = document.getElementById("cost-by-model");
+        if (byModelEl)
+          byModelEl.innerHTML = byModel.length
+            ? byModel
+                .map(
+                  (m) =>
+                    `<div class="detail-row"><span class="detail-label">${escapeHtml(m.model || "unknown")} (${m.requests || 0} req)</span><span class="detail-value">$${(m.cost || 0).toFixed(2)} · cacheR ${(m.cacheRead || 0).toLocaleString()}</span></div>`,
+                )
+                .join("")
+            : '<em style="color: var(--text-muted)">No model data</em>';
         // Token usage
         document.getElementById("cost-tokens").innerHTML = `
           <div class="detail-row"><span class="detail-label">Input Tokens</span><span class="detail-value">${(data.inputTokens || 0).toLocaleString()}</span></div>
