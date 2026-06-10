@@ -93,6 +93,10 @@
     "mesh": {
       "intervalMs": 15000
     },
+    "federation": {
+      "_comment": "Read-only fleet-of-fleets: poll OTHER Open Fleet Control dashboards' /api/state every intervalMs. Remotes are managed in the Federation panel (state/federation.json); tokens stay server-side.",
+      "intervalMs": 30000
+    },
     "watchdog": {
       "_comment": "Flag assigned/inprogress tasks with no activity for thresholdMs (default 30 min)",
       "thresholdMs": 1800000

@@ -12,7 +12,16 @@
 (function () {
   "use strict";
 
-  const VIEWS = ["mesh", "fleet-chat", "kanban", "briefs", "cortex", "evolution", "logs"];
+  const VIEWS = [
+    "mesh",
+    "federation",
+    "fleet-chat",
+    "kanban",
+    "briefs",
+    "cortex",
+    "evolution",
+    "logs",
+  ];
   const VIEW_HASH_PREFIX = "#view-";
 
   // Cache of fetched partial HTML, keyed by view name
