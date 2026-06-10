@@ -68,6 +68,64 @@ function parseJsonOutput(text) {
   return null;
 }
 
+/**
+ * Parse gbrain's `list` TSV output (slug\ttype\tdate\ttitle per line) into
+ * page records. gbrain <= 0.12.x has no --json on `list`; TSV is what real
+ * binaries emit. Returns null when the text is not TSV page output (e.g. a
+ * broken-bundle error line), so callers can treat it as "CLI broken".
+ */
+function parseTsvPages(text) {
+  if (!text || typeof text !== "string") return null;
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  if (/^no pages found\.?$/i.test(trimmed)) return [];
+  const pages = [];
+  for (const line of trimmed.split("\n")) {
+    const parts = line.split("\t");
+    if (parts.length < 2 || !parts[0]) return null;
+    pages.push({
+      slug: parts[0],
+      type: parts[1] || "page",
+      updated_at: parts[2] || null,
+      title: parts[3] || parts[0],
+    });
+  }
+  return pages;
+}
+
+/**
+ * Parse `gbrain extract links --dry-run --json` output. The real CLI emits
+ * NDJSON candidate lines ({"action":"add_link","from":...,"to":...,"type":...})
+ * followed by a pretty-printed summary object — not a single JSON array.
+ * Also accepts a plain JSON array or { links: [...] } envelope for
+ * forward-compatibility. Returns an array of link records, or null when the
+ * output is unusable.
+ */
+function parseExtractLinks(text) {
+  if (!text || typeof text !== "string") return null;
+  const links = [];
+  for (const line of text.split("\n")) {
+    const candidate = line.trim();
+    if (!candidate.startsWith("{")) continue;
+    try {
+      const obj = JSON.parse(candidate);
+      if (obj && obj.action === "add_link") links.push(obj);
+    } catch (e) {
+      // Not a complete single-line JSON object (e.g. part of the
+      // pretty-printed summary) — skip.
+    }
+  }
+  if (links.length > 0) return links;
+
+  const payload = parseJsonOutput(text);
+  if (Array.isArray(payload)) return payload;
+  if (payload && Array.isArray(payload.links)) return payload.links;
+  // A bare summary object ({ links_created: 0, ... }) means the extract ran
+  // and found zero candidates — a valid empty edge list.
+  if (payload && typeof payload === "object") return [];
+  return null;
+}
+
 /** Normalize a gbrain page record into a graph node. */
 function toGraphNode(page) {
   if (!page || typeof page !== "object") return null;
@@ -130,13 +188,14 @@ function createGbrain(options = {}) {
       };
       return cachedAvailability;
     }
-    const parsed = parseJsonOutput(res.stdout) ?? parseJsonOutput(res.stderr);
+    const parsed =
+      parseJsonOutput(res.stdout) ?? parseJsonOutput(res.stderr) ?? parseTsvPages(res.stdout);
     if (!Array.isArray(parsed)) {
       const firstLine =
         `${res.stdout}\n${res.stderr}`.trim().split("\n")[0]?.slice(0, 200) || "no output";
       cachedAvailability = {
         available: false,
-        reason: `gbrain CLI returned no usable JSON (likely broken data bundle): ${firstLine}`,
+        reason: `gbrain CLI returned no usable JSON or TSV (likely broken data bundle): ${firstLine}`,
       };
       return cachedAvailability;
     }
@@ -155,9 +214,12 @@ function createGbrain(options = {}) {
     if (listRes.error) {
       return { error: `gbrain list failed: ${listRes.error.message || listRes.error}` };
     }
-    const pages = parseJsonOutput(listRes.stdout) ?? parseJsonOutput(listRes.stderr);
+    const pages =
+      parseJsonOutput(listRes.stdout) ??
+      parseJsonOutput(listRes.stderr) ??
+      parseTsvPages(listRes.stdout);
     if (!Array.isArray(pages)) {
-      return { error: "gbrain list returned no usable JSON" };
+      return { error: "gbrain list returned no usable JSON or TSV" };
     }
     const nodes = pages.map(toGraphNode).filter(Boolean);
 
@@ -167,12 +229,7 @@ function createGbrain(options = {}) {
     if (linksRes.error) {
       note = `link extraction unavailable: ${linksRes.error.message || linksRes.error}`;
     } else {
-      const linkPayload = parseJsonOutput(linksRes.stdout) ?? parseJsonOutput(linksRes.stderr);
-      const links = Array.isArray(linkPayload)
-        ? linkPayload
-        : Array.isArray(linkPayload?.links)
-          ? linkPayload.links
-          : null;
+      const links = parseExtractLinks(linksRes.stdout) ?? parseExtractLinks(linksRes.stderr);
       if (links) {
         edges = links.map(toGraphEdge).filter(Boolean);
       } else {
@@ -204,4 +261,4 @@ function createGbrain(options = {}) {
   return { available, getGraph, getPage };
 }
 
-module.exports = { createGbrain, parseJsonOutput };
+module.exports = { createGbrain, parseJsonOutput, parseTsvPages, parseExtractLinks };

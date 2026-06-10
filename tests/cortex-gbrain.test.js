@@ -1,6 +1,11 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert");
-const { createGbrain, parseJsonOutput } = require("../src/cortex-gbrain");
+const {
+  createGbrain,
+  parseJsonOutput,
+  parseTsvPages,
+  parseExtractLinks,
+} = require("../src/cortex-gbrain");
 
 function mockExecFn(responder) {
   const calls = [];
@@ -39,6 +44,60 @@ describe("cortex-gbrain module", () => {
         parseJsonOutput("ENOENT: no such file or directory, open '/$bunfs/root/pglite.data'"),
         null,
       );
+    });
+  });
+
+  describe("parseTsvPages()", () => {
+    it("parses gbrain list TSV output (slug\\ttype\\tdate\\ttitle)", () => {
+      const tsv =
+        "projects/alpha\tproject\tTue Jun 09\tProject Alpha\n" +
+        "people/bob\tperson\tMon Jun 08\tBob\n";
+      assert.deepStrictEqual(parseTsvPages(tsv), [
+        { slug: "projects/alpha", type: "project", updated_at: "Tue Jun 09", title: "Project Alpha" },
+        { slug: "people/bob", type: "person", updated_at: "Mon Jun 08", title: "Bob" },
+      ]);
+    });
+
+    it("returns an empty array for 'No pages found.'", () => {
+      assert.deepStrictEqual(parseTsvPages("No pages found.\n"), []);
+    });
+
+    it("returns null for non-TSV output (broken bundle error line)", () => {
+      assert.strictEqual(
+        parseTsvPages("ENOENT: no such file or directory, open '/$bunfs/root/pglite.data'"),
+        null,
+      );
+      assert.strictEqual(parseTsvPages(""), null);
+      assert.strictEqual(parseTsvPages(null), null);
+    });
+  });
+
+  describe("parseExtractLinks()", () => {
+    it("parses NDJSON add_link lines followed by a pretty summary (real CLI shape)", () => {
+      const out =
+        '{"action":"add_link","from":"projects/alpha","to":"people/bob","type":"mentions","context":"..."}\n' +
+        '{"action":"add_link","from":"people/bob","to":"projects/alpha","type":"link"}\n' +
+        '{\n  "links_created": 2,\n  "timeline_entries_created": 0,\n  "pages_processed": 10\n}\n';
+      const links = parseExtractLinks(out);
+      assert.strictEqual(links.length, 2);
+      assert.strictEqual(links[0].from, "projects/alpha");
+      assert.strictEqual(links[1].to, "projects/alpha");
+    });
+
+    it("returns [] for a bare summary object with zero candidates", () => {
+      const out = '{\n  "links_created": 0,\n  "timeline_entries_created": 0,\n  "pages_processed": 383\n}\n';
+      assert.deepStrictEqual(parseExtractLinks(out), []);
+    });
+
+    it("accepts a plain JSON array or { links: [...] } envelope", () => {
+      assert.strictEqual(parseExtractLinks(JSON.stringify(LINKS)).length, 3);
+      assert.strictEqual(parseExtractLinks(JSON.stringify({ links: LINKS })).length, 3);
+    });
+
+    it("returns null for unusable output", () => {
+      assert.strictEqual(parseExtractLinks("not json at all"), null);
+      assert.strictEqual(parseExtractLinks(""), null);
+      assert.strictEqual(parseExtractLinks(null), null);
     });
   });
 
@@ -88,6 +147,18 @@ describe("cortex-gbrain module", () => {
       assert.ok(result.reason.includes("no usable JSON"));
       assert.ok(result.reason.includes("pglite.data"));
     });
+
+    it("reports available when the CLI emits TSV instead of JSON (gbrain <= 0.12.x)", async () => {
+      const execFn = mockExecFn(() => ({
+        error: null,
+        stdout: "projects/alpha\tproject\tTue Jun 09\tProject Alpha\n",
+        stderr: "",
+      }));
+      const gbrain = createGbrain({ execFn });
+      const result = await gbrain.available();
+      assert.strictEqual(result.available, true);
+      assert.strictEqual(result.reason, null);
+    });
   });
 
   describe("getGraph()", () => {
@@ -122,6 +193,60 @@ describe("cortex-gbrain module", () => {
         { from: "projects/alpha", to: "people/bob", kind: "mentions" },
         { from: "people/bob", to: "projects/alpha", kind: "link" },
       ]);
+    });
+
+    it("builds nodes from TSV list and edges from NDJSON extract (real gbrain 0.12.x output)", async () => {
+      const execFn = mockExecFn(({ args }) => {
+        if (args[0] === "list") {
+          return {
+            error: null,
+            stdout:
+              "projects/alpha\tproject\tTue Jun 09\tProject Alpha\n" +
+              "people/bob\tperson\tMon Jun 08\tBob\n",
+            stderr: "",
+          };
+        }
+        if (args[0] === "extract") {
+          return {
+            error: null,
+            stdout:
+              '{"action":"add_link","from":"projects/alpha","to":"people/bob","type":"mentions","context":"x"}\n' +
+              '{\n  "links_created": 1,\n  "timeline_entries_created": 0,\n  "pages_processed": 2\n}\n',
+            stderr: "",
+          };
+        }
+        return { error: new Error(`unexpected: ${args.join(" ")}`), stdout: "", stderr: "" };
+      });
+      const gbrain = createGbrain({ execFn });
+      const graph = await gbrain.getGraph({ limit: 10 });
+
+      assert.ok(!graph.error, graph.error);
+      assert.deepStrictEqual(graph.nodes, [
+        { id: "projects/alpha", title: "Project Alpha", type: "project" },
+        { id: "people/bob", title: "Bob", type: "person" },
+      ]);
+      assert.deepStrictEqual(graph.edges, [
+        { from: "projects/alpha", to: "people/bob", kind: "mentions" },
+      ]);
+      assert.strictEqual(graph.note, undefined);
+    });
+
+    it("returns empty edges without a note when extract reports zero candidates", async () => {
+      const execFn = mockExecFn(({ args }) => {
+        if (args[0] === "list") {
+          return { error: null, stdout: "a/b\tconcept\tTue Jun 09\tB\n", stderr: "" };
+        }
+        return {
+          error: null,
+          stdout: '{\n  "links_created": 0,\n  "timeline_entries_created": 0,\n  "pages_processed": 1\n}\n',
+          stderr: "",
+        };
+      });
+      const gbrain = createGbrain({ execFn });
+      const graph = await gbrain.getGraph();
+      assert.strictEqual(graph.nodes.length, 1);
+      assert.deepStrictEqual(graph.edges, []);
+      assert.strictEqual(graph.note, undefined);
     });
 
     it("degrades to empty edges with a note when link extraction fails", async () => {
