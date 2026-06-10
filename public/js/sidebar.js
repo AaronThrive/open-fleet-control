@@ -57,6 +57,9 @@
       // Set active state based on current page
       setActiveNavItem();
 
+      // Let other modules (views.js) know the sidebar nav is in the DOM
+      window.dispatchEvent(new CustomEvent("sidebar:loaded"));
+
       // Connect to SSE for live updates
       connectSSE();
 
@@ -120,8 +123,11 @@
           e.preventDefault();
           const target = document.querySelector(targetHash);
           if (target) {
-            target.scrollIntoView({ behavior: "smooth" });
             history.pushState(null, "", targetHash);
+            // pushState does not emit hashchange; notify listeners (views.js)
+            // so a hidden dashboard is restored before scrolling to it
+            window.dispatchEvent(new HashChangeEvent("hashchange"));
+            target.scrollIntoView({ behavior: "smooth" });
             setActiveNavItem();
           }
         } else {

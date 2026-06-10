@@ -1,0 +1,25 @@
+<!-- Logs (Audit Log) View Partial -->
+<div class="section" id="logs-view-section">
+  <section class="view-panel">
+    <div class="view-header">
+      <div class="view-title">
+        <span class="view-icon">📜</span>
+        <span data-i18n="views.logs.title">Audit Logs</span>
+      </div>
+      <div class="view-subtitle" data-i18n="views.logs.subtitle">
+        Immutable trail of every action taken by the fleet and its operators
+      </div>
+    </div>
+    <div class="empty-state" id="logs-empty-state">
+      <div class="empty-state-icon">📜</div>
+      <div class="empty-state-title" data-i18n="views.logs.emptyTitle">No audit entries yet</div>
+      <p class="empty-state-text" data-i18n="views.logs.emptyText">
+        Every command, mutation, and agent action will be recorded here as soon as the fleet starts
+        acting.
+      </p>
+      <button class="btn-primary empty-state-cta" data-i18n="views.logs.cta">
+        Refresh the log →
+      </button>
+    </div>
+  </section>
+</div>

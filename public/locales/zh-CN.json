@@ -5,7 +5,9 @@
     "connected": "🟢 实时",
     "disconnected": "🔴 已断开",
     "pollingMode": "轮询模式",
-    "error": "🔴 错误"
+    "error": "🔴 错误",
+    "live": "实时",
+    "stale": "已失联 — 最后更新 {time}"
   },
   "sidebar": {
     "title": "指挥中心",
@@ -20,6 +22,14 @@
     "memory": "记忆",
     "cerebro": "Cerebro",
     "operators": "Operators（操作者）",
+    "fleet": "舰队",
+    "mesh": "网格",
+    "fleetChat": "舰队聊天",
+    "kanban": "看板",
+    "briefs": "简报",
+    "cortex": "Cortex",
+    "evolution": "进化",
+    "logs": "日志",
     "privacy": "隐私",
     "about": "关于",
     "tokens": "Token",
@@ -60,6 +70,59 @@
   "connection": {
     "realtime": "通过 SSE 实时更新 ⚡",
     "polling": "轮询模式（SSE 已断开）"
+  },
+  "views": {
+    "loading": "正在加载视图...",
+    "loadError": "视图加载失败——请检查服务器后重试。",
+    "mesh": {
+      "title": "网格",
+      "subtitle": "跨 tailnet 的舰队节点拓扑、连通性与健康状态",
+      "emptyTitle": "尚未注册任何节点",
+      "emptyText": "蜂巢中还没有节点。节点加入网格后，其拓扑和健康状态将实时显示在这里。",
+      "cta": "在 tailnet 上发现节点 →"
+    },
+    "fleetChat": {
+      "title": "舰队聊天",
+      "subtitle": "你与舰队中每个代理之间的广播频道",
+      "emptyTitle": "暂无舰队消息",
+      "emptyText": "当代理汇报或你发布广播指令时，对话将显示在这里。",
+      "cta": "发送第一条广播 →"
+    },
+    "kanban": {
+      "title": "看板",
+      "subtitle": "分配给蜂群的任务看板",
+      "emptyTitle": "看板上没有任务",
+      "emptyText": "为代理排队任务，并跟踪其从待办到完成的全过程。",
+      "cta": "创建第一个任务 →"
+    },
+    "briefs": {
+      "title": "简报",
+      "subtitle": "舰队编写的摘要报告——每日站会、事件回顾、总结",
+      "emptyTitle": "尚未生成简报",
+      "emptyText": "舰队还没有提交任何简报。舰队活动的摘要将汇集于此。",
+      "cta": "生成每日简报 →"
+    },
+    "cortex": {
+      "title": "Cortex",
+      "subtitle": "整个舰队可读写的共享知识库",
+      "emptyTitle": "Cortex 为空",
+      "emptyText": "尚未摄取任何知识。向 Cortex 输入文档、笔记和经验，让每个代理共享同一个大脑。",
+      "cta": "摄取知识 →"
+    },
+    "evolution": {
+      "title": "进化",
+      "subtitle": "自我改进周期——经验教训、已应用的变异、适应度变化",
+      "emptyTitle": "暂无进化运行",
+      "emptyText": "蜂群尚未发生变异。启动自我改进周期以进化代理技能，并跨代追踪适应度。",
+      "cta": "启动自我改进周期 →"
+    },
+    "logs": {
+      "title": "审计日志",
+      "subtitle": "舰队及其操作者所有行为的不可变记录",
+      "emptyTitle": "暂无审计记录",
+      "emptyText": "舰队开始行动后，每条命令、变更和代理操作都会记录在这里。",
+      "cta": "刷新日志 →"
+    }
   },
   "phrases": {
     "exact": {
