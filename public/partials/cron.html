@@ -1,0 +1,79 @@
+<!-- Cron Jobs View Partial -->
+<div class="section" id="cron-view-section">
+  <style>
+    #cron-view-section .cron-view-error {
+      color: var(--red);
+      font-size: 0.8rem;
+      margin-bottom: 8px;
+    }
+    #cron-view-section .cron-last-status {
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 10px;
+      white-space: nowrap;
+    }
+    #cron-view-section .cron-last-status.ok {
+      color: var(--green);
+      background: rgba(63, 185, 80, 0.12);
+    }
+    #cron-view-section .cron-last-status.error {
+      color: var(--red);
+      background: rgba(248, 81, 73, 0.12);
+    }
+    #cron-view-section .cron-last-status.unknown {
+      color: var(--text-muted);
+      background: var(--bg);
+    }
+  </style>
+  <section class="view-panel">
+    <div class="view-header">
+      <div class="view-title">
+        <span class="view-icon">⏰</span>
+        <span data-i18n="views.cron.title">Cron Jobs</span>
+        <span class="section-count" id="cron-view-count">0</span>
+      </div>
+      <div class="view-subtitle" data-i18n="views.cron.subtitle">
+        Scheduled jobs — schedule, next run, last status
+      </div>
+    </div>
+
+    <div class="section-filters" id="cron-view-filters">
+      <div class="filter-group" data-filter-group="status">
+        <span class="filter-label" data-i18n="views.cron.filterStatus">Status:</span>
+        <button class="filter-btn active" data-filter="all" type="button">All</button>
+        <button class="filter-btn" data-filter="enabled" type="button">✅ Enabled</button>
+        <button class="filter-btn" data-filter="disabled" type="button">⏸️ Disabled</button>
+      </div>
+      <div class="filter-group" data-filter-group="schedule">
+        <span class="filter-label" data-i18n="views.cron.filterSchedule">Schedule:</span>
+        <button class="filter-btn active" data-filter="all" type="button">All</button>
+        <button class="filter-btn" data-filter="frequent" type="button">
+          ⚡ Frequent (&lt;1h)
+        </button>
+        <button class="filter-btn" data-filter="daily" type="button">📅 Daily</button>
+        <button class="filter-btn" data-filter="weekly" type="button">📆 Weekly</button>
+      </div>
+    </div>
+
+    <div class="cron-view-error" id="cron-view-error" hidden></div>
+
+    <div class="card-grid" id="cron-view-grid">
+      <div class="skeleton-card" style="display: flex; gap: 12px; align-items: center">
+        <div class="skeleton-circle"></div>
+        <div style="flex: 1">
+          <div class="skeleton-bar title" style="width: 50%"></div>
+          <div class="skeleton-bar subtitle" style="width: 70%"></div>
+        </div>
+        <div class="skeleton-bar short" style="width: 60px"></div>
+      </div>
+      <div class="skeleton-card" style="display: flex; gap: 12px; align-items: center">
+        <div class="skeleton-circle"></div>
+        <div style="flex: 1">
+          <div class="skeleton-bar title" style="width: 50%"></div>
+          <div class="skeleton-bar subtitle" style="width: 70%"></div>
+        </div>
+        <div class="skeleton-bar short" style="width: 60px"></div>
+      </div>
+    </div>
+  </section>
+</div>

@@ -1,0 +1,485 @@
+/**
+ * Settings View — edit the dashboard's persisted fleet settings.
+ *
+ * Loaded on demand by views.js, which calls init(containerEl) on EVERY
+ * visit of the view. The partial HTML is re-injected fresh each visit, so
+ * init() re-queries the DOM from scratch (module scope persists).
+ *
+ * API (wired by the orchestrator to src/settings.js + src/alerts.js):
+ *   GET   /api/fleet/settings                 — redacted editable settings
+ *   PATCH /api/fleet/settings                 — partial patch, returns
+ *         {success, applied, restartRequired: ["mesh.intervalMs", ...]}
+ *   POST  /api/fleet/settings/test-alert      — fires a test alert through
+ *         the saved sink config, returns {success, result: {dispatched, delivered}}
+ *
+ * Saves are per-section and optimistic-with-server-truth: the PATCH response's
+ * `applied` object re-populates the form, so the UI always converges on what
+ * the server actually persisted. Webhook secrets are write-only — the server
+ * only ever reports hasSecret, never the secret itself.
+ *
+ * Settings returned in `restartRequired` only take effect after
+ * `systemctl --user restart open-fleet-control`; they accumulate in an amber
+ * banner until the page is reloaded against a restarted service.
+ */
+
+import { t } from "../utils.js";
+
+const ALERT_RULES = ["nodeOffline", "nodeUnreachable", "taskFailed", "taskStale", "lessonPending"];
+const WEBHOOK_EVENT_OPTIONS = ["*", ...ALERT_RULES];
+const SEC = 1000;
+const MIN = 60000;
+
+// --- Module-level lifecycle state (persists across visits) -----------------
+
+let refs = null; // DOM references for the active visit
+let restartPaths = new Set(); // accumulated restartRequired paths (until restart)
+
+// --- Entry point ------------------------------------------------------------
+
+export function init(containerEl) {
+  teardown();
+
+  const root = containerEl.querySelector("#settings-view-section");
+  if (!root) {
+    console.error("[Settings] Partial markup missing #settings-view-section");
+    return;
+  }
+
+  refs = {
+    root,
+    loading: root.querySelector("#set-loading"),
+    fetchError: root.querySelector("#set-fetch-error"),
+    body: root.querySelector("#set-body"),
+    restartBanner: root.querySelector("#set-restart-banner"),
+    restartPathsEl: root.querySelector("#set-restart-paths"),
+    // Alerts section
+    alertsEnabled: root.querySelector("#set-alerts-enabled"),
+    rules: root.querySelector("#set-rules"),
+    slackEnabled: root.querySelector("#set-slack-enabled"),
+    slackUrl: root.querySelector("#set-slack-url"),
+    slackChannel: root.querySelector("#set-slack-channel"),
+    ntfyEnabled: root.querySelector("#set-ntfy-enabled"),
+    ntfyServer: root.querySelector("#set-ntfy-server"),
+    ntfyTopic: root.querySelector("#set-ntfy-topic"),
+    ntfyTest: root.querySelector("#set-ntfy-test"),
+    alertsSave: root.querySelector("#set-alerts-save"),
+    alertsError: root.querySelector("#set-alerts-error"),
+    // Webhooks
+    webhooksList: root.querySelector("#set-webhooks-list"),
+    webhooksEmpty: root.querySelector("#set-webhooks-empty"),
+    whUrl: root.querySelector("#set-wh-url"),
+    whSecret: root.querySelector("#set-wh-secret"),
+    whEvents: root.querySelector("#set-wh-events"),
+    whAdd: root.querySelector("#set-wh-add"),
+    whError: root.querySelector("#set-wh-error"),
+    // Intervals
+    meshInterval: root.querySelector("#set-mesh-interval"),
+    fedInterval: root.querySelector("#set-fed-interval"),
+    watchdogThreshold: root.querySelector("#set-watchdog-threshold"),
+    intervalsSave: root.querySelector("#set-intervals-save"),
+    intervalsError: root.querySelector("#set-intervals-error"),
+    // Gate
+    gateDefault: root.querySelector("#set-gate-default"),
+    gateSave: root.querySelector("#set-gate-save"),
+    gateError: root.querySelector("#set-gate-error"),
+  };
+
+  buildRuleToggles();
+  buildWebhookEventToggles();
+
+  refs.alertsSave?.addEventListener("click", saveAlerts);
+  refs.intervalsSave?.addEventListener("click", saveIntervals);
+  refs.gateSave?.addEventListener("click", saveGate);
+  refs.ntfyTest?.addEventListener("click", sendTestAlert);
+  refs.whAdd?.addEventListener("click", addWebhook);
+
+  refs.alertsSave.textContent = t("views.settings.saveAlerts", {}, "Save alerts");
+  refs.intervalsSave.textContent = t("views.settings.saveIntervals", {}, "Save intervals");
+  refs.gateSave.textContent = t("views.settings.saveGate", {}, "Save gate");
+  refs.ntfyTest.textContent = t("views.settings.ntfyTest", {}, "Send test alert");
+  refs.whAdd.textContent = t("views.settings.webhookAdd", {}, "Add webhook");
+
+  renderRestartBanner();
+  refresh();
+}
+
+function teardown() {
+  refs = null;
+}
+
+// --- Data fetching ----------------------------------------------------------
+
+async function fetchJson(url, options) {
+  const response = await fetch(url, options);
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (err) {
+    /* non-JSON body */
+  }
+  if (!response.ok) {
+    const message = payload && payload.error ? payload.error : `HTTP ${response.status}`;
+    throw new Error(message);
+  }
+  return payload;
+}
+
+async function refresh() {
+  if (!refs) return;
+  try {
+    const settings = await fetchJson("/api/fleet/settings");
+    if (!refs) return;
+    refs.loading.hidden = true;
+    refs.fetchError.hidden = true;
+    refs.body.hidden = false;
+    populate(settings);
+  } catch (err) {
+    if (!refs) return;
+    console.error("[Settings] Failed to load settings:", err);
+    refs.loading.hidden = true;
+    refs.fetchError.hidden = false;
+    refs.fetchError.textContent = t(
+      "views.settings.loadError",
+      { message: err.message },
+      "Failed to load settings: {message}",
+    );
+  }
+}
+
+// --- Form population (server truth → inputs) ---------------------------------
+
+function buildRuleToggles() {
+  refs.rules.replaceChildren();
+  for (const rule of ALERT_RULES) {
+    const label = el("label", "set-toggle");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.dataset.rule = rule;
+    label.appendChild(input);
+    label.appendChild(el("span", null, rule));
+    refs.rules.appendChild(label);
+  }
+}
+
+function buildWebhookEventToggles() {
+  refs.whEvents.replaceChildren();
+  for (const event of WEBHOOK_EVENT_OPTIONS) {
+    const label = el("label", "set-toggle");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.dataset.event = event;
+    if (event === "*") input.checked = true;
+    label.appendChild(input);
+    label.appendChild(
+      el("span", null, event === "*" ? t("views.settings.allEvents", {}, "all events") : event),
+    );
+    refs.whEvents.appendChild(label);
+  }
+}
+
+function populate(settings) {
+  const alerts = settings.alerts || {};
+  const sinks = alerts.sinks || {};
+  const slack = sinks.slack || {};
+  const ntfy = sinks.ntfy || {};
+
+  refs.alertsEnabled.checked = alerts.enabled === true;
+  for (const input of refs.rules.querySelectorAll("input[data-rule]")) {
+    input.checked = (alerts.rules || {})[input.dataset.rule] !== false;
+  }
+
+  refs.slackEnabled.checked = slack.enabled === true;
+  refs.slackUrl.value = slack.gatewayUrl || "";
+  refs.slackChannel.value = slack.channel || "";
+
+  refs.ntfyEnabled.checked = ntfy.enabled === true;
+  refs.ntfyServer.value = ntfy.server || "https://ntfy.sh";
+  refs.ntfyTopic.value = ntfy.topic || "";
+
+  renderWebhooks(Array.isArray(sinks.webhooks) ? sinks.webhooks : []);
+
+  refs.meshInterval.value = String(Math.round((settings.mesh?.intervalMs ?? 15000) / SEC));
+  refs.fedInterval.value = String(Math.round((settings.federation?.intervalMs ?? 30000) / SEC));
+  refs.watchdogThreshold.value = String(
+    Math.round((settings.watchdog?.thresholdMs ?? 1800000) / MIN),
+  );
+
+  refs.gateDefault.checked = settings.validationGate?.default !== false;
+}
+
+function renderWebhooks(webhooks) {
+  refs.webhooksList.replaceChildren();
+  refs.webhooksEmpty.hidden = webhooks.length > 0;
+
+  for (const webhook of webhooks) {
+    const row = el("div", "set-webhook-row");
+    const url = el("span", "set-webhook-url", webhook.url);
+    url.title = webhook.url;
+    row.appendChild(url);
+
+    const events = Array.isArray(webhook.events) ? webhook.events : ["*"];
+    row.appendChild(
+      el(
+        "span",
+        "set-webhook-chip",
+        events.includes("*") ? t("views.settings.allEvents", {}, "all events") : events.join(", "),
+      ),
+    );
+
+    row.appendChild(
+      el(
+        "span",
+        `set-webhook-chip${webhook.hasSecret ? " secret" : ""}`,
+        webhook.hasSecret
+          ? t("views.settings.signed", {}, "🔑 signed")
+          : t("views.settings.unsigned", {}, "unsigned"),
+      ),
+    );
+
+    const secretBtn = el(
+      "button",
+      "set-action-btn",
+      webhook.hasSecret
+        ? t("views.settings.replaceSecret", {}, "Replace secret")
+        : t("views.settings.setSecret", {}, "Set secret"),
+    );
+    secretBtn.type = "button";
+    secretBtn.addEventListener("click", () => replaceWebhookSecret(webhook, secretBtn));
+    row.appendChild(secretBtn);
+
+    const removeBtn = el("button", "set-action-btn danger", t("actions.remove", {}, "Remove"));
+    removeBtn.type = "button";
+    removeBtn.addEventListener("click", () => removeWebhook(webhook, removeBtn));
+    row.appendChild(removeBtn);
+
+    refs.webhooksList.appendChild(row);
+  }
+}
+
+// --- Saving (PATCH /api/fleet/settings, per section) -------------------------
+
+/** PATCH a settings subset; on success re-populate from server truth. */
+async function patchSettings(patch, { button, errorEl }) {
+  if (button) button.disabled = true;
+  if (errorEl) errorEl.hidden = true;
+  try {
+    const payload = await fetchJson("/api/fleet/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!refs) return null;
+    if (payload && payload.applied) populate(payload.applied);
+    noteRestartRequired(payload && payload.restartRequired);
+    showToast(t("views.settings.saved", {}, "Settings saved."), "success");
+    return payload;
+  } catch (err) {
+    if (refs && errorEl) {
+      errorEl.hidden = false;
+      errorEl.textContent = t(
+        "views.settings.saveFailed",
+        { message: err.message },
+        "Save failed: {message}",
+      );
+    }
+    return null;
+  } finally {
+    if (refs && button) button.disabled = false;
+  }
+}
+
+function saveAlerts() {
+  const rules = {};
+  for (const input of refs.rules.querySelectorAll("input[data-rule]")) {
+    rules[input.dataset.rule] = input.checked;
+  }
+  patchSettings(
+    {
+      alerts: {
+        enabled: refs.alertsEnabled.checked,
+        rules,
+        sinks: {
+          slack: {
+            enabled: refs.slackEnabled.checked,
+            gatewayUrl: refs.slackUrl.value.trim(),
+            channel: refs.slackChannel.value.trim(),
+          },
+          ntfy: {
+            enabled: refs.ntfyEnabled.checked,
+            server: refs.ntfyServer.value.trim() || "https://ntfy.sh",
+            topic: refs.ntfyTopic.value.trim(),
+          },
+        },
+      },
+    },
+    { button: refs.alertsSave, errorEl: refs.alertsError },
+  );
+}
+
+function saveIntervals() {
+  const meshSec = readBoundedNumber(refs.meshInterval, 5, 3600);
+  const fedSec = readBoundedNumber(refs.fedInterval, 5, 3600);
+  const watchdogMin = readBoundedNumber(refs.watchdogThreshold, 1, 60);
+  if (meshSec === null || fedSec === null || watchdogMin === null) {
+    refs.intervalsError.hidden = false;
+    refs.intervalsError.textContent = t(
+      "views.settings.intervalInvalid",
+      {},
+      "Intervals must be 5–3600 seconds (watchdog: 1–60 minutes).",
+    );
+    return;
+  }
+  patchSettings(
+    {
+      mesh: { intervalMs: meshSec * SEC },
+      federation: { intervalMs: fedSec * SEC },
+      watchdog: { thresholdMs: watchdogMin * MIN },
+    },
+    { button: refs.intervalsSave, errorEl: refs.intervalsError },
+  );
+}
+
+function saveGate() {
+  patchSettings(
+    { validationGate: { default: refs.gateDefault.checked } },
+    { button: refs.gateSave, errorEl: refs.gateError },
+  );
+}
+
+// --- Webhook mutations (applied immediately) ----------------------------------
+
+function selectedWebhookEvents() {
+  const events = [];
+  for (const input of refs.whEvents.querySelectorAll("input[data-event]")) {
+    if (input.checked) events.push(input.dataset.event);
+  }
+  return events.includes("*") || events.length === 0 ? ["*"] : events;
+}
+
+async function addWebhook() {
+  const url = refs.whUrl.value.trim();
+  if (!url) {
+    refs.whError.hidden = false;
+    refs.whError.textContent = t("views.settings.webhookUrlRequired", {}, "Webhook URL required.");
+    return;
+  }
+  const entry = { url, events: selectedWebhookEvents() };
+  const secret = refs.whSecret.value;
+  if (secret) entry.secret = secret;
+
+  refs.whError.hidden = true;
+  const payload = await patchSettings(
+    { alerts: { sinks: { webhooks: { add: [entry] } } } },
+    { button: refs.whAdd, errorEl: refs.whError },
+  );
+  if (payload && refs) {
+    refs.whUrl.value = "";
+    refs.whSecret.value = "";
+  }
+}
+
+async function removeWebhook(webhook, button) {
+  const confirmText = t(
+    "views.settings.confirmRemoveWebhook",
+    { url: webhook.url },
+    "Remove webhook {url}?",
+  );
+  if (!window.confirm(confirmText)) return;
+  await patchSettings(
+    { alerts: { sinks: { webhooks: { remove: [webhook.id] } } } },
+    { button, errorEl: refs.whError },
+  );
+}
+
+async function replaceWebhookSecret(webhook, button) {
+  const secret = window.prompt(
+    t(
+      "views.settings.secretPrompt",
+      { url: webhook.url },
+      "New HMAC secret for {url} (write-only, never displayed again):",
+    ),
+  );
+  if (secret === null) return; // cancelled
+  if (secret === "") {
+    showToast(t("views.settings.secretEmpty", {}, "Secret unchanged (empty input)."), "error");
+    return;
+  }
+  await patchSettings(
+    { alerts: { sinks: { webhooks: { update: [{ id: webhook.id, secret }] } } } },
+    { button, errorEl: refs.whError },
+  );
+}
+
+// --- Test alert ---------------------------------------------------------------
+
+async function sendTestAlert() {
+  refs.ntfyTest.disabled = true;
+  try {
+    const payload = await fetchJson("/api/fleet/settings/test-alert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const result = payload && payload.result ? payload.result : {};
+    showToast(
+      t(
+        "views.settings.testAlertSent",
+        { dispatched: result.dispatched ?? 0, delivered: result.delivered ?? 0 },
+        "Test alert fired: {delivered}/{dispatched} sinks delivered.",
+      ),
+      "success",
+    );
+  } catch (err) {
+    showToast(
+      t("views.settings.testAlertFailed", { message: err.message }, "Test alert failed: {message}"),
+      "error",
+    );
+  } finally {
+    if (refs) refs.ntfyTest.disabled = false;
+  }
+}
+
+// --- Restart banner -----------------------------------------------------------
+
+function noteRestartRequired(paths) {
+  if (!Array.isArray(paths)) return;
+  restartPaths = new Set([...restartPaths, ...paths]);
+  renderRestartBanner();
+}
+
+function renderRestartBanner() {
+  if (!refs) return;
+  const list = [...restartPaths].sort();
+  refs.restartBanner.hidden = list.length === 0;
+  refs.restartPathsEl.textContent = list.join(", ");
+}
+
+// --- Small helpers ------------------------------------------------------------
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+/** Parse an <input type="number"> within [min, max]; null when invalid. */
+function readBoundedNumber(input, min, max) {
+  const value = Number(input.value);
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < min || value > max) {
+    return null;
+  }
+  return value;
+}
+
+/** Toast using the dashboard's global .toast styles (same as other views). */
+function showToast(message, kind) {
+  let host = document.querySelector(".toast-container");
+  if (!host) {
+    host = el("div", "toast-container");
+    document.body.appendChild(host);
+  }
+  const toast = el("div", `toast ${kind === "error" ? "error" : "success"}`, message);
+  host.appendChild(toast);
+  setTimeout(() => toast.remove(), 5000);
+}

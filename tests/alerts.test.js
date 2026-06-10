@@ -339,6 +339,137 @@ describe("alerts module", () => {
     });
   });
 
+  describe("ntfy sink", () => {
+    const ntfyConfig = (overrides = {}) =>
+      baseConfig({
+        sinks: {
+          ntfy: {
+            enabled: true,
+            server: "https://ntfy.example",
+            topic: "fleet-alerts",
+            ...overrides,
+          },
+        },
+      });
+
+    it("POSTs the message as plain text to <server>/<topic> with publish headers", async () => {
+      const { calls, fetchFn } = makeFetch();
+      const alerts = createAlerts({ config: ntfyConfig(), fetchFn });
+
+      await alerts.fire(baseEvent);
+      assert.strictEqual(calls.length, 1);
+      assert.strictEqual(calls[0].url, "https://ntfy.example/fleet-alerts");
+      assert.strictEqual(calls[0].options.method, "POST");
+      assert.strictEqual(calls[0].options.body, "Node went offline");
+
+      const headers = calls[0].options.headers;
+      assert.strictEqual(headers["Content-Type"], "text/plain; charset=utf-8");
+      assert.strictEqual(headers.Title, "nodeOffline (node=hermes-1)");
+      assert.strictEqual(headers.Priority, "urgent"); // critical → urgent
+      assert.strictEqual(headers.Tags, "rotating_light");
+    });
+
+    it("defaults the server to https://ntfy.sh and strips trailing slashes", async () => {
+      const { calls, fetchFn } = makeFetch();
+      const alerts = createAlerts({
+        config: baseConfig({ sinks: { ntfy: { enabled: true, topic: "t1" } } }),
+        fetchFn,
+      });
+      await alerts.fire(baseEvent);
+      assert.strictEqual(calls[0].url, "https://ntfy.sh/t1");
+
+      const second = makeFetch();
+      const alerts2 = createAlerts({
+        config: baseConfig({
+          sinks: { ntfy: { enabled: true, server: "https://ntfy.example/", topic: "t1" } },
+        }),
+        fetchFn: second.fetchFn,
+      });
+      await alerts2.fire(baseEvent);
+      assert.strictEqual(second.calls[0].url, "https://ntfy.example/t1");
+    });
+
+    it("maps severities to priorities: critical→urgent, warn→high, info→default", async () => {
+      const { calls, fetchFn } = makeFetch();
+      const alerts = createAlerts({ config: ntfyConfig(), fetchFn });
+
+      await alerts.fire({ type: "nodeOffline", severity: "critical", node: "n1", message: "x" });
+      await alerts.fire({ type: "taskStale", severity: "warn", task: "t1", message: "x" });
+      await alerts.fire({ type: "lessonPending", severity: "info", message: "x" });
+
+      assert.deepStrictEqual(
+        calls.map((c) => c.options.headers.Priority),
+        ["urgent", "high", "default"],
+      );
+      assert.deepStrictEqual(
+        calls.map((c) => c.options.headers.Tags),
+        ["rotating_light", "warning", "information_source"],
+      );
+    });
+
+    it("honors a custom priorityMap, falling back per-severity", async () => {
+      const { calls, fetchFn } = makeFetch();
+      const alerts = createAlerts({
+        config: ntfyConfig({ priorityMap: { critical: "max" } }),
+        fetchFn,
+      });
+
+      await alerts.fire({ type: "nodeOffline", severity: "critical", node: "n1", message: "x" });
+      await alerts.fire({ type: "taskStale", severity: "warn", task: "t1", message: "x" });
+
+      assert.strictEqual(calls[0].options.headers.Priority, "max");
+      assert.strictEqual(calls[1].options.headers.Priority, "high"); // default fallback
+    });
+
+    it("uses the title as body when the message is empty and includes task context", async () => {
+      const { calls, fetchFn } = makeFetch();
+      const alerts = createAlerts({ config: ntfyConfig(), fetchFn });
+
+      await alerts.fire({ type: "taskFailed", severity: "warn", task: "tsk_1" });
+      assert.strictEqual(calls[0].options.headers.Title, "taskFailed (task=tsk_1)");
+      assert.strictEqual(calls[0].options.body, "taskFailed (task=tsk_1)");
+    });
+
+    it("skips ntfy when disabled or topic is missing", async () => {
+      const disabled = makeFetch();
+      const alerts1 = createAlerts({
+        config: baseConfig({ sinks: { ntfy: { enabled: false, topic: "t1" } } }),
+        fetchFn: disabled.fetchFn,
+      });
+      await alerts1.fire(baseEvent);
+      assert.strictEqual(disabled.calls.length, 0);
+
+      const noTopic = makeFetch();
+      const alerts2 = createAlerts({
+        config: baseConfig({ sinks: { ntfy: { enabled: true, topic: "" } } }),
+        fetchFn: noTopic.fetchFn,
+      });
+      await alerts2.fire(baseEvent);
+      assert.strictEqual(noTopic.calls.length, 0);
+    });
+
+    it("isolates ntfy failures from other sinks (retry once, never throws)", async () => {
+      const { calls, fetchFn } = makeFetch({ failUrls: ["https://ntfy.example/fleet-alerts"] });
+      const alerts = createAlerts({
+        config: baseConfig({
+          sinks: {
+            ntfy: { enabled: true, server: "https://ntfy.example", topic: "fleet-alerts" },
+            webhooks: [{ url: "https://hook.example/up", events: ["*"] }],
+          },
+        }),
+        fetchFn,
+        retryDelayMs: 5,
+      });
+
+      const result = await alerts.fire(baseEvent);
+      assert.strictEqual(result.fired, true);
+      assert.strictEqual(result.dispatched, 2);
+      assert.strictEqual(result.delivered, 1); // webhook only
+      const ntfyCalls = calls.filter((c) => c.url.includes("ntfy.example"));
+      assert.strictEqual(ntfyCalls.length, 2); // initial attempt + one retry
+    });
+  });
+
   describe("getRecent()", () => {
     it("returns newest first, respecting limit", async () => {
       const alerts = createAlerts({ config: baseConfig(), fetchFn: makeFetch().fetchFn });

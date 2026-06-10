@@ -106,7 +106,25 @@ function createFleetRuntime({ config, broadcast }) {
   const { stateDir, logsDir, briefsDir, workspaceDir } = config;
 
   const audit = createAudit({ logsDir });
-  const alerts = createAlerts({ config: config.alerts });
+
+  // Mutable reference: the settings service hot-swaps the alert engine on
+  // alerts.* config changes (see applyAlertsConfig). Every consumer below
+  // (fireAlert, getSummary) reads the closed-over variable at call time, and
+  // the runtime exposes it through a getter, so mesh / watchdog / kanban /
+  // evolution hooks and the REST routes always use the current instance.
+  let alerts = createAlerts({ config: config.alerts });
+
+  /**
+   * Rebuild the alert engine from a new effective alerts config (hot-apply
+   * path for PATCH /api/fleet/settings). The ring buffer of the previous
+   * instance is dropped by design — recent alerts are transient UI state.
+   *
+   * @param {object} alertsConfig - effective fleet.alerts config (with secrets)
+   */
+  function applyAlertsConfig(alertsConfig) {
+    alerts = createAlerts({ config: alertsConfig });
+    console.log("[Fleet] Alerts engine rebuilt from updated settings");
+  }
 
   /**
    * Fire an alert and broadcast fleet.alert when it actually fired
@@ -412,7 +430,12 @@ function createFleetRuntime({ config, broadcast }) {
     evolution,
     audit,
     cortex,
-    alerts,
+    // Getter so consumers (fleet-routes) always see the current instance
+    // after a settings hot-swap.
+    get alerts() {
+      return alerts;
+    },
+    applyAlertsConfig,
     rateLimiter,
     fireAlert,
     start,

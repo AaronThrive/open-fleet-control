@@ -1,0 +1,444 @@
+<!-- Settings View Partial -->
+<style>
+  /* Settings panel styles — scoped under #settings-view-section */
+  #settings-view-section .set-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-top: 16px;
+    flex: 1;
+  }
+  #settings-view-section .set-error {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    background: rgba(248, 81, 73, 0.1);
+    border: 1px solid rgba(248, 81, 73, 0.4);
+    color: var(--red);
+  }
+
+  /* Amber restart-required banner */
+  #settings-view-section .set-restart-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 16px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    background: rgba(255, 178, 36, 0.1);
+    border: 1px solid rgba(255, 178, 36, 0.5);
+    color: var(--yellow);
+  }
+  #settings-view-section .set-restart-banner code {
+    display: inline-block;
+    margin-top: 4px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.74rem;
+    color: var(--text);
+    user-select: all;
+  }
+  #settings-view-section .set-restart-paths {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-word;
+  }
+
+  /* Section cards */
+  #settings-view-section .set-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px 18px;
+    border-radius: 10px;
+    background: var(--card-hover);
+    border: 1px solid var(--border);
+  }
+  #settings-view-section .set-card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  #settings-view-section .set-card-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  #settings-view-section .set-card-head .set-save-btn {
+    margin-left: auto;
+  }
+  #settings-view-section .set-subtitle {
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+  }
+
+  /* Rows of labeled controls */
+  #settings-view-section .set-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: 0.8rem;
+    color: var(--text);
+  }
+  #settings-view-section .set-row label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+  }
+  #settings-view-section .set-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  #settings-view-section .set-field-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+  }
+  #settings-view-section input[type="text"],
+  #settings-view-section input[type="url"],
+  #settings-view-section input[type="password"],
+  #settings-view-section input[type="number"] {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.78rem;
+  }
+  #settings-view-section input:focus {
+    outline: none;
+    border-color: rgba(var(--accent-rgb), 0.6);
+  }
+  #settings-view-section .set-url-input {
+    min-width: 280px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  #settings-view-section .set-num-input {
+    width: 90px;
+    font-variant-numeric: tabular-nums;
+  }
+  #settings-view-section .set-unit {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+  }
+  #settings-view-section .set-hint {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+  }
+
+  /* Toggle pills (master + rules) */
+  #settings-view-section .set-toggles {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  #settings-view-section .set-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  #settings-view-section .set-toggle:has(input:checked) {
+    border-color: rgba(var(--accent-rgb), 0.55);
+    color: var(--accent);
+    background: rgba(var(--accent-rgb), 0.08);
+  }
+
+  /* Buttons */
+  #settings-view-section .set-save-btn {
+    background: rgba(var(--accent-rgb), 0.12);
+    border: 1px solid rgba(var(--accent-rgb), 0.45);
+    color: var(--accent);
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  #settings-view-section .set-save-btn:hover:not(:disabled) {
+    background: rgba(var(--accent-rgb), 0.25);
+  }
+  #settings-view-section .set-action-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.72rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  #settings-view-section .set-action-btn:hover:not(:disabled) {
+    border-color: rgba(var(--accent-rgb), 0.6);
+    color: var(--accent);
+  }
+  #settings-view-section .set-action-btn.danger:hover:not(:disabled) {
+    border-color: var(--red);
+    color: var(--red);
+  }
+  #settings-view-section button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  /* Webhook list */
+  #settings-view-section .set-webhook-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  #settings-view-section .set-webhook-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    font-size: 0.76rem;
+  }
+  #settings-view-section .set-webhook-url {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text);
+  }
+  #settings-view-section .set-webhook-chip {
+    flex-shrink: 0;
+    font-size: 0.64rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+  #settings-view-section .set-webhook-chip.secret {
+    border-color: rgba(var(--accent-rgb), 0.45);
+    color: var(--accent);
+  }
+  #settings-view-section .set-inline-error {
+    font-size: 0.76rem;
+    color: var(--red);
+  }
+  #settings-view-section .set-muted {
+    font-size: 0.76rem;
+    color: var(--text-muted);
+  }
+</style>
+<div class="section" id="settings-view-section">
+  <section class="view-panel">
+    <div class="view-header">
+      <div class="view-title">
+        <span class="view-icon">⚙️</span>
+        <span data-i18n="views.settings.title">Settings</span>
+      </div>
+      <div class="view-subtitle" data-i18n="views.settings.subtitle">
+        Alerts, sinks, poll intervals, and the validation gate — persisted to
+        config/dashboard.local.json
+      </div>
+    </div>
+
+    <!-- Loading / error feedback (managed by settings.js) -->
+    <div class="view-loading" id="set-loading" data-i18n="views.settings.loading">
+      Loading settings...
+    </div>
+    <div class="set-error" id="set-fetch-error" hidden></div>
+
+    <!-- Amber restart-required banner -->
+    <div class="set-restart-banner" id="set-restart-banner" hidden>
+      <span>⚠️</span>
+      <div>
+        <div>
+          <span data-i18n="views.settings.restartBanner">Saved — restart required for:</span>
+          <span class="set-restart-paths" id="set-restart-paths"></span>
+        </div>
+        <code>systemctl --user restart open-fleet-control</code>
+      </div>
+    </div>
+
+    <div class="set-body" id="set-body" hidden>
+      <!-- ============================ Alerts ============================ -->
+      <div class="set-card">
+        <div class="set-card-head">
+          <span class="set-card-title" data-i18n="views.settings.alertsTitle">🔔 Alerts</span>
+          <button type="button" class="set-save-btn" id="set-alerts-save">Save alerts</button>
+        </div>
+
+        <div class="set-row">
+          <label class="set-toggle">
+            <input type="checkbox" id="set-alerts-enabled" />
+            <span data-i18n="views.settings.alertsEnabled">Alerts enabled (master switch)</span>
+          </label>
+        </div>
+
+        <div class="set-subtitle" data-i18n="views.settings.rulesTitle">Rules</div>
+        <div class="set-toggles" id="set-rules"></div>
+
+        <div class="set-subtitle" data-i18n="views.settings.slackTitle">
+          Slack (via OpenClaw gateway)
+        </div>
+        <div class="set-row">
+          <label class="set-toggle">
+            <input type="checkbox" id="set-slack-enabled" />
+            <span data-i18n="views.settings.enabled">Enabled</span>
+          </label>
+          <div class="set-field">
+            <span class="set-field-label" data-i18n="views.settings.slackGatewayUrl"
+              >Gateway URL</span
+            >
+            <input
+              type="url"
+              class="set-url-input"
+              id="set-slack-url"
+              placeholder="https://gateway.example/slack"
+            />
+          </div>
+          <div class="set-field">
+            <span class="set-field-label" data-i18n="views.settings.slackChannel">Channel</span>
+            <input type="text" id="set-slack-channel" placeholder="#ops" maxlength="120" />
+          </div>
+        </div>
+
+        <div class="set-subtitle" data-i18n="views.settings.ntfyTitle">ntfy push</div>
+        <div class="set-row">
+          <label class="set-toggle">
+            <input type="checkbox" id="set-ntfy-enabled" />
+            <span data-i18n="views.settings.enabled">Enabled</span>
+          </label>
+          <div class="set-field">
+            <span class="set-field-label" data-i18n="views.settings.ntfyServer">Server</span>
+            <input
+              type="url"
+              class="set-url-input"
+              id="set-ntfy-server"
+              placeholder="https://ntfy.sh"
+            />
+          </div>
+          <div class="set-field">
+            <span class="set-field-label" data-i18n="views.settings.ntfyTopic">Topic</span>
+            <input
+              type="text"
+              class="set-url-input"
+              id="set-ntfy-topic"
+              placeholder="my-fleet-topic"
+              maxlength="256"
+              autocomplete="off"
+            />
+          </div>
+          <button type="button" class="set-action-btn" id="set-ntfy-test">Send test alert</button>
+        </div>
+        <div class="set-hint" data-i18n="views.settings.ntfyHint">
+          The topic name is the only access control on ntfy.sh — treat it like a secret. "Send test
+          alert" fires through the saved server-side config, so save first.
+        </div>
+
+        <div class="set-inline-error" id="set-alerts-error" hidden></div>
+
+        <div class="set-subtitle" data-i18n="views.settings.webhooksTitle">Webhooks</div>
+        <div class="set-webhook-list" id="set-webhooks-list"></div>
+        <div class="set-muted" id="set-webhooks-empty" data-i18n="views.settings.webhooksEmpty">
+          No webhooks configured.
+        </div>
+        <div class="set-row">
+          <input
+            type="url"
+            class="set-url-input"
+            id="set-wh-url"
+            placeholder="https://hooks.example/alerts"
+          />
+          <input
+            type="password"
+            id="set-wh-secret"
+            placeholder="HMAC secret (optional)"
+            data-i18n-placeholder="views.settings.webhookSecretPlaceholder"
+            autocomplete="off"
+          />
+        </div>
+        <div class="set-toggles" id="set-wh-events"></div>
+        <div class="set-row">
+          <button type="button" class="set-action-btn" id="set-wh-add">Add webhook</button>
+          <span class="set-hint" data-i18n="views.settings.webhookHint">
+            Secrets are write-only: stored server-side, never displayed again. Webhook changes apply
+            immediately (no separate save).
+          </span>
+        </div>
+        <div class="set-inline-error" id="set-wh-error" hidden></div>
+      </div>
+
+      <!-- =========================== Intervals ========================== -->
+      <div class="set-card">
+        <div class="set-card-head">
+          <span class="set-card-title" data-i18n="views.settings.intervalsTitle">⏱️ Intervals</span>
+          <button type="button" class="set-save-btn" id="set-intervals-save">Save intervals</button>
+        </div>
+        <div class="set-row">
+          <div class="set-field">
+            <span class="set-field-label" data-i18n="views.settings.meshInterval"
+              >Mesh poll (seconds)</span
+            >
+            <input type="number" class="set-num-input" id="set-mesh-interval" min="5" max="3600" />
+          </div>
+          <div class="set-field">
+            <span class="set-field-label" data-i18n="views.settings.federationInterval"
+              >Federation poll (seconds)</span
+            >
+            <input type="number" class="set-num-input" id="set-fed-interval" min="5" max="3600" />
+          </div>
+          <div class="set-field">
+            <span class="set-field-label" data-i18n="views.settings.watchdogThreshold"
+              >Watchdog threshold (minutes)</span
+            >
+            <input
+              type="number"
+              class="set-num-input"
+              id="set-watchdog-threshold"
+              min="1"
+              max="60"
+            />
+          </div>
+        </div>
+        <div class="set-hint" data-i18n="views.settings.intervalsHint">
+          Allowed range: 5 seconds to 1 hour. Interval changes take effect after a service restart.
+        </div>
+        <div class="set-inline-error" id="set-intervals-error" hidden></div>
+      </div>
+
+      <!-- ============================= Gate ============================= -->
+      <div class="set-card">
+        <div class="set-card-head">
+          <span class="set-card-title" data-i18n="views.settings.gateTitle"
+            >🚦 Validation gate</span
+          >
+          <button type="button" class="set-save-btn" id="set-gate-save">Save gate</button>
+        </div>
+        <div class="set-row">
+          <label class="set-toggle">
+            <input type="checkbox" id="set-gate-default" />
+            <span data-i18n="views.settings.gateDefault"
+              >Gate new lessons by default (require approval before adoption)</span
+            >
+          </label>
+        </div>
+        <div class="set-inline-error" id="set-gate-error" hidden></div>
+      </div>
+    </div>
+  </section>
+</div>

@@ -1,6 +1,11 @@
 <!-- Mesh View Partial -->
 <style>
   /* Mesh panel styles — scoped under #mesh-view-section */
+  /* The hidden attribute must beat the explicit display rules below
+     (UA [hidden] style loses to author display:flex/grid otherwise). */
+  #mesh-view-section [hidden] {
+    display: none !important;
+  }
   #mesh-view-section .mesh-body {
     display: flex;
     flex-direction: column;
@@ -205,6 +210,70 @@
     stroke: var(--accent);
     stroke-width: 1.5;
   }
+  /* Node vitals (mem / disk / cpu bars + uptime) */
+  #mesh-view-section .mesh-node-vitals {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  #mesh-view-section .mesh-vital {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.68rem;
+    color: var(--text-muted);
+  }
+  #mesh-view-section .mesh-vital-label {
+    width: 30px;
+    flex-shrink: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  #mesh-view-section .mesh-vital-bar {
+    flex: 1;
+    height: 5px;
+    border-radius: 999px;
+    background: rgba(var(--accent-rgb), 0.08);
+    border: 1px solid rgba(var(--accent-rgb), 0.18);
+    overflow: hidden;
+  }
+  #mesh-view-section .mesh-vital-fill {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 6px rgba(var(--accent-rgb), 0.7);
+    transition: width 0.3s ease;
+  }
+  #mesh-view-section .mesh-vital-fill.warn {
+    background: var(--yellow);
+    box-shadow: 0 0 6px rgba(255, 178, 36, 0.6);
+  }
+  #mesh-view-section .mesh-vital-fill.crit {
+    background: var(--red);
+    box-shadow: 0 0 6px rgba(248, 81, 73, 0.6);
+  }
+  #mesh-view-section .mesh-vital-value {
+    flex-shrink: 0;
+    min-width: 96px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  #mesh-view-section .mesh-vital-meta {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+  }
+  #mesh-view-section .mesh-self-vitals {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-left: auto;
+    width: 240px;
+    min-width: 180px;
+    flex-shrink: 1;
+  }
   #mesh-view-section .mesh-node-foot {
     display: flex;
     align-items: center;
@@ -394,6 +463,8 @@
           <div class="mesh-self-hostname" id="mesh-self-hostname"></div>
           <div class="mesh-self-fqdn" id="mesh-self-fqdn"></div>
         </div>
+        <!-- Own host vitals (filled by mesh.js from local /api/state) -->
+        <div class="mesh-self-vitals" id="mesh-self-vitals" hidden></div>
         <div class="mesh-self-tag" data-i18n="views.mesh.selfTag">This dashboard</div>
       </div>
 

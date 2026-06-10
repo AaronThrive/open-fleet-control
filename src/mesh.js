@@ -3,8 +3,9 @@
  *
  * Maintains a registry of fleet nodes (persisted atomically to
  * state/mesh-nodes.json), polls each registered node's health endpoint over
- * the tailnet, tracks latency history for sparklines, and aggregates
- * best-effort cost rollups from remote command-center /api/state endpoints.
+ * the tailnet, tracks latency history for sparklines, and collects
+ * best-effort cost rollups and host vitals (cpu / memory / disk / uptime)
+ * from remote command-center /api/state endpoints.
  *
  * Node URLs are composed at runtime from the MagicDNS suffix reported by the
  * tailscale adapter — no tailnet name is ever hardcoded, and no tokens are
@@ -20,6 +21,10 @@ const REGISTRY_FILENAME = "mesh-nodes.json";
 const DEFAULT_INTERVAL_MS = 15000;
 const DEFAULT_HEALTH_TIMEOUT_MS = 5000;
 const LATENCY_SAMPLE_LIMIT = 60; // ring buffer size for sparklines
+// /api/state piggyback cadence: refresh remote vitals + costs every Nth health
+// poll (N=4 at the default 15s interval => roughly once per minute) instead of
+// the old once-only version probe, without adding any extra request types.
+const STATE_REFRESH_EVERY_N_POLLS = 4;
 const VALID_PLATFORMS = ["linux", "windows-wsl", "macos", "unknown"];
 const HOSTNAME_PATTERN = /^[a-z0-9-]+$/;
 const MAX_LABEL_LENGTH = 120;
@@ -122,6 +127,59 @@ function extractNodeCosts(state) {
   };
 }
 
+/**
+ * Best-effort extraction of host vitals from a remote command-center
+ * /api/state payload. Mirrors this dashboard's own top-level `vitals` block
+ * (hostname, uptime, cpu, memory, disk, temperature) — remote nodes run the
+ * same software, but older versions may omit the block entirely and any
+ * field may be missing or malformed, so every leaf degrades to null.
+ *
+ * @param {object|null} state - remote /api/state response body
+ * @returns {{
+ *   hostname: string|null,
+ *   uptime: string|number|null,
+ *   cpu: {load: number|null, percent: number|null, cores: number|null},
+ *   memory: {used: number|null, total: number|null, pct: number|null},
+ *   disk: {used: number|null, free: number|null, total: number|null, pct: number|null},
+ *   temperature: number|null
+ * }|null} null when the payload has no usable vitals block
+ */
+function extractNodeVitals(state) {
+  if (!state || typeof state !== "object") return null;
+  const vitals = state.vitals;
+  if (!vitals || typeof vitals !== "object") return null;
+
+  const cpu = vitals.cpu && typeof vitals.cpu === "object" ? vitals.cpu : {};
+  const memory = vitals.memory && typeof vitals.memory === "object" ? vitals.memory : {};
+  const disk = vitals.disk && typeof vitals.disk === "object" ? vitals.disk : {};
+  const load = Array.isArray(cpu.loadAvg) ? pickNumber(cpu.loadAvg[0]) : pickNumber(cpu.load);
+  const uptimeOk =
+    typeof vitals.uptime === "string" ||
+    (typeof vitals.uptime === "number" && Number.isFinite(vitals.uptime));
+
+  return {
+    hostname: typeof vitals.hostname === "string" ? vitals.hostname : null,
+    uptime: uptimeOk ? vitals.uptime : null,
+    cpu: {
+      load,
+      percent: pickNumber(cpu.usage, cpu.percent, cpu.pct),
+      cores: pickNumber(cpu.cores),
+    },
+    memory: {
+      used: pickNumber(memory.used),
+      total: pickNumber(memory.total),
+      pct: pickNumber(memory.percent, memory.pct),
+    },
+    disk: {
+      used: pickNumber(disk.used),
+      free: pickNumber(disk.free),
+      total: pickNumber(disk.total),
+      pct: pickNumber(disk.percent, disk.pct),
+    },
+    temperature: pickNumber(vitals.temperature),
+  };
+}
+
 function createInitialHealth() {
   return {
     status: "unknown",
@@ -168,7 +226,9 @@ function createMesh(options = {}) {
   // Module-level state
   let nodes = loadRegistry();
   const health = {}; // nodeId -> health record (records replaced immutably)
+  const nodeStats = {}; // nodeId -> { costs, vitals, vitalsAt } cached from /api/state
   let pollTimer = null;
+  let pollCycle = 0; // increments once per _pollOnce; drives the Nth-poll state refresh
 
   // ---------------------------------------------------------------------
   // Registry persistence (atomic: temp file + rename)
@@ -227,6 +287,7 @@ function createMesh(options = {}) {
     }
     nodes = nodes.filter((n) => n.id !== target.id);
     delete health[target.id];
+    delete nodeStats[target.id];
     saveRegistry();
     return target;
   }
@@ -266,6 +327,22 @@ function createMesh(options = {}) {
     }
   }
 
+  /**
+   * Refresh the per-node /api/state cache (costs + vitals) from an already
+   * fetched remote state body. Never issues its own HTTP request; a null
+   * body (failed fetch) keeps the last good cache so transient blips do not
+   * wipe vitals. Records replaced immutably.
+   */
+  function updateNodeStatsCache(node, remoteState) {
+    if (!remoteState) return;
+    const vitals = extractNodeVitals(remoteState);
+    nodeStats[node.id] = {
+      costs: extractNodeCosts(remoteState),
+      vitals,
+      vitalsAt: vitals ? nowFn() : null,
+    };
+  }
+
   function failureHealth(prev, peer, checkedAt) {
     // Connection refused / timeout while the tailscale peer reports
     // Online=true means the host is up but the service is not exposed
@@ -283,7 +360,7 @@ function createMesh(options = {}) {
     };
   }
 
-  async function pollNode(node, tsStatus) {
+  async function pollNode(node, tsStatus, cycle) {
     const suffix = tsStatus.available && tsStatus.self ? tsStatus.self.magicDnsSuffix : "";
     const peer =
       tsStatus.available && Array.isArray(tsStatus.peers)
@@ -308,9 +385,18 @@ function createMesh(options = {}) {
         }
         if (body && typeof body.version === "string") {
           version = body.version;
-        } else if (version === null) {
-          // Cheap one-time version probe via /api/state (never fails health)
+        }
+        // Piggyback /api/state on every Nth poll cycle (replaces the old
+        // once-only version probe) so cached vitals + costs stay fresh
+        // (~1 min at the default 15s interval) without extra request types.
+        // Fires immediately for never-cached nodes (first poll / freshly
+        // registered) and while the version is still unknown. Best-effort:
+        // never fails health.
+        const stateDue =
+          cycle % STATE_REFRESH_EVERY_N_POLLS === 0 || !nodeStats[node.id] || version === null;
+        if (stateDue) {
           const remoteState = await fetchNodeState(node, suffix);
+          updateNodeStatsCache(node, remoteState);
           if (remoteState && typeof remoteState.version === "string") {
             version = remoteState.version;
           }
@@ -343,7 +429,8 @@ function createMesh(options = {}) {
    */
   async function _pollOnce() {
     const tsStatus = await tailscale.getStatus();
-    await Promise.all(nodes.map((node) => pollNode(node, tsStatus)));
+    const cycle = pollCycle++;
+    await Promise.all(nodes.map((node) => pollNode(node, tsStatus, cycle)));
   }
 
   function start() {
@@ -436,6 +523,8 @@ function createMesh(options = {}) {
     const tsStatus = await tailscale.getStatus();
     const suffix = tsStatus.available && tsStatus.self ? tsStatus.self.magicDnsSuffix : "";
     const remoteState = await fetchNodeState(node, suffix);
+    // Opportunistic cache refresh — same fetch, no extra HTTP requests.
+    updateNodeStatsCache(node, remoteState);
     return extractNodeCosts(remoteState);
   }
 
@@ -471,7 +560,7 @@ function createMesh(options = {}) {
 
   /**
    * Everything the UI needs: self identity, registered nodes with health +
-   * sparkline data + version, and discovery candidates.
+   * sparkline data + version + cached vitals, and discovery candidates.
    */
   async function getState() {
     const [tsStatus, discovery] = await Promise.all([tailscale.getStatus(), discoverPeers()]);
@@ -483,11 +572,16 @@ function createMesh(options = {}) {
         available: tsStatus.available,
         error: tsStatus.available ? null : tsStatus.error,
       },
-      nodes: nodes.map((node) => ({
-        ...node,
-        url: composeNodeUrl(node, suffix),
-        health: health[node.id] || createInitialHealth(),
-      })),
+      nodes: nodes.map((node) => {
+        const stats = nodeStats[node.id];
+        return {
+          ...node,
+          url: composeNodeUrl(node, suffix),
+          health: health[node.id] || createInitialHealth(),
+          vitals: stats ? stats.vitals : null,
+          vitalsAt: stats ? stats.vitalsAt : null,
+        };
+      }),
       candidates: discovery.candidates,
       intervalMs,
       timestamp: nowFn(),
@@ -512,7 +606,9 @@ module.exports = {
   composeNodeUrl,
   validateNodeInput,
   extractNodeCosts,
+  extractNodeVitals,
   LATENCY_SAMPLE_LIMIT,
+  STATE_REFRESH_EVERY_N_POLLS,
   VALID_PLATFORMS,
   DEFAULT_INTERVAL_MS,
   DEFAULT_HEALTH_TIMEOUT_MS,

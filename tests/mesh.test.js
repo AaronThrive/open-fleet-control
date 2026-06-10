@@ -8,7 +8,9 @@ const {
   composeNodeUrl,
   validateNodeInput,
   extractNodeCosts,
+  extractNodeVitals,
   LATENCY_SAMPLE_LIMIT,
+  STATE_REFRESH_EVERY_N_POLLS,
 } = require("../src/mesh");
 
 const SUFFIX = "test-tailnet.ts.net";
@@ -245,7 +247,11 @@ describe("mesh module", () => {
       const state = await mesh.getState();
       const health = state.nodes[0].health;
 
-      assert.deepStrictEqual(fetchedUrls, [`https://atlas.${SUFFIX}/health`]);
+      // First poll: /health plus the cycle-0 /api/state piggyback (vitals+costs).
+      assert.deepStrictEqual(fetchedUrls, [
+        `https://atlas.${SUFFIX}/health`,
+        `https://atlas.${SUFFIX}/api/state`,
+      ]);
       assert.strictEqual(health.status, "online");
       assert.strictEqual(typeof health.latencyMs, "number");
       assert.strictEqual(health.consecutiveFailures, 0);
@@ -465,6 +471,191 @@ describe("mesh module", () => {
       assert.strictEqual(costs.byNode[record.id].stats, null);
       assert.strictEqual(costs.totals.cost24h, 0);
       assert.strictEqual(costs.totals.nodesReporting, 0);
+    });
+  });
+
+  describe("vitals extraction", () => {
+    // Mirrors the live dashboard's own /api/state vitals block (oc-bot-1).
+    const LIVE_VITALS = {
+      hostname: "oc-bot-1",
+      uptime: "54 days",
+      cpu: {
+        loadAvg: [5.97, 8.72, 8.32],
+        cores: 4,
+        usage: 94,
+        userPercent: 61.88,
+        brand: "AMD EPYC",
+      },
+      memory: { used: 12079714304, free: 4689350656, total: 16769064960, percent: 72 },
+      disk: { used: 67102466048, free: 139781038080, total: 206900281344, percent: 32, iops: 536 },
+      temperature: null,
+      temperatureNote: null,
+    };
+
+    it("returns null for non-objects and payloads without a vitals block", () => {
+      assert.strictEqual(extractNodeVitals(null), null);
+      assert.strictEqual(extractNodeVitals("garbage"), null);
+      assert.strictEqual(extractNodeVitals(42), null);
+      assert.strictEqual(extractNodeVitals({}), null);
+      assert.strictEqual(extractNodeVitals({ version: "1.0.0" }), null);
+      assert.strictEqual(extractNodeVitals({ vitals: "not-an-object" }), null);
+      assert.strictEqual(extractNodeVitals({ vitals: null }), null);
+    });
+
+    it("mirrors the live /api/state vitals shape", () => {
+      const vitals = extractNodeVitals({ vitals: LIVE_VITALS });
+      assert.deepStrictEqual(vitals, {
+        hostname: "oc-bot-1",
+        uptime: "54 days",
+        cpu: { load: 5.97, percent: 94, cores: 4 },
+        memory: { used: 12079714304, total: 16769064960, pct: 72 },
+        disk: { used: 67102466048, free: 139781038080, total: 206900281344, pct: 32 },
+        temperature: null,
+      });
+    });
+
+    it("tolerates partial and malformed sub-blocks with nulls", () => {
+      const vitals = extractNodeVitals({
+        vitals: {
+          hostname: 42, // wrong type -> null
+          uptime: 123456, // numeric uptime (seconds) is accepted
+          cpu: { load: 1.5, pct: "high" }, // scalar load alias; bad pct -> null
+          memory: "busted", // wrong type -> all-null block
+          disk: { pct: 10 }, // pct alias accepted; missing sizes -> null
+          temperature: 61.5,
+        },
+      });
+      assert.deepStrictEqual(vitals, {
+        hostname: null,
+        uptime: 123456,
+        cpu: { load: 1.5, percent: null, cores: null },
+        memory: { used: null, total: null, pct: null },
+        disk: { used: null, free: null, total: null, pct: 10 },
+        temperature: 61.5,
+      });
+    });
+
+    it("returns an all-null shape for an empty vitals block", () => {
+      const vitals = extractNodeVitals({ vitals: {} });
+      assert.deepStrictEqual(vitals, {
+        hostname: null,
+        uptime: null,
+        cpu: { load: null, percent: null, cores: null },
+        memory: { used: null, total: null, pct: null },
+        disk: { used: null, free: null, total: null, pct: null },
+        temperature: null,
+      });
+    });
+
+    function vitalsFetchFn({ stateBody, counters }) {
+      return async (url) => {
+        if (String(url).endsWith("/api/state")) {
+          counters.stateFetches++;
+          if (stateBody instanceof Error) throw stateBody;
+          return okResponse(stateBody);
+        }
+        return okResponse({ status: "ok", version: "1.0.0" });
+      };
+    }
+
+    it("caches vitals from the poll piggyback and exposes them in getState()", async () => {
+      const counters = { stateFetches: 0 };
+      const mesh = makeMesh({
+        fetchFn: vitalsFetchFn({ stateBody: { version: "1.0.0", vitals: LIVE_VITALS }, counters }),
+      });
+      mesh.registerNode({ hostname: "atlas" });
+
+      await mesh._pollOnce();
+      const state = await mesh.getState();
+      const node = state.nodes[0];
+
+      assert.strictEqual(node.vitals.hostname, "oc-bot-1");
+      assert.strictEqual(node.vitals.memory.pct, 72);
+      assert.strictEqual(node.vitals.disk.pct, 32);
+      assert.strictEqual(typeof node.vitalsAt, "number");
+    });
+
+    it("refreshes /api/state on the first poll and every Nth cycle thereafter", async () => {
+      const counters = { stateFetches: 0 };
+      const mesh = makeMesh({
+        fetchFn: vitalsFetchFn({ stateBody: { version: "1.0.0", vitals: LIVE_VITALS }, counters }),
+      });
+      mesh.registerNode({ hostname: "atlas" });
+
+      // Cycles 0..N: piggyback fires on cycle 0 (first poll / no cache) and
+      // again on cycle N — exactly 2 state fetches for N+1 health polls.
+      for (let i = 0; i <= STATE_REFRESH_EVERY_N_POLLS; i++) {
+        await mesh._pollOnce();
+      }
+      assert.strictEqual(counters.stateFetches, 2);
+    });
+
+    it("keeps the last good vitals when a later state fetch fails", async () => {
+      const counters = { stateFetches: 0 };
+      let failState = false;
+      const mesh = makeMesh({
+        fetchFn: async (url) => {
+          if (String(url).endsWith("/api/state")) {
+            counters.stateFetches++;
+            if (failState) throw new Error("connect ECONNREFUSED");
+            return okResponse({ version: "1.0.0", vitals: LIVE_VITALS });
+          }
+          return okResponse({ status: "ok", version: "1.0.0" });
+        },
+      });
+      mesh.registerNode({ hostname: "atlas" });
+
+      await mesh._pollOnce(); // cycle 0: vitals cached
+      const cached = (await mesh.getState()).nodes[0];
+      assert.strictEqual(cached.vitals.hostname, "oc-bot-1");
+
+      failState = true;
+      for (let i = 0; i < STATE_REFRESH_EVERY_N_POLLS; i++) {
+        await mesh._pollOnce(); // includes the failing cycle-N refresh
+      }
+      const after = (await mesh.getState()).nodes[0];
+      assert.strictEqual(after.vitals.hostname, "oc-bot-1", "last good vitals retained");
+      assert.strictEqual(after.vitalsAt, cached.vitalsAt, "vitalsAt unchanged on failure");
+      assert.ok(counters.stateFetches >= 2, "the cycle-N refresh was attempted");
+    });
+
+    it("reports null vitals for nodes whose /api/state has no vitals block", async () => {
+      const counters = { stateFetches: 0 };
+      const mesh = makeMesh({
+        fetchFn: vitalsFetchFn({ stateBody: { version: "0.9.0" }, counters }),
+      });
+      mesh.registerNode({ hostname: "atlas" });
+
+      await mesh._pollOnce();
+      const node = (await mesh.getState()).nodes[0];
+      assert.strictEqual(node.vitals, null);
+      assert.strictEqual(node.vitalsAt, null);
+      // Costs from the same fetch are still cached (all-null shape).
+      assert.strictEqual(node.health.status, "online");
+    });
+
+    it("collectNodeStats refreshes the vitals cache from the same fetch", async () => {
+      const mesh = makeMesh({
+        fetchFn: async (url) => {
+          if (String(url).endsWith("/api/state")) {
+            return okResponse({
+              version: "1.0.0",
+              vitals: LIVE_VITALS,
+              llmUsage: { usage24h: { cost: 2 } },
+            });
+          }
+          return okResponse({ status: "ok" });
+        },
+      });
+      mesh.registerNode({ hostname: "atlas" });
+
+      // No poll has run — collectNodeStats alone must populate the cache.
+      const stats = await mesh.collectNodeStats((await mesh.getState()).nodes[0]);
+      assert.strictEqual(stats.cost24h, 2);
+
+      const node = (await mesh.getState()).nodes[0];
+      assert.strictEqual(node.vitals.hostname, "oc-bot-1");
+      assert.strictEqual(typeof node.vitalsAt, "number");
     });
   });
 

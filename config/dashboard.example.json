@@ -116,8 +116,26 @@
           "gatewayUrl": "",
           "channel": ""
         },
+        "ntfy": {
+          "_comment": "ntfy.sh push notifications. The topic name is the only access control — treat it like a secret.",
+          "enabled": false,
+          "server": "https://ntfy.sh",
+          "topic": ""
+        },
         "webhooks": []
       }
+    },
+    "docker": {
+      "_comment": "Read-only Docker container panel. portainerUrl (e.g. \"https://host:9443\") enables per-container deep links while a running Portainer container is detected; null disables links.",
+      "portainerUrl": null
+    },
+    "usage": {
+      "_comment": "LLM usage source paths (supports ~ and $HOME). headroomStats empty = reuse fleet.cortex.headroomStats. openrouterKey: OPENROUTER_API_KEY env var takes precedence.",
+      "claudeProjectsDir": "~/.claude/projects",
+      "codexDir": "~/.codex",
+      "nineRouterDb": "~/.openclaw/9router/data/db/data.sqlite",
+      "headroomStats": "",
+      "openrouterKey": ""
     },
     "validationGate": {
       "_comment": "Default for the evolution lessons gate (true = lessons require approval)",

@@ -21,6 +21,13 @@
     "cortex",
     "evolution",
     "logs",
+    "sessions",
+    "cron",
+    "vitals",
+    "llm-usage",
+    "tokens",
+    "settings",
+    "docker",
   ];
   const VIEW_HASH_PREFIX = "#view-";
 
