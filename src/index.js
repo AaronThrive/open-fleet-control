@@ -26,7 +26,7 @@ for (let i = 0; i < args.length; i++) {
     case "--help":
     case "-h":
       console.log(`
-OpenClaw Command Center
+OpenFleetControl
 
 Usage: node lib/server.js [options]
 
@@ -394,7 +394,7 @@ const server = http.createServer((req, res) => {
     sseClients.add(res);
     console.log(`[SSE] Client connected (total: ${sseClients.size})`);
 
-    sendSSE(res, "connected", { message: "Connected to Command Center", timestamp: Date.now() });
+    sendSSE(res, "connected", { message: "Connected to OpenFleetControl", timestamp: Date.now() });
 
     const cachedState = state.getFullState();
     if (cachedState) {
@@ -426,11 +426,11 @@ const server = http.createServer((req, res) => {
     res.end(
       JSON.stringify(
         {
-          name: "OpenClaw Command Center",
+          name: "OpenFleetControl",
           version: getVersion(),
           description: "A Starcraft-inspired dashboard for AI agent orchestration",
           license: "MIT",
-          repository: "https://github.com/jontsai/openclaw-command-center",
+          repository: "https://github.com/AaronThrive/open-fleet-control",
           builtWith: ["OpenClaw", "Node.js", "Vanilla JS"],
           inspirations: ["Starcraft", "Inside Out", "iStatMenus", "DaisyDisk", "Gmail"],
         },
@@ -635,7 +635,7 @@ const server = http.createServer((req, res) => {
 // ============================================================================
 server.listen(PORT, () => {
   const profile = process.env.OPENCLAW_PROFILE;
-  console.log(`\u{1F99E} OpenClaw Command Center running at http://localhost:${PORT}`);
+  console.log(`\u{1F99E} OpenFleetControl running at http://localhost:${PORT}`);
   if (profile) {
     console.log(`   Profile: ${profile} (~/.openclaw-${profile})`);
   }
