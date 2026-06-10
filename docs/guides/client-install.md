@@ -1,6 +1,6 @@
 # Client Install Runbook — Fleet Control Appliance
 
-This is the full runbook for installing Open Fleet Control on a client or
+This is the full runbook for installing OpenFleetControl on a client or
 appliance machine as part of the `openclaw-stack` appliance, running on the
 **client's own tailnet**. Every step is literal: click here, type this.
 
@@ -9,10 +9,10 @@ appliance machine as part of the `openclaw-stack` appliance, running on the
 Two extra containers join the appliance Compose stack when the fleet-control
 flag is enabled:
 
-| Container | Image | Role |
-| --- | --- | --- |
-| `<instance>-fleet-control-tailscale` | `tailscale/tailscale` | Dedicated tailnet node for the dashboard. Applies a declarative serve config (`TS_SERVE_CONFIG`) that proxies tailnet HTTPS 443 to the dashboard port on loopback. |
-| `<instance>-fleet-control` | `fleet-control:latest` | The dashboard itself. Shares the sidecar's network namespace (`network_mode: service:fleet-control-tailscale`), listens on `127.0.0.1:3333`. |
+| Container                            | Image                  | Role                                                                                                                                                               |
+| ------------------------------------ | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `<instance>-fleet-control-tailscale` | `tailscale/tailscale`  | Dedicated tailnet node for the dashboard. Applies a declarative serve config (`TS_SERVE_CONFIG`) that proxies tailnet HTTPS 443 to the dashboard port on loopback. |
+| `<instance>-fleet-control`           | `fleet-control:latest` | The dashboard itself. Shares the sidecar's network namespace (`network_mode: service:fleet-control-tailscale`), listens on `127.0.0.1:3333`.                       |
 
 The result: the dashboard is reachable at
 `https://<FLEET_CONTROL_TAILSCALE_HOSTNAME>.<client-tailnet>.ts.net` from
@@ -206,10 +206,10 @@ Worth stating explicitly during client handoff:
 
 ## Troubleshooting
 
-| Symptom | Fix |
-| --- | --- |
-| Installer aborts at "Fleet Control dashboard" step | Build the image: `docker build -t fleet-control:latest /path/to/open-fleet-control`. |
-| Sidecar restarts in a loop | Auth key invalid/expired or not tagged per ACL. Check `docker logs <instance>-fleet-control-tailscale`, regenerate the key, delete `$STATE_ROOT/fleet-control-tailscale.env`, re-run `render-config.sh`. |
-| Browser cannot resolve the FQDN | MagicDNS disabled on the tailnet, or the viewing machine is not on the tailnet. |
-| Dashboard loads but Discover shows "tailscale unavailable" | The container reaches Tailscale via `TAILSCALE_LOCAL_API_ENDPOINT`; confirm the sidecar is healthy (`docker inspect --format '{{.State.Health.Status}}' <instance>-fleet-control-tailscale`). |
-| Cortex panels empty | Expected unless cortex paths are set via `FLEET_CONTROL_CONFIG_JSON` and the corresponding read-only mounts contain data. |
+| Symptom                                                    | Fix                                                                                                                                                                                                      |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Installer aborts at "Fleet Control dashboard" step         | Build the image: `docker build -t fleet-control:latest /path/to/open-fleet-control`.                                                                                                                     |
+| Sidecar restarts in a loop                                 | Auth key invalid/expired or not tagged per ACL. Check `docker logs <instance>-fleet-control-tailscale`, regenerate the key, delete `$STATE_ROOT/fleet-control-tailscale.env`, re-run `render-config.sh`. |
+| Browser cannot resolve the FQDN                            | MagicDNS disabled on the tailnet, or the viewing machine is not on the tailnet.                                                                                                                          |
+| Dashboard loads but Discover shows "tailscale unavailable" | The container reaches Tailscale via `TAILSCALE_LOCAL_API_ENDPOINT`; confirm the sidecar is healthy (`docker inspect --format '{{.State.Health.Status}}' <instance>-fleet-control-tailscale`).            |
+| Cortex panels empty                                        | Expected unless cortex paths are set via `FLEET_CONTROL_CONFIG_JSON` and the corresponding read-only mounts contain data.                                                                                |

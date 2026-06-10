@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Rebrand** — the dashboard is now **OpenFleetControl**, built by Aaron May. All user-visible
+  "OpenClaw Command Center" / "Command Center" strings in the UI, page titles, sidebar, About
+  panel, and docs were renamed; upstream attribution now lives in the README Credits line and
+  the LICENSE file.
+
+### Removed
+
+- **zh-CN locale** — the dashboard is English-only: `public/locales/zh-CN.json` and
+  `README.zh-CN.md` were deleted, the header language switcher was removed, `public/js/i18n.js`
+  was simplified to an English-only loader (the `t()` / `data-i18n` machinery and its
+  English-fallback chain are unchanged), and `scripts/checks/i18n-coverage.mjs` now validates
+  `en.json` only.
+
 ## 1.6.0 — 2026-06-10
 
 ### Added

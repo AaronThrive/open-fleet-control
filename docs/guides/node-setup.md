@@ -1,6 +1,6 @@
 # Node Setup Guide
 
-This guide walks through onboarding a machine ("node") so the Open Fleet Control
+This guide walks through onboarding a machine ("node") so the OpenFleetControl
 dashboard can monitor it over your tailnet. Follow it literally — every step
 tells you exactly where to click or what to type.
 
@@ -265,10 +265,10 @@ dashboard should monitor.
 
 ## Troubleshooting
 
-| Symptom | Check |
-| --- | --- |
-| Node shows `unreachable` | `tailscale status` on the node — is it online in the tailnet? Is the dashboard on the same tailnet? |
+| Symptom                                        | Check                                                                                                                                                              |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Node shows `unreachable`                       | `tailscale status` on the node — is it online in the tailnet? Is the dashboard on the same tailnet?                                                                |
 | Node shows `offline` but Tailscale says online | `tailscale serve status` on the node — is 443 proxied to the gateway port? Is the gateway process actually running (`curl http://127.0.0.1:18789/health` locally)? |
-| TLS errors on first request | HTTPS certificates not enabled on the tailnet, or first-issue delay — retry after 30 seconds. |
-| `Invalid hostname` at registration | Hostname must match `^[a-z0-9-]+$` — rename the machine in the Tailscale admin console. |
-| Discover shows nothing | The dashboard cannot reach Tailscale status (CLI or local API). See the client install guide for the sidecar's `TAILSCALE_LOCAL_API_ENDPOINT` wiring. |
+| TLS errors on first request                    | HTTPS certificates not enabled on the tailnet, or first-issue delay — retry after 30 seconds.                                                                      |
+| `Invalid hostname` at registration             | Hostname must match `^[a-z0-9-]+$` — rename the machine in the Tailscale admin console.                                                                            |
+| Discover shows nothing                         | The dashboard cannot reach Tailscale status (CLI or local API). See the client install guide for the sidecar's `TAILSCALE_LOCAL_API_ENDPOINT` wiring.              |

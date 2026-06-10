@@ -1,10 +1,10 @@
-# Open Fleet Control — Architecture Overview
+# OpenFleetControl — Architecture Overview
 
 > _"The Overmind sees all through its Overlords."_
 
 ## Overview
 
-Open Fleet Control is a real-time dashboard for monitoring and managing AI assistant orchestration across a fleet of OpenClaw nodes connected over a Tailscale tailnet. It provides visibility into sessions, token usage, costs, scheduled jobs, and system health — plus fleet-wide coordination: mesh topology, agent chat, a kanban board, briefs, shared memory (Cortex), an evolution/lessons loop, alerts, and audit logging. The fleet architecture is described in [Fleet Architecture (v1.5)](#fleet-architecture-v15) below; the sections before it document the dashboard core inherited from upstream.
+OpenFleetControl is a real-time dashboard for monitoring and managing AI assistant orchestration across a fleet of OpenClaw nodes connected over a Tailscale tailnet. It provides visibility into sessions, token usage, costs, scheduled jobs, and system health — plus fleet-wide coordination: mesh topology, agent chat, a kanban board, briefs, shared memory (Cortex), an evolution/lessons loop, alerts, and audit logging. The fleet architecture is described in [Fleet Architecture (v1.5)](#fleet-architecture-v15) below; the sections before it document the dashboard core.
 
 ## Core Architecture Principles
 
@@ -182,7 +182,7 @@ Open Fleet Control is a real-time dashboard for monitoring and managing AI assis
 ## File Structure
 
 ```
-openclaw-command-center/
+open-fleet-control/
 ├── lib/                        # Backend code
 │   ├── server.js               # Main HTTP server
 │   ├── config.js               # Configuration loader
@@ -230,25 +230,25 @@ openclaw-command-center/
 
 ## Fleet Architecture (v1.5)
 
-Everything below was added for Open Fleet Control v1.5. The fleet lives in `src/` (bundled by esbuild into `lib/server.js`), keeps its state in plain files under the package root, and exposes itself through `/api/fleet/*` plus a handful of SSE events.
+Everything below was added for OpenFleetControl v1.5. The fleet lives in `src/` (bundled by esbuild into `lib/server.js`), keeps its state in plain files under the package root, and exposes itself through `/api/fleet/*` plus a handful of SSE events.
 
 ### Module Map
 
-| Module | File(s) | Responsibility |
-| --- | --- | --- |
-| Fleet runtime | `src/fleet.js` | Instantiates and cross-wires the module family from `CONFIG.fleet`; owns the lifecycle (`start()`/`stop()` — mesh poller, stale-task watchdog, board watcher), `fireAlert()` (alerts + SSE), and `getSummary()` for `GET /api/state`. Cortex availability is cached and refreshed in the background so the state endpoint never blocks on external CLIs. |
-| HTTP layer | `src/fleet-routes.js` | REST routes over the runtime. Body parsing capped at 64KB (1MB for briefs PUT), per-user+IP rate limiting on every mutation, identity from the `Tailscale-User-Login` header, audit record per mutation, module errors mapped to 4xx/5xx. |
-| Mesh | `src/mesh.js`, `src/tailscale.js` | Node registry persisted atomically to `state/mesh-nodes.json`; health polling over tailnet HTTPS; latency history; cost rollups from remote `/api/state`. The tailscale adapter derives the MagicDNS suffix at runtime (`tailscale status --json`, falling back to the sidecar LocalAPI proxy) — no tailnet name is hardcoded. The runtime wraps it in a non-blocking cache so `getStatus()` never stalls a request. |
-| Fleet Chat | `src/fleet-chat.js` | In-memory pub/sub with a durable trail: JSONL append (`logs/fleet-chat.jsonl`, 50MB rotation, 5 kept) + full history in SQLite (`state/fleet-chat.db`, `node:sqlite` DatabaseSync) for filtered queries and retention pruning. |
-| Alerts | `src/alerts.js` | Rule-gated engine with 5-minute type+node/task dedupe, a 200-entry ring buffer for the UI, and sinks: HMAC-signed webhooks (`X-OFC-Signature: sha256=<hex>`) and Slack via the OpenClaw gateway (`{channel, text}` only — no tokens held). 10s timeout, one retry, failures never propagate. |
-| Rate limit | `src/rate-limit.js` | Generic token bucket (`max` per `windowMs` per key), lazily swept. Keyed on `user|ip` by the routes. |
-| Kanban | `src/kanban.js`, `src/kanban-schema.js` | Task lifecycle on `state/kanban.json` (`inbox → assigned → inprogress → review → done \| failed`, aligned with the agent-team-orchestration skill). Every read goes through the safe store; mutations are immutable (build → validate → atomic write → `onChange`). Includes the stale-task watchdog. |
-| State safety | `src/state-safety.js` | Generic safe JSON store for agent-editable files: validate-then-atomic-write with rotated backups, corrupt reads quarantined and auto-restored from the newest valid backup, debounced `fs.watch` with the same treatment for external writes. |
-| Briefs | `src/briefs.js` | Markdown SOP repository over `briefs/`. Two always-applied layers: filename allowlist regex (`/^[a-zA-Z0-9._-]+\.md$/`) and resolved-path containment inside the briefs dir. |
-| Evolution | `src/evolution.js` | Lessons-learned ledger (`lessons_learned.md`) + validation gate (`state/evolution.json`). Approved bodies are merged into `lessons_learned.approved.md`. Approve/reject rewrites only the target section's status line, atomically. |
-| Federation | `src/federation.js` | Read-only fleet-of-fleets: registry of remote Open Fleet Control dashboards (`state/federation.json`), polling each remote's `/api/state` for its compact `fleet` summary. HTTPS-only URLs, optional bearer tokens persisted server-side and redacted from every response. v1 never issues writes against remotes. |
-| Audit | `src/audit.js` | Append-only JSONL (`logs/audit.jsonl`), fixed action enum, 50MB rotation with 10 files kept, filtered queries (user/action/since/until) capped at 1000 entries. |
-| Cortex | `src/cortex.js`, `src/cortex-lancedb.js`, `src/cortex-gbrain.js`, `src/cortex-gauges.js` | Facade over three adapters: LanceDB memory-pro (direct reads only; search and all writes via the `openclaw memory-pro` CLI), gbrain knowledge graph (read-only via CLI, never opens the PGLite DB), and compression gauges (headroom / lean-ctx / lcm token-savings telemetry). All lazy, all degrade to `{ error }` instead of throwing. |
+| Module        | File(s)                                                                                  | Responsibility                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| Fleet runtime | `src/fleet.js`                                                                           | Instantiates and cross-wires the module family from `CONFIG.fleet`; owns the lifecycle (`start()`/`stop()` — mesh poller, stale-task watchdog, board watcher), `fireAlert()` (alerts + SSE), and `getSummary()` for `GET /api/state`. Cortex availability is cached and refreshed in the background so the state endpoint never blocks on external CLIs.                                                             |
+| HTTP layer    | `src/fleet-routes.js`                                                                    | REST routes over the runtime. Body parsing capped at 64KB (1MB for briefs PUT), per-user+IP rate limiting on every mutation, identity from the `Tailscale-User-Login` header, audit record per mutation, module errors mapped to 4xx/5xx.                                                                                                                                                                            |
+| Mesh          | `src/mesh.js`, `src/tailscale.js`                                                        | Node registry persisted atomically to `state/mesh-nodes.json`; health polling over tailnet HTTPS; latency history; cost rollups from remote `/api/state`. The tailscale adapter derives the MagicDNS suffix at runtime (`tailscale status --json`, falling back to the sidecar LocalAPI proxy) — no tailnet name is hardcoded. The runtime wraps it in a non-blocking cache so `getStatus()` never stalls a request. |
+| Fleet Chat    | `src/fleet-chat.js`                                                                      | In-memory pub/sub with a durable trail: JSONL append (`logs/fleet-chat.jsonl`, 50MB rotation, 5 kept) + full history in SQLite (`state/fleet-chat.db`, `node:sqlite` DatabaseSync) for filtered queries and retention pruning.                                                                                                                                                                                       |
+| Alerts        | `src/alerts.js`                                                                          | Rule-gated engine with 5-minute type+node/task dedupe, a 200-entry ring buffer for the UI, and sinks: HMAC-signed webhooks (`X-OFC-Signature: sha256=<hex>`) and Slack via the OpenClaw gateway (`{channel, text}` only — no tokens held). 10s timeout, one retry, failures never propagate.                                                                                                                         |
+| Rate limit    | `src/rate-limit.js`                                                                      | Generic token bucket (`max` per `windowMs` per key), lazily swept. Keyed on `user                                                                                                                                                                                                                                                                                                                                    | ip` by the routes. |
+| Kanban        | `src/kanban.js`, `src/kanban-schema.js`                                                  | Task lifecycle on `state/kanban.json` (`inbox → assigned → inprogress → review → done \| failed`, aligned with the agent-team-orchestration skill). Every read goes through the safe store; mutations are immutable (build → validate → atomic write → `onChange`). Includes the stale-task watchdog.                                                                                                                |
+| State safety  | `src/state-safety.js`                                                                    | Generic safe JSON store for agent-editable files: validate-then-atomic-write with rotated backups, corrupt reads quarantined and auto-restored from the newest valid backup, debounced `fs.watch` with the same treatment for external writes.                                                                                                                                                                       |
+| Briefs        | `src/briefs.js`                                                                          | Markdown SOP repository over `briefs/`. Two always-applied layers: filename allowlist regex (`/^[a-zA-Z0-9._-]+\.md$/`) and resolved-path containment inside the briefs dir.                                                                                                                                                                                                                                         |
+| Evolution     | `src/evolution.js`                                                                       | Lessons-learned ledger (`lessons_learned.md`) + validation gate (`state/evolution.json`). Approved bodies are merged into `lessons_learned.approved.md`. Approve/reject rewrites only the target section's status line, atomically.                                                                                                                                                                                  |
+| Federation    | `src/federation.js`                                                                      | Read-only fleet-of-fleets: registry of remote OpenFleetControl dashboards (`state/federation.json`), polling each remote's `/api/state` for its compact `fleet` summary. HTTPS-only URLs, optional bearer tokens persisted server-side and redacted from every response. v1 never issues writes against remotes.                                                                                                     |
+| Audit         | `src/audit.js`                                                                           | Append-only JSONL (`logs/audit.jsonl`), fixed action enum, 50MB rotation with 10 files kept, filtered queries (user/action/since/until) capped at 1000 entries.                                                                                                                                                                                                                                                      |
+| Cortex        | `src/cortex.js`, `src/cortex-lancedb.js`, `src/cortex-gbrain.js`, `src/cortex-gauges.js` | Facade over three adapters: LanceDB memory-pro (direct reads only; search and all writes via the `openclaw memory-pro` CLI), gbrain knowledge graph (read-only via CLI, never opens the PGLite DB), and compression gauges (headroom / lean-ctx / lcm token-savings telemetry). All lazy, all degrade to `{ error }` instead of throwing.                                                                            |
 
 ### Fleet Data Flow
 
@@ -289,13 +289,13 @@ Polling and watching run inside the runtime: the mesh poller hits each node's `/
 
 In addition to the upstream `connected`, `update`, and `heartbeat` events, the runtime broadcasts:
 
-| Event | Fired when | Payload (minimal — clients refetch via REST) |
-| --- | --- | --- |
-| `fleet.mesh` | Node health transition | `{ id, hostname, previousStatus, status }` |
-| `fleet.chat` | Message published | `{ id, sender, receiver, ts }` |
-| `fleet.kanban` | Any board mutation (API or direct file edit) | `{ type, taskId }` |
-| `fleet.evolution` | Lesson added / approved / rejected, gate toggled | `{ type, id }` |
-| `fleet.alert` | Alert actually fired (not disabled/deduped) | `{ type, severity, node, task, message, ts }` |
+| Event             | Fired when                                       | Payload (minimal — clients refetch via REST)  |
+| ----------------- | ------------------------------------------------ | --------------------------------------------- |
+| `fleet.mesh`      | Node health transition                           | `{ id, hostname, previousStatus, status }`    |
+| `fleet.chat`      | Message published                                | `{ id, sender, receiver, ts }`                |
+| `fleet.kanban`    | Any board mutation (API or direct file edit)     | `{ type, taskId }`                            |
+| `fleet.evolution` | Lesson added / approved / rejected, gate toggled | `{ type, id }`                                |
+| `fleet.alert`     | Alert actually fired (not disabled/deduped)      | `{ type, severity, node, task, message, ts }` |
 
 ### State Files Layout
 
@@ -331,7 +331,7 @@ The backup/quarantine pattern (from `state-safety.js`) applies to any agent-edit
 2. **Identity attribution** — every mutating fleet request is attributed to the `Tailscale-User-Login` header (set by Tailscale Serve, not spoofable from outside the tailnet perimeter), falling back to `anonymous`. That identity flows into rate-limit keys and audit entries.
 3. **Rate limiting** — token bucket per `user|ip` on all mutating `/api/fleet` routes (default 120/min); `429` responses include `retryAfterMs`.
 4. **Audit trail** — append-only JSONL with a fixed action enum; audit failures never fail the request, and chat publishing relies on its own durable JSONL+SQLite trail instead.
-5. **Path-traversal guards** — briefs apply a strict filename allowlist *and* resolved-path containment (defense in depth); error messages never leak absolute server paths. Cortex and gbrain adapters use `execFile` semantics (args arrays, never a shell).
+5. **Path-traversal guards** — briefs apply a strict filename allowlist _and_ resolved-path containment (defense in depth); error messages never leak absolute server paths. Cortex and gbrain adapters use `execFile` semantics (args arrays, never a shell).
 6. **XSS-safe rendering** — fleet panels render untrusted strings (chat messages, task titles, audit fields) via `textContent`/escaping helpers rather than raw `innerHTML` interpolation.
 7. **No secrets held** — the Slack sink posts only `{channel, text}` to the gateway URL; webhook secrets stay server-side and are used solely for HMAC signing; the dashboard never stores tokens for remote nodes.
 8. **Input validation at the boundary** — JSON bodies are size-capped and schema-checked (kanban via hand-rolled validators, alerts via event normalization); unknown fleet routes always get an explicit 404.

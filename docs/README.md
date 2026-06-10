@@ -6,8 +6,7 @@
 
 ### Getting Started
 
-- [Project README](../README.md) — what Open Fleet Control is, quick start, feature tour
-- [README（简体中文）](../README.zh-CN.md) — Chinese translation of the README
+- [Project README](../README.md) — what OpenFleetControl is, quick start, feature tour
 - [Fleet Configuration Reference](../README.md#fleet-configuration) — the `fleet` config section, `FLEET_CONFIG_JSON`, alert sinks
 
 ### Guides
