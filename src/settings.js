@@ -28,7 +28,10 @@
  *   {
  *     alerts: {
  *       enabled: bool,
- *       rules: {nodeOffline, nodeUnreachable, taskFailed, taskStale, lessonPending},
+ *       rules: {nodeOffline, nodeUnreachable, nodeRecovered, taskFailed,
+ *               taskStale, lessonPending},
+ *       flap:  {consecutive, minDurationMs},
+ *       mutes: [{rule?, node?, until?}],
  *       sinks: {
  *         slack: {enabled, gatewayUrl, channel},
  *         ntfy:  {enabled, server, topic},
@@ -47,6 +50,8 @@
  *   {
  *     alerts: {
  *       enabled?, rules?: {<rule>: bool, ...},
+ *       flap?:  {consecutive?, minDurationMs?},        // merged per-field
+ *       mutes?: [{rule?, node?, until?}],              // FULL replacement
  *       sinks: {
  *         slack?: {enabled?, gatewayUrl?, channel?},
  *         ntfy?:  {enabled?, server?, topic?},
@@ -68,6 +73,10 @@
  *   - intervals/thresholds: integers, 5s ≤ value ≤ 1h.
  *   - ntfy.topic: [A-Za-z0-9_-], ≤ 256 chars (empty allowed = sink inert).
  *   - webhook events: ["*"] or a subset of the known alert rule names.
+ *   - flap.consecutive: integer 1..20; flap.minDurationMs: integer 0..1h.
+ *   - mutes: ≤ 50 entries; each needs rule (known rule name) and/or node
+ *     (non-empty string ≤ 120 chars); until is optional (ISO string or epoch
+ *     ms, normalized to ISO on persist).
  *
  * RESTART SEMANTICS — update() returns {applied, restartRequired} where
  * restartRequired is the list of changed setting paths that only take effect
@@ -101,7 +110,21 @@ const MAX_WEBHOOKS = 20;
 const NTFY_TOPIC_RE = /^[A-Za-z0-9_-]+$/;
 const NTFY_DEFAULT_SERVER = "https://ntfy.sh";
 
-const ALERT_RULES = ["nodeOffline", "nodeUnreachable", "taskFailed", "taskStale", "lessonPending"];
+const ALERT_RULES = [
+  "nodeOffline",
+  "nodeUnreachable",
+  "nodeRecovered",
+  "taskFailed",
+  "taskStale",
+  "lessonPending",
+];
+
+const FLAP_CONSECUTIVE_MIN = 1;
+const FLAP_CONSECUTIVE_MAX = 20;
+const FLAP_DURATION_MIN_MS = 0;
+const FLAP_DURATION_MAX_MS = 3600000; // 1h
+const MAX_MUTES = 50;
+const MAX_MUTE_NODE_LENGTH = 120;
 
 // Mirrors the relevant parts of FLEET_DEFAULTS in src/config.js so get()
 // reflects effective values even before anything is persisted.
@@ -111,10 +134,13 @@ const EDITABLE_DEFAULTS = Object.freeze({
     rules: {
       nodeOffline: true,
       nodeUnreachable: true,
+      nodeRecovered: true,
       taskFailed: true,
       taskStale: true,
       lessonPending: true,
     },
+    flap: { consecutive: 3, minDurationMs: 60000 },
+    mutes: [],
     sinks: {
       slack: { enabled: false, gatewayUrl: "", channel: "" },
       ntfy: { enabled: false, server: NTFY_DEFAULT_SERVER, topic: "" },
@@ -229,7 +255,7 @@ function validatePatch(patch) {
   const result = {};
 
   if (patch.alerts !== undefined) {
-    requireKnownKeys(patch.alerts, ["enabled", "rules", "sinks"], "alerts");
+    requireKnownKeys(patch.alerts, ["enabled", "rules", "flap", "mutes", "sinks"], "alerts");
     const alerts = {};
     if (patch.alerts.enabled !== undefined) {
       alerts.enabled = requireBool(patch.alerts.enabled, "alerts.enabled");
@@ -240,6 +266,12 @@ function validatePatch(patch) {
       for (const [rule, value] of Object.entries(patch.alerts.rules)) {
         alerts.rules[rule] = requireBool(value, `alerts.rules.${rule}`);
       }
+    }
+    if (patch.alerts.flap !== undefined) {
+      alerts.flap = validateFlapPatch(patch.alerts.flap);
+    }
+    if (patch.alerts.mutes !== undefined) {
+      alerts.mutes = validateMutes(patch.alerts.mutes);
     }
     if (patch.alerts.sinks !== undefined) {
       requireKnownKeys(patch.alerts.sinks, ["slack", "ntfy", "webhooks"], "alerts.sinks");
@@ -282,6 +314,83 @@ function validatePatch(patch) {
   }
 
   return result;
+}
+
+/** flap: {consecutive?: int 1..20, minDurationMs?: int 0..1h} (≥1 key). */
+function validateFlapPatch(flap) {
+  requireKnownKeys(flap, ["consecutive", "minDurationMs"], "alerts.flap");
+  const out = {};
+  if (flap.consecutive !== undefined) {
+    if (
+      !Number.isInteger(flap.consecutive) ||
+      flap.consecutive < FLAP_CONSECUTIVE_MIN ||
+      flap.consecutive > FLAP_CONSECUTIVE_MAX
+    ) {
+      throw badRequest(
+        `alerts.flap.consecutive must be an integer between ${FLAP_CONSECUTIVE_MIN} and ${FLAP_CONSECUTIVE_MAX}`,
+      );
+    }
+    out.consecutive = flap.consecutive;
+  }
+  if (flap.minDurationMs !== undefined) {
+    if (
+      !Number.isInteger(flap.minDurationMs) ||
+      flap.minDurationMs < FLAP_DURATION_MIN_MS ||
+      flap.minDurationMs > FLAP_DURATION_MAX_MS
+    ) {
+      throw badRequest(
+        `alerts.flap.minDurationMs must be an integer between ${FLAP_DURATION_MIN_MS} and ${FLAP_DURATION_MAX_MS} ms`,
+      );
+    }
+    out.minDurationMs = flap.minDurationMs;
+  }
+  if (Object.keys(out).length === 0) {
+    throw badRequest("alerts.flap must set consecutive and/or minDurationMs");
+  }
+  return out;
+}
+
+/**
+ * mutes: FULL replacement array of {rule?, node?, until?}. Each entry must
+ * target at least one of rule/node; `until` (optional) is normalized to an
+ * ISO timestamp string.
+ */
+function validateMutes(mutes) {
+  if (!Array.isArray(mutes)) throw badRequest("alerts.mutes must be an array");
+  if (mutes.length > MAX_MUTES) throw badRequest(`Too many mutes (max ${MAX_MUTES})`);
+  return mutes.map((entry, i) => {
+    requireKnownKeys(entry, ["rule", "node", "until"], `alerts.mutes[${i}]`);
+    const out = {};
+    if (entry.rule !== undefined) {
+      if (!ALERT_RULES.includes(entry.rule)) {
+        throw badRequest(`alerts.mutes[${i}].rule: unknown rule "${String(entry.rule)}"`);
+      }
+      out.rule = entry.rule;
+    }
+    if (entry.node !== undefined) {
+      if (
+        typeof entry.node !== "string" ||
+        entry.node.length === 0 ||
+        entry.node.length > MAX_MUTE_NODE_LENGTH
+      ) {
+        throw badRequest(
+          `alerts.mutes[${i}].node must be a non-empty string (max ${MAX_MUTE_NODE_LENGTH} chars)`,
+        );
+      }
+      out.node = entry.node;
+    }
+    if (out.rule === undefined && out.node === undefined) {
+      throw badRequest(`alerts.mutes[${i}] must set rule and/or node`);
+    }
+    if (entry.until !== undefined && entry.until !== null) {
+      const ms = typeof entry.until === "number" ? entry.until : Date.parse(entry.until);
+      if (!Number.isFinite(ms)) {
+        throw badRequest(`alerts.mutes[${i}].until must be an ISO timestamp or epoch ms`);
+      }
+      out.until = new Date(ms).toISOString();
+    }
+    return out;
+  });
 }
 
 function validateSlackPatch(slack) {
@@ -384,6 +493,21 @@ function derivedWebhookId(webhook, index) {
   return `wh_${crypto.createHash("sha256").update(material).digest("hex").slice(0, 10)}`;
 }
 
+/** Normalize the file's mutes array: keep only well-formed targeted entries. */
+function normalizeMutes(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  return list
+    .filter((m) => isPlainObject(m))
+    .map((m) => {
+      const entry = {};
+      if (typeof m.rule === "string" && m.rule.length > 0) entry.rule = m.rule;
+      if (typeof m.node === "string" && m.node.length > 0) entry.node = m.node;
+      if (typeof m.until === "string" || typeof m.until === "number") entry.until = m.until;
+      return entry;
+    })
+    .filter((m) => m.rule !== undefined || m.node !== undefined);
+}
+
 /** Normalize the file's webhook array: ensure ids + well-formed fields. Keeps secrets. */
 function normalizeWebhooks(raw) {
   const list = Array.isArray(raw) ? raw : [];
@@ -417,12 +541,19 @@ function buildEffective(fleet) {
   const pickStr = (value, fallback) => (typeof value === "string" ? value : fallback);
   const pickInt = (value, fallback) => (Number.isInteger(value) ? value : fallback);
 
+  const flap = isPlainObject(alerts.flap) ? alerts.flap : {};
+
   return {
     alerts: {
       enabled: pickBool(alerts.enabled, d.alerts.enabled),
       rules: Object.fromEntries(
         ALERT_RULES.map((rule) => [rule, pickBool(rules[rule], d.alerts.rules[rule])]),
       ),
+      flap: {
+        consecutive: pickInt(flap.consecutive, d.alerts.flap.consecutive),
+        minDurationMs: pickInt(flap.minDurationMs, d.alerts.flap.minDurationMs),
+      },
+      mutes: normalizeMutes(alerts.mutes),
       sinks: {
         slack: {
           enabled: pickBool(slack.enabled, d.alerts.sinks.slack.enabled),
@@ -606,6 +737,12 @@ function createSettings({ configPath, onChange } = {}) {
           ...before.alerts.rules,
           ...validated.alerts.rules,
         };
+      }
+      if (validated.alerts.flap) {
+        alertsNext.flap = { ...before.alerts.flap, ...validated.alerts.flap };
+      }
+      if (validated.alerts.mutes) {
+        alertsNext.mutes = validated.alerts.mutes; // full replacement by contract
       }
       if (validated.alerts.sinks) {
         const sinksBefore = isPlainObject(alertsBefore.sinks) ? alertsBefore.sinks : {};

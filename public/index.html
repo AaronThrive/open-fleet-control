@@ -1437,20 +1437,33 @@
       // Slim home renderers: the full sessions/cron grids moved to their own
       // pages (#view-sessions / #view-cron). Home keeps the data slices for
       // the operator modal + privacy refresh and updates the overview chips.
+      // Defensive: absent/null fields render as "—", never as a fake 0.
       function renderSessions(sessions, pagination, statusCounts) {
-        sessionsData = sessions || [];
-        const total = statusCounts?.all ?? pagination?.total ?? sessionsData.length;
-        const live = statusCounts?.live ?? sessionsData.filter((s) => s.active).length;
-        $set("ov-sessions-count", "textContent", total);
+        sessionsData = Array.isArray(sessions) ? sessions : [];
+        const total =
+          statusCounts?.all ??
+          pagination?.total ??
+          (Array.isArray(sessions) ? sessions.length : null);
+        const live =
+          statusCounts?.live ??
+          (Array.isArray(sessions) ? sessions.filter((s) => s.active).length : null);
+        $set("ov-sessions-count", "textContent", total ?? "—");
         $set(
           "ov-sessions-live",
           "textContent",
-          i18nText("overview.sessionsLive", { live }, "{live} live"),
+          live == null
+            ? i18nText("overview.sessions", {}, "Sessions")
+            : i18nText("overview.sessionsLive", { live }, "{live} live"),
         );
       }
 
       function renderCron(cron) {
-        cronData = cron || [];
+        if (!Array.isArray(cron)) {
+          $set("ov-cron-count", "textContent", "—");
+          $set("ov-cron-enabled", "textContent", i18nText("overview.cron", {}, "Cron"));
+          return;
+        }
+        cronData = cron;
         const enabled = cronData.filter((c) => c.enabled !== false).length;
         $set("ov-cron-count", "textContent", cronData.length);
         $set(
@@ -1602,7 +1615,7 @@
         $set("nav-monthly-cost", "textContent", stats.estMonthlyCost || "-");
         $set("nav-avg-tokens", "textContent", stats.avgTokensPerSession || "-");
         $set("nav-avg-cost", "textContent", stats.avgCostPerSession || "-");
-        $set("ov-tokens-24h", "textContent", stats.total || "0");
+        $set("ov-tokens-24h", "textContent", stats.total ?? "—");
 
         // Load preference and update selector
         const savedWindow = getSavingsWindowPref();
@@ -1681,8 +1694,11 @@
             $set("ov-llm-weekly", "textContent", "N/A");
             return;
           }
-          $set("ov-llm-session", "textContent", (data.claude?.session?.usedPct ?? "-") + "%");
-          $set("ov-llm-weekly", "textContent", (data.claude?.weekly?.usedPct ?? "-") + "%");
+          // "—" when the field is absent — a missing percent is not 0%.
+          const sessionPct = data.claude?.session?.usedPct;
+          const weeklyPct = data.claude?.weekly?.usedPct;
+          $set("ov-llm-session", "textContent", sessionPct == null ? "—" : sessionPct + "%");
+          $set("ov-llm-weekly", "textContent", weeklyPct == null ? "—" : weeklyPct + "%");
         } catch (e) {
           console.error("[renderLlmUsage] Error:", e.message);
         }
@@ -3026,7 +3042,8 @@
       // Slim home sub-agents: the full panel moved to #view-sessions
       // (active sub-agents strip). Home shows the count chip only.
       function renderSubagents(subagents) {
-        $set("ov-subagent-count", "textContent", (subagents || []).length);
+        // Defensive: a missing slice means "no data", not zero sub-agents.
+        $set("ov-subagent-count", "textContent", Array.isArray(subagents) ? subagents.length : "—");
       }
 
       // Quick Actions

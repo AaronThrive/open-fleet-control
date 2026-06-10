@@ -203,6 +203,9 @@ function createInitialHealth() {
  * @param {function} [options.fetchFn] - fetch-compatible function (injectable)
  * @param {object} [options.tailscale] - tailscale adapter ({getStatus})
  * @param {function} [options.onChange] - callback({node, previousStatus, status, health}) fired when a node's status changes
+ * @param {function} [options.onHealth] - callback({node, previousStatus, status, health}) fired after EVERY health poll
+ *   (including no-transition polls) — consumed by the alert wiring's
+ *   failure-streak / recovery tracking, which needs per-poll visibility
  * @param {function} [options.nowFn] - clock function (default Date.now)
  * @returns {{start, stop, getState, registerNode, unregisterNode, discoverPeers, getFleetCosts, collectNodeStats, _pollOnce}}
  */
@@ -214,6 +217,7 @@ function createMesh(options = {}) {
     fetchFn = (...args) => globalThis.fetch(...args),
     tailscale = createTailscaleAdapter(),
     onChange = null,
+    onHealth = null,
     nowFn = Date.now,
   } = options;
 
@@ -420,6 +424,15 @@ function createMesh(options = {}) {
     health[node.id] = next;
     if (prev.status !== next.status) {
       emitChange(node, prev.status, next);
+    }
+    // Per-poll hook (every poll, transition or not): feeds the alert
+    // wiring's failure-streak + recovery tracking. Isolated like onChange.
+    if (typeof onHealth === "function") {
+      try {
+        onHealth({ node, previousStatus: prev.status, status: next.status, health: next });
+      } catch (e) {
+        console.error("[Mesh] onHealth callback failed:", e.message);
+      }
     }
   }
 

@@ -1,7 +1,10 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert");
 const crypto = require("crypto");
-const { createAlerts } = require("../src/alerts");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { createAlerts, createNodeAlertTracker } = require("../src/alerts");
 
 // Recording fetch stub: captures calls, succeeds (or fails) per options
 function makeFetch({ failUrls = [] } = {}) {
@@ -494,5 +497,399 @@ describe("alerts module", () => {
       assert.strictEqual(recent[0].node, "n204"); // Newest kept
       assert.strictEqual(recent[199].node, "n5"); // Oldest 5 evicted
     });
+
+    it("filters by type/node/severity/since", async () => {
+      const clock = makeClock(100000);
+      const alerts = createAlerts({
+        config: baseConfig(),
+        fetchFn: makeFetch().fetchFn,
+        nowFn: clock.nowFn,
+      });
+      await alerts.fire({ type: "taskFailed", severity: "critical", task: "t1", message: "x" });
+      clock.advance(1000);
+      await alerts.fire({ type: "taskStale", severity: "warn", task: "t2", message: "y" });
+      clock.advance(1000);
+      await alerts.fire({ ...baseEvent, node: "n1" });
+
+      assert.strictEqual(alerts.getRecent(50, { type: "taskStale" }).length, 1);
+      assert.strictEqual(alerts.getRecent(50, { node: "n1" })[0].type, "nodeOffline");
+      assert.strictEqual(alerts.getRecent(50, { severity: "warn" }).length, 1);
+      assert.strictEqual(alerts.getRecent(50, { since: 101000 }).length, 2);
+      assert.strictEqual(alerts.getRecent(50, { since: String(102000) }).length, 1);
+    });
+  });
+
+  describe("mutes", () => {
+    function mutedConfig(mutes) {
+      return baseConfig({
+        mutes,
+        sinks: { webhooks: [{ url: "https://hook.example/1", events: ["*"] }] },
+      });
+    }
+
+    it("skips alerts matching a node mute and counts them", async () => {
+      const { calls, fetchFn } = makeFetch();
+      const alerts = createAlerts({ config: mutedConfig([{ node: "hermes-1" }]), fetchFn });
+
+      const muted = await alerts.fire(baseEvent);
+      assert.strictEqual(muted.fired, false);
+      assert.strictEqual(muted.reason, "muted");
+      assert.strictEqual(alerts.getMutedCount(), 1);
+      assert.strictEqual(calls.length, 0);
+      assert.strictEqual(alerts.getRecent().length, 0);
+
+      // Other nodes are unaffected
+      const other = await alerts.fire({ ...baseEvent, node: "hermes-2" });
+      assert.strictEqual(other.fired, true);
+    });
+
+    it("matches rule-only and rule+node mutes precisely", async () => {
+      const { fetchFn } = makeFetch();
+      const alerts = createAlerts({
+        config: mutedConfig([{ rule: "taskFailed" }, { rule: "nodeOffline", node: "n2" }]),
+        fetchFn,
+      });
+
+      assert.strictEqual(
+        (await alerts.fire({ type: "taskFailed", task: "t", message: "x" })).reason,
+        "muted",
+      );
+      assert.strictEqual((await alerts.fire({ ...baseEvent, node: "n2" })).reason, "muted");
+      assert.strictEqual((await alerts.fire({ ...baseEvent, node: "n3" })).fired, true);
+      assert.strictEqual(alerts.getMutedCount(), 2);
+    });
+
+    it("honors `until` expiry and ignores empty catch-all entries", async () => {
+      const clock = makeClock(1000000);
+      const { fetchFn } = makeFetch();
+      const alerts = createAlerts({
+        config: mutedConfig([{ node: "hermes-1", until: 1000000 + 60000 }, {}]),
+        fetchFn,
+        nowFn: clock.nowFn,
+      });
+
+      assert.strictEqual((await alerts.fire(baseEvent)).reason, "muted");
+      clock.advance(61000);
+      assert.strictEqual((await alerts.fire(baseEvent)).fired, true);
+      // The empty {} entry never muted anything
+      assert.strictEqual(alerts.getMutedCount(), 1);
+    });
+
+    it("does not let a muted alert consume the dedupe slot", async () => {
+      const clock = makeClock(500000);
+      const { fetchFn } = makeFetch();
+      const alerts = createAlerts({
+        config: mutedConfig([{ node: "hermes-1", until: 500000 + 1000 }]),
+        fetchFn,
+        nowFn: clock.nowFn,
+      });
+
+      assert.strictEqual((await alerts.fire(baseEvent)).reason, "muted");
+      clock.advance(2000); // mute expired, still inside the 5-min dedupe window
+      assert.strictEqual((await alerts.fire(baseEvent)).fired, true);
+    });
+  });
+});
+
+describe("alert history (JSONL persistence)", () => {
+  function makeLogsDir() {
+    return fs.mkdtempSync(path.join(os.tmpdir(), "ofc-alerts-history-"));
+  }
+
+  function historyAlerts(logsDir, { clock, extra } = {}) {
+    return createAlerts({
+      config: {
+        enabled: true,
+        rules: {},
+        sinks: { webhooks: [] },
+      },
+      logsDir,
+      fetchFn: makeFetch().fetchFn,
+      ...(clock ? { nowFn: clock.nowFn } : {}),
+      ...extra,
+    });
+  }
+
+  it("appends every FIRED alert to logs/alerts.jsonl (and only fired ones)", async () => {
+    const logsDir = makeLogsDir();
+    const alerts = historyAlerts(logsDir);
+
+    await alerts.fire(baseEvent); // fired
+    await alerts.fire(baseEvent); // deduped -> NOT appended
+    await alerts.fire({ type: "taskFailed", severity: "critical", task: "t1", message: "boom" });
+
+    const lines = fs
+      .readFileSync(path.join(logsDir, "alerts.jsonl"), "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l));
+    assert.strictEqual(lines.length, 2);
+    assert.strictEqual(lines[0].type, "nodeOffline");
+    assert.strictEqual(lines[1].type, "taskFailed");
+    assert.match(lines[0].id, /^alr_/);
+    fs.rmSync(logsDir, { recursive: true, force: true });
+  });
+
+  it("query() reads newest-first with type/node/severity/since filters and a 500 cap", async () => {
+    const logsDir = makeLogsDir();
+    const clock = makeClock(1000000);
+    const alerts = historyAlerts(logsDir, { clock });
+
+    await alerts.fire({ type: "taskFailed", severity: "critical", task: "t1", message: "a" });
+    clock.advance(1000);
+    await alerts.fire({ type: "nodeUnreachable", severity: "warn", node: "n1", message: "b" });
+    clock.advance(1000);
+    await alerts.fire({ type: "nodeOffline", severity: "critical", node: "n2", message: "c" });
+
+    const all = alerts.query();
+    assert.strictEqual(all.length, 3);
+    assert.strictEqual(all[0].type, "nodeOffline"); // newest first
+    assert.strictEqual(all[2].type, "taskFailed");
+
+    assert.strictEqual(alerts.query({ type: "nodeUnreachable" }).length, 1);
+    assert.strictEqual(alerts.query({ node: "n2" })[0].severity, "critical");
+    assert.strictEqual(alerts.query({ severity: "warn" }).length, 1);
+    assert.strictEqual(alerts.query({ since: 1001000 }).length, 2);
+    assert.strictEqual(alerts.query({ limit: 2 }).length, 2);
+    assert.strictEqual(alerts.query({ limit: 99999 }).length, 3); // cap applied silently
+    assert.throws(() => alerts.query({ limit: 0 }), /limit/i);
+    assert.throws(() => alerts.query({ severity: "panic" }), /severity/i);
+    fs.rmSync(logsDir, { recursive: true, force: true });
+  });
+
+  it("rotates at the size threshold and keeps a bounded set of files", async () => {
+    const logsDir = makeLogsDir();
+    const alerts = historyAlerts(logsDir, {
+      extra: { historyMaxBytes: 400, historyKeepFiles: 2 },
+    });
+
+    for (let i = 0; i < 30; i++) {
+      await alerts.fire({ type: "taskFailed", task: `t${i}`, message: "x".repeat(60) });
+    }
+
+    const files = fs.readdirSync(logsDir).filter((f) => /^alerts\..*jsonl$/.test(f));
+    const rotated = files.filter((f) => f !== "alerts.jsonl");
+    assert.ok(rotated.length >= 1, "should have rotated at least once");
+    assert.ok(rotated.length <= 2, `should keep at most 2 rotated files (got ${rotated.length})`);
+    assert.ok(files.includes("alerts.jsonl"), "active file should exist");
+
+    // query() spans active + rotated files, newest first
+    const results = alerts.query({ limit: 500 });
+    assert.strictEqual(results[0].task, "t29");
+    assert.ok(results.length > 5, "rotated entries should be readable");
+    fs.rmSync(logsDir, { recursive: true, force: true });
+  });
+
+  it("survives malformed lines and returns [] without a logsDir", async () => {
+    const logsDir = makeLogsDir();
+    const alerts = historyAlerts(logsDir);
+    await alerts.fire(baseEvent);
+    fs.appendFileSync(path.join(logsDir, "alerts.jsonl"), 'not-json\n{"half":\n', "utf8");
+    await alerts.fire({ type: "taskFailed", task: "t9", message: "ok" });
+
+    assert.strictEqual(alerts.query().length, 2);
+
+    const noHistory = createAlerts({ config: { enabled: true }, fetchFn: makeFetch().fetchFn });
+    assert.deepStrictEqual(noHistory.query(), []);
+    fs.rmSync(logsDir, { recursive: true, force: true });
+  });
+});
+
+describe("test-mode delivery suppression (defense in depth)", () => {
+  // These tests run under `node --test`, so NODE_TEST_CONTEXT is set in this
+  // process — exactly the environment the guard protects against.
+  it("no-ops sinks when using the ambient global fetch under node --test", async () => {
+    assert.ok(process.env.NODE_TEST_CONTEXT, "expected to run under node --test");
+    const alerts = createAlerts({
+      // NO fetchFn injected -> engine would use globalThis.fetch
+      config: baseConfig({
+        sinks: {
+          ntfy: { enabled: true, server: "https://ntfy.sh", topic: "real-topic-do-not-hit" },
+          webhooks: [{ url: "https://hook.example/never", events: ["*"] }],
+        },
+      }),
+    });
+
+    const result = await alerts.fire(baseEvent);
+    assert.strictEqual(result.fired, true);
+    assert.strictEqual(result.suppressed, true);
+    assert.strictEqual(result.dispatched, 0);
+    assert.strictEqual(result.delivered, 0);
+    // Still recorded for the UI ring buffer
+    assert.strictEqual(alerts.getRecent().length, 1);
+  });
+
+  it("honors OFC_DISABLE_ALERT_DELIVERY=1 explicitly", async () => {
+    const previous = process.env.OFC_DISABLE_ALERT_DELIVERY;
+    process.env.OFC_DISABLE_ALERT_DELIVERY = "1";
+    try {
+      const alerts = createAlerts({
+        config: baseConfig({
+          sinks: { ntfy: { enabled: true, topic: "real-topic-do-not-hit" } },
+        }),
+      });
+      const result = await alerts.fire(baseEvent);
+      assert.strictEqual(result.suppressed, true);
+      assert.strictEqual(result.dispatched, 0);
+    } finally {
+      if (previous === undefined) delete process.env.OFC_DISABLE_ALERT_DELIVERY;
+      else process.env.OFC_DISABLE_ALERT_DELIVERY = previous;
+    }
+  });
+
+  it("does NOT suppress when a fetch stub is injected (unit tests stay deterministic)", async () => {
+    const { calls, fetchFn } = makeFetch();
+    const alerts = createAlerts({
+      config: baseConfig({
+        sinks: { webhooks: [{ url: "https://hook.example/1", events: ["*"] }] },
+      }),
+      fetchFn,
+    });
+
+    const result = await alerts.fire(baseEvent);
+    assert.strictEqual(result.fired, true);
+    assert.strictEqual(result.suppressed, undefined);
+    assert.strictEqual(calls.length, 1);
+  });
+});
+
+describe("createNodeAlertTracker (flap suppression + recovery)", () => {
+  const NODE = { id: "node-1", hostname: "hermes-1" };
+
+  function makeTracker({ flap, start = 1000000 } = {}) {
+    const clock = makeClock(start);
+    const fired = [];
+    const tracker = createNodeAlertTracker({
+      flap,
+      fire: (event) => fired.push(event),
+      nowFn: clock.nowFn,
+    });
+    return { tracker, fired, clock };
+  }
+
+  /** One failed-poll observation with the given streak count. */
+  function failPoll(tracker, streak, status = "unreachable", node = NODE) {
+    return tracker.observe(node, status, { consecutiveFailures: streak });
+  }
+
+  it("requires a fire function", () => {
+    assert.throws(() => createNodeAlertTracker(), /fire/);
+  });
+
+  it("does not alert before the consecutive-failures threshold", () => {
+    const { tracker, fired, clock } = makeTracker(); // defaults 3 / 60s
+    failPoll(tracker, 1);
+    clock.advance(120000); // duration satisfied, streak not
+    failPoll(tracker, 2);
+    assert.strictEqual(fired.length, 0);
+  });
+
+  it("does not alert before minDurationMs even with the streak satisfied", () => {
+    const { tracker, fired, clock } = makeTracker();
+    failPoll(tracker, 1);
+    clock.advance(15000);
+    failPoll(tracker, 2);
+    clock.advance(15000);
+    failPoll(tracker, 3); // streak ok, only 30s elapsed
+    assert.strictEqual(fired.length, 0);
+  });
+
+  it("alerts exactly once when BOTH streak and duration thresholds are met", () => {
+    const { tracker, fired, clock } = makeTracker();
+    failPoll(tracker, 1);
+    clock.advance(30000);
+    failPoll(tracker, 2);
+    clock.advance(30000);
+    failPoll(tracker, 3, "offline"); // 60s elapsed + 3 consecutive
+    assert.strictEqual(fired.length, 1);
+    assert.strictEqual(fired[0].type, "nodeOffline");
+    assert.strictEqual(fired[0].severity, "critical");
+    assert.strictEqual(fired[0].node, "hermes-1");
+
+    // Latch: continued failures do not re-fire
+    clock.advance(15000);
+    failPoll(tracker, 4, "offline");
+    clock.advance(15000);
+    failPoll(tracker, 5, "offline");
+    assert.strictEqual(fired.length, 1);
+  });
+
+  it("uses the status at threshold-crossing time (unreachable -> warn)", () => {
+    const { tracker, fired, clock } = makeTracker({ flap: { consecutive: 2, minDurationMs: 0 } });
+    failPoll(tracker, 1, "offline");
+    clock.advance(1000);
+    failPoll(tracker, 2, "unreachable");
+    assert.strictEqual(fired.length, 1);
+    assert.strictEqual(fired[0].type, "nodeUnreachable");
+    assert.strictEqual(fired[0].severity, "warn");
+  });
+
+  it("a flapping node (recovers before threshold) never alerts", () => {
+    const { tracker, fired, clock } = makeTracker();
+    for (let cycle = 0; cycle < 5; cycle++) {
+      failPoll(tracker, 1);
+      clock.advance(15000);
+      failPoll(tracker, 2);
+      clock.advance(15000);
+      tracker.observe(NODE, "online", { consecutiveFailures: 0 }); // back before 3rd failure
+      clock.advance(15000);
+    }
+    assert.strictEqual(fired.length, 0); // no node alerts, no recovery alerts
+  });
+
+  it("fires nodeRecovered exactly once when a previously-alerted node returns", () => {
+    const { tracker, fired, clock } = makeTracker({ flap: { consecutive: 2, minDurationMs: 0 } });
+    failPoll(tracker, 1);
+    clock.advance(1000);
+    failPoll(tracker, 2);
+    assert.strictEqual(fired.length, 1);
+
+    tracker.observe(NODE, "online", { consecutiveFailures: 0 });
+    assert.strictEqual(fired.length, 2);
+    assert.strictEqual(fired[1].type, "nodeRecovered");
+    assert.strictEqual(fired[1].severity, "info");
+    assert.strictEqual(fired[1].node, "hermes-1");
+
+    // Staying online does not re-fire recovery
+    tracker.observe(NODE, "online", { consecutiveFailures: 0 });
+    tracker.observe(NODE, "online", { consecutiveFailures: 0 });
+    assert.strictEqual(fired.length, 2);
+  });
+
+  it("tracks nodes independently", () => {
+    const other = { id: "node-2", hostname: "drone-2" };
+    const { tracker, fired, clock } = makeTracker({ flap: { consecutive: 2, minDurationMs: 0 } });
+    failPoll(tracker, 1);
+    failPoll(tracker, 1, "unreachable", other);
+    clock.advance(1000);
+    failPoll(tracker, 2); // only hermes-1 crosses
+    assert.strictEqual(fired.length, 1);
+    assert.strictEqual(fired[0].node, "hermes-1");
+  });
+
+  it("setFlapConfig hot-applies new thresholds without losing streak state", () => {
+    const { tracker, fired, clock } = makeTracker(); // 3 / 60s
+    failPoll(tracker, 1);
+    clock.advance(30000);
+    failPoll(tracker, 2);
+    assert.strictEqual(fired.length, 0);
+
+    tracker.setFlapConfig({ consecutive: 2, minDurationMs: 10000 });
+    clock.advance(1000);
+    failPoll(tracker, 3); // failingSince preserved -> 31s >= 10s, streak 3 >= 2
+    assert.strictEqual(fired.length, 1);
+  });
+
+  it("normalizes invalid flap config to defaults", () => {
+    const { tracker, fired, clock } = makeTracker({
+      flap: { consecutive: -5, minDurationMs: "soon" },
+    });
+    failPoll(tracker, 1);
+    clock.advance(59000);
+    failPoll(tracker, 3); // 59s < default 60s
+    assert.strictEqual(fired.length, 0);
+    clock.advance(2000);
+    failPoll(tracker, 4);
+    assert.strictEqual(fired.length, 1);
   });
 });

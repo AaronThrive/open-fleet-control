@@ -10,9 +10,28 @@ describe("server", () => {
   let serverProcess;
 
   before(async () => {
-    // Start the server as a child process with a custom PORT
+    // Start the server as a child process with a custom PORT.
+    // Test isolation: without FLEET_CONFIG_JSON this boot inherits config/
+    // dashboard.local.json (which may have alerts + a real ntfy topic
+    // enabled). Force the alert engine OFF and disable every sink so a test
+    // run can never deliver real notifications; OFC_DISABLE_ALERT_DELIVERY
+    // is the engine-level belt-and-braces guard for anything that slips by.
     serverProcess = spawn(process.execPath, [path.join(__dirname, "..", "lib", "server.js")], {
-      env: { ...process.env, PORT: String(TEST_PORT) },
+      env: {
+        ...process.env,
+        PORT: String(TEST_PORT),
+        FLEET_CONFIG_JSON: JSON.stringify({
+          alerts: {
+            enabled: false,
+            sinks: {
+              ntfy: { enabled: false, topic: "" },
+              slack: { enabled: false, gatewayUrl: "" },
+              webhooks: [],
+            },
+          },
+        }),
+        OFC_DISABLE_ALERT_DELIVERY: "1",
+      },
       stdio: ["pipe", "pipe", "pipe"],
     });
 

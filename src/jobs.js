@@ -75,8 +75,18 @@ async function handleJobsRequest(req, res, pathname, query, method) {
   const api = await getAPI();
 
   if (!api) {
-    res.writeHead(500, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Jobs API not available" }));
+    // Graceful degradation: the optional jobs library is not installed.
+    // Return 200 with an availability flag so clients can hide the feature
+    // instead of surfacing a server error.
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        available: false,
+        reason: "Jobs library not installed",
+        jobs: [],
+        timestamp: Date.now(),
+      }),
+    );
     return;
   }
 
@@ -117,7 +127,7 @@ async function handleJobsRequest(req, res, pathname, query, method) {
       }));
 
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ jobs: enhanced, timestamp: Date.now() }, null, 2));
+      res.end(JSON.stringify({ available: true, jobs: enhanced, timestamp: Date.now() }, null, 2));
       return;
     }
 

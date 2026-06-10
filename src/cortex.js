@@ -49,12 +49,51 @@ function createCortex(options = {}) {
   const gbrain = createGbrain(options.gbrain || {});
   const gauges = createGauges(options.gauges || {});
 
+  // getState cache — the memory/gbrain sections shell out to slow CLIs
+  // (openclaw startup alone is seconds), so the collected state is served
+  // stale-while-revalidate: requests get the cached payload instantly and a
+  // single coalesced background collection keeps it fresh.
+  let stateCache = { value: null, timestamp: 0 };
+  let stateInFlight = null;
+  const STATE_TTL_MS = 120000;
+
   /**
-   * Unified state: adapter availability, gauge summary, and memory stats.
-   * Each section is independently guarded — a failing adapter reports a
-   * reason instead of breaking the whole payload.
+   * Unified state (cached): adapter availability, gauge summary, memory
+   * stats. First call collects; subsequent calls serve the cache and
+   * refresh in the background once it is older than STATE_TTL_MS.
    */
   async function getState() {
+    const age = Date.now() - stateCache.timestamp;
+    if (stateCache.value && age < STATE_TTL_MS) return stateCache.value;
+
+    const collect = () => {
+      if (!stateInFlight) {
+        stateInFlight = collectState()
+          .then((value) => {
+            stateCache = { value, timestamp: Date.now() };
+            return value;
+          })
+          .finally(() => {
+            stateInFlight = null;
+          });
+      }
+      return stateInFlight;
+    };
+
+    if (stateCache.value) {
+      // Stale: serve immediately, refresh in background
+      collect().catch(() => {});
+      return stateCache.value;
+    }
+    return collect();
+  }
+
+  /**
+   * Collect unified state: adapter availability, gauge summary, and memory
+   * stats. Each section is independently guarded — a failing adapter
+   * reports a reason instead of breaking the whole payload.
+   */
+  async function collectState() {
     const state = {
       timestamp: Date.now(),
       memory: { available: false, cli: false, lancedb: false, reason: null, stats: null },

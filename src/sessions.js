@@ -64,21 +64,53 @@ function parseSessionLabel(key) {
 }
 
 /**
+ * Derive the CLI-compatible session `kind` from a store entry + key.
+ * Matches the openclaw CLI classification (verified live: 46/46 parity):
+ *   spawn-child — spawned sub-agent sessions
+ *   cron        — cron-triggered sessions
+ *   group       — group chats (slack threads/channels, telegram groups)
+ *   direct      — everything else
+ */
+function deriveKind(key, entry = {}) {
+  if (entry.spawnedBy || entry.subagentRole || key.includes(":subagent:")) return "spawn-child";
+  if (key.includes(":cron:")) return "cron";
+  if (entry.chatType === "group" || entry.groupId) return "group";
+  return "direct";
+}
+
+/**
  * Create a sessions module with bound dependencies.
  * @param {Object} deps
  * @param {Function} deps.getOpenClawDir - Returns the OpenClaw directory path
  * @param {Function} deps.getOperatorBySlackId - Look up operator by Slack ID
- * @param {Function} deps.runOpenClaw - Run OpenClaw command synchronously
+ * @param {Function} deps.runOpenClaw - Run OpenClaw command synchronously (legacy, unused on request paths)
  * @param {Function} deps.runOpenClawAsync - Run OpenClaw command asynchronously
  * @param {Function} deps.extractJSON - Extract JSON from command output
+ * @param {string} [deps.sessionsSource] - "files" (default) or "cli"
+ * @param {number} [deps.refreshMs] - Background refresh interval (default 30000)
+ * @param {boolean} [deps.enabled] - When false, never spawn CLI nor parse stores
  * @returns {Object} Session management functions
  */
 function createSessionsModule(deps) {
-  const { getOpenClawDir, getOperatorBySlackId, runOpenClaw, runOpenClawAsync, extractJSON } = deps;
+  const { getOpenClawDir, getOperatorBySlackId, runOpenClawAsync, extractJSON } = deps;
+  const sessionsSource = deps.sessionsSource === "cli" ? "cli" : "files";
+  const refreshMs = Number.isFinite(deps.refreshMs) && deps.refreshMs > 0 ? deps.refreshMs : 30000;
+  const enabled = deps.enabled !== false;
 
-  // SESSION CACHE - Async refresh to avoid blocking
-  let sessionsCache = { sessions: [], timestamp: 0, refreshing: false };
-  const SESSIONS_CACHE_TTL = 10000; // 10 seconds
+  // SESSION CACHE — refreshed by a single coalesced background worker.
+  // ALL request paths serve this cache instantly (stale-while-revalidate).
+  let sessionsCache = { sessions: [], raw: [], timestamp: 0 };
+  let refreshInFlight = null;
+  let refreshTimer = null;
+
+  // Store-file parse cache (mtime/size based — re-parse only on change)
+  let storeFileCache = { mtimeMs: 0, size: -1, entries: null };
+
+  // Per-transcript memoization for originator/topic (keyed by sessionId,
+  // invalidated when the transcript file's mtime changes).
+  const originatorMemo = new Map();
+  const topicMemo = new Map();
+  const MEMO_MAX = 2000;
 
   /**
    * Find transcript file for a session ID.
@@ -111,6 +143,22 @@ function createSessionsModule(deps) {
     return null;
   }
 
+  /** Memo helper: get cached value if transcript unchanged, else recompute. */
+  function memoized(memo, sessionId, transcriptPath, compute) {
+    let mtimeMs = 0;
+    try {
+      mtimeMs = fs.statSync(transcriptPath).mtimeMs;
+    } catch (e) {
+      return compute();
+    }
+    const hit = memo.get(sessionId);
+    if (hit && hit.mtimeMs === mtimeMs) return hit.value;
+    const value = compute();
+    if (memo.size >= MEMO_MAX) memo.clear();
+    memo.set(sessionId, { mtimeMs, value });
+    return value;
+  }
+
   // Extract session originator from transcript
   function getSessionOriginator(sessionId) {
     try {
@@ -119,7 +167,25 @@ function createSessionsModule(deps) {
       const transcriptPath = findTranscriptPath(sessionId);
       if (!transcriptPath) return null;
 
-      const content = fs.readFileSync(transcriptPath, "utf8");
+      return memoized(originatorMemo, sessionId, transcriptPath, () =>
+        computeSessionOriginator(transcriptPath),
+      );
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function computeSessionOriginator(transcriptPath) {
+    try {
+      // Only the first user message matters — read the head of the file
+      // instead of the entire transcript (transcripts can be many MB).
+      const fd = fs.openSync(transcriptPath, "r");
+      const buffer = Buffer.alloc(131072);
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      fs.closeSync(fd);
+      if (bytesRead === 0) return null;
+
+      const content = buffer.toString("utf8", 0, bytesRead);
       const lines = content.trim().split("\n");
 
       // Find the first user message to extract originator
@@ -199,7 +265,16 @@ function createSessionsModule(deps) {
     try {
       const transcriptPath = findTranscriptPath(sessionId);
       if (!transcriptPath) return null;
+      return memoized(topicMemo, sessionId, transcriptPath, () =>
+        computeSessionTopic(transcriptPath),
+      );
+    } catch (e) {
+      return null;
+    }
+  }
 
+  function computeSessionTopic(transcriptPath) {
+    try {
       // Read first 50KB of transcript (enough for topic detection, fast)
       const fd = fs.openSync(transcriptPath, "r");
       const buffer = Buffer.alloc(50000);
@@ -256,11 +331,15 @@ function createSessionsModule(deps) {
     else if (s.key.includes("signal")) channel = "signal";
     else if (s.key.includes("whatsapp")) channel = "whatsapp";
 
-    // Determine session type (main, subagent, cron, channel-based)
+    // Determine session type (main, subagent, cron, channel-based).
+    // Prefer the CLI/store `kind` field — live keys are not guaranteed to
+    // contain ":subagent:" (spawn-child kind is authoritative), so key
+    // matching is only the fallback.
     let sessionType = "channel";
-    if (s.key.includes(":subagent:")) sessionType = "subagent";
-    else if (s.key.includes(":cron:")) sessionType = "cron";
-    else if (s.key === "agent:main:main") sessionType = "main";
+    if (s.kind === "spawn-child" || s.key.includes(":subagent:")) sessionType = "subagent";
+    else if (s.kind === "cron" || s.key.includes(":cron:")) sessionType = "cron";
+    else if (s.key === "agent:main:main" || s.key.startsWith("agent:main:main:"))
+      sessionType = "main";
 
     const originator = getSessionOriginator(s.sessionId);
     const label = s.groupChannel || s.displayName || parseSessionLabel(s.key);
@@ -294,79 +373,181 @@ function createSessionsModule(deps) {
     };
   }
 
-  async function refreshSessionsCache() {
-    if (sessionsCache.refreshing) return; // Don't double-refresh
-    sessionsCache.refreshing = true;
+  /** Path of the session store JSON the openclaw CLI reads ("files" source). */
+  function getStorePath() {
+    return path.join(getOpenClawDir(), "agents", "main", "sessions", "sessions.json");
+  }
 
+  /**
+   * Default model/provider from openclaw.json (agents.defaults.model.primary,
+   * e.g. "openai/gpt-5.5") — the CLI fills these in for store entries that
+   * have no per-session model, so the files source does the same.
+   */
+  function getDefaultModel() {
     try {
-      const output = await runOpenClawAsync("sessions --json 2>/dev/null");
-      const jsonStr = extractJSON(output);
-      if (jsonStr) {
-        const data = JSON.parse(jsonStr);
-        const sessions = data.sessions || [];
-
-        // Map sessions (same logic as getSessions)
-        const mapped = sessions.map((s) => mapSession(s));
-        const withOriginator = mapped.filter((s) => s.originator != null);
-
-        sessionsCache = {
-          sessions: mapped,
-          timestamp: Date.now(),
-          refreshing: false,
-        };
-        console.log(
-          `[Sessions Cache] Refreshed: ${mapped.length} sessions (${withOriginator.length} with originator)`,
-        );
+      const configPath = path.join(getOpenClawDir(), "openclaw.json");
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      const primary = config?.agents?.defaults?.model?.primary;
+      if (typeof primary === "string" && primary.length > 0) {
+        const slash = primary.indexOf("/");
+        return slash > 0
+          ? { model: primary.slice(slash + 1), modelProvider: primary.slice(0, slash) }
+          : { model: primary, modelProvider: undefined };
       }
     } catch (e) {
-      console.error("[Sessions Cache] Refresh error:", e.message);
+      // No config or unreadable — leave model fields unset
     }
-    sessionsCache.refreshing = false;
+    return { model: undefined, modelProvider: undefined };
+  }
+
+  /**
+   * Read raw sessions directly from the OpenClaw session store file,
+   * producing the same shape `openclaw sessions --json` emits. Re-parses
+   * only when the store file's mtime/size changes.
+   * @returns {Array<Object>} raw session entries (CLI shape), newest first
+   */
+  function listSessionsFromStore() {
+    const storePath = getStorePath();
+    let stat;
+    try {
+      stat = fs.statSync(storePath);
+    } catch (e) {
+      return [];
+    }
+
+    const now = Date.now();
+    if (
+      storeFileCache.entries &&
+      storeFileCache.mtimeMs === stat.mtimeMs &&
+      storeFileCache.size === stat.size
+    ) {
+      // Recompute ageMs against "now"; everything else is unchanged.
+      return storeFileCache.entries.map((s) => ({ ...s, ageMs: now - (s.updatedAt || 0) }));
+    }
+
+    let store;
+    try {
+      store = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    } catch (e) {
+      console.error("[Sessions Files] Store parse error:", e.message);
+      return storeFileCache.entries
+        ? storeFileCache.entries.map((s) => ({ ...s, ageMs: now - (s.updatedAt || 0) }))
+        : [];
+    }
+
+    const defaults = getDefaultModel();
+    const entries = Object.entries(store)
+      .filter(([, v]) => v && typeof v === "object")
+      .map(([key, v]) => ({
+        key,
+        sessionId: v.sessionId,
+        updatedAt: v.updatedAt || 0,
+        ageMs: now - (v.updatedAt || 0),
+        totalTokens: v.totalTokens ?? (v.inputTokens || 0) + (v.outputTokens || 0),
+        inputTokens: v.inputTokens,
+        outputTokens: v.outputTokens,
+        model: v.model || defaults.model,
+        modelProvider: v.modelProvider || defaults.modelProvider,
+        contextTokens: v.contextTokens,
+        kind: deriveKind(key, v),
+        displayName: v.displayName,
+        groupChannel: v.groupChannel,
+        label: v.label,
+        agentId: "main",
+      }))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+
+    storeFileCache = { mtimeMs: stat.mtimeMs, size: stat.size, entries };
+    return entries;
+  }
+
+  /** Fetch raw sessions from the chosen source (worker context only). */
+  async function fetchRawSessions() {
+    if (sessionsSource === "files") {
+      return listSessionsFromStore();
+    }
+    const output = await runOpenClawAsync("sessions --json 2>/dev/null");
+    const jsonStr = extractJSON(output);
+    if (!jsonStr) return null;
+    return JSON.parse(jsonStr).sessions || [];
+  }
+
+  /**
+   * Refresh the sessions cache. Coalesced: concurrent callers share one
+   * in-flight refresh. Never throws.
+   * @returns {Promise<void>}
+   */
+  function refreshSessionsCache() {
+    if (!enabled) return Promise.resolve();
+    if (refreshInFlight) return refreshInFlight;
+
+    refreshInFlight = (async () => {
+      try {
+        const raw = await fetchRawSessions();
+        if (raw) {
+          const mapped = raw.map((s) => mapSession(s));
+          sessionsCache = { sessions: mapped, raw, timestamp: Date.now() };
+        }
+      } catch (e) {
+        console.error("[Sessions Cache] Refresh error:", e.message);
+      } finally {
+        refreshInFlight = null;
+      }
+    })();
+    return refreshInFlight;
+  }
+
+  /** Age of the sessions cache in ms (Infinity when never refreshed). */
+  function getCacheAgeMs() {
+    return sessionsCache.timestamp ? Date.now() - sessionsCache.timestamp : Infinity;
   }
 
   // Get sessions from cache, trigger async refresh if stale
   function getSessionsCached() {
-    const now = Date.now();
-    const isStale = now - sessionsCache.timestamp > SESSIONS_CACHE_TTL;
-
-    if (isStale && !sessionsCache.refreshing) {
-      // Trigger async refresh (don't await - return stale data immediately)
+    if (enabled && getCacheAgeMs() > refreshMs) {
+      // Trigger async refresh (don't await — return stale data immediately)
       refreshSessionsCache();
     }
-
     return sessionsCache.sessions;
   }
 
+  /** Raw (CLI-shaped) sessions from the cache. */
+  function getRawSessionsCached() {
+    getSessionsCached();
+    return sessionsCache.raw;
+  }
+
+  /**
+   * List sessions. ALWAYS serves the background-refreshed cache — never
+   * spawns the CLI nor parses stores on the request path.
+   */
   function getSessions(options = {}) {
     const limit = Object.prototype.hasOwnProperty.call(options, "limit") ? options.limit : 20;
     const returnCount = options.returnCount || false;
 
-    // For "get all" requests (limit: null), use the async cache
-    // This is the expensive operation that was blocking
-    if (limit === null) {
-      const cached = getSessionsCached();
-      const totalCount = cached.length;
-      return returnCount ? { sessions: cached, totalCount } : cached;
-    }
+    const cached = getSessionsCached();
+    const totalCount = cached.length;
+    const sessions = limit == null ? cached : cached.slice(0, limit);
+    return returnCount ? { sessions, totalCount } : sessions;
+  }
 
-    // For limited requests, can still use sync (fast enough)
-    try {
-      const output = runOpenClaw("sessions --json 2>/dev/null");
-      const jsonStr = extractJSON(output);
-      if (jsonStr) {
-        const data = JSON.parse(jsonStr);
-        const totalCount = data.count || data.sessions?.length || 0;
-        let sessions = data.sessions || [];
-        if (limit != null) {
-          sessions = sessions.slice(0, limit);
-        }
-        const mapped = sessions.map((s) => mapSession(s));
-        return returnCount ? { sessions: mapped, totalCount } : mapped;
-      }
-    } catch (e) {
-      console.error("Failed to get sessions:", e.message);
+  /** Start the background refresh worker (idempotent). */
+  function startSessionsRefresh() {
+    if (!enabled || refreshTimer) return;
+    refreshSessionsCache();
+    refreshTimer = setInterval(() => refreshSessionsCache(), refreshMs);
+    if (refreshTimer.unref) refreshTimer.unref();
+    console.log(
+      `[Sessions Cache] Background refresh started (source=${sessionsSource}, ${refreshMs}ms)`,
+    );
+  }
+
+  /** Stop the background refresh worker. */
+  function stopSessionsRefresh() {
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
+      refreshTimer = null;
     }
-    return returnCount ? { sessions: [], totalCount: 0 } : [];
   }
 
   // Read session transcript from JSONL file
@@ -393,17 +574,14 @@ function createSessionsModule(deps) {
     }
   }
 
-  // Get detailed session info
-  function getSessionDetail(sessionKey) {
+  // Get detailed session info (served from the background-refreshed cache —
+  // warms the cache first if it has never been populated).
+  async function getSessionDetail(sessionKey) {
     try {
-      // Get basic session info
-      const listOutput = runOpenClaw("sessions --json 2>/dev/null");
-      let sessionInfo = null;
-      const jsonStr = extractJSON(listOutput);
-      if (jsonStr) {
-        const data = JSON.parse(jsonStr);
-        sessionInfo = data.sessions?.find((s) => s.key === sessionKey);
+      if (sessionsCache.timestamp === 0) {
+        await refreshSessionsCache();
       }
+      const sessionInfo = sessionsCache.raw.find((s) => s.key === sessionKey);
 
       if (!sessionInfo) {
         return { error: "Session not found" };
@@ -612,11 +790,16 @@ function createSessionsModule(deps) {
     mapSession,
     refreshSessionsCache,
     getSessionsCached,
+    getRawSessionsCached,
     getSessions,
+    getCacheAgeMs,
+    listSessionsFromStore,
+    startSessionsRefresh,
+    stopSessionsRefresh,
     readTranscript,
     getSessionDetail,
     parseSessionLabel,
   };
 }
 
-module.exports = { createSessionsModule, CHANNEL_MAP };
+module.exports = { createSessionsModule, CHANNEL_MAP, deriveKind };

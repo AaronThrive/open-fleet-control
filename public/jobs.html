@@ -1196,6 +1196,10 @@
         try {
           const res = await fetch("/api/jobs");
           const data = await res.json();
+          if (data && data.available === false) {
+            renderJobsUnavailable(data.reason);
+            return;
+          }
           jobs = data.jobs || [];
           renderJobs();
           updateStats();
@@ -1208,6 +1212,41 @@
           console.error("Failed to fetch jobs:", e);
           showToast(t("jobs.toastLoadFailed", {}, "Failed to load jobs"), "error");
         }
+      }
+
+      // Clean state for when the optional jobs library is not installed:
+      // 200 { available: false, reason } from /api/jobs.
+      function renderJobsUnavailable(reason) {
+        jobs = [];
+        const loading = document.getElementById("jobs-loading");
+        const grid = document.getElementById("jobs-grid");
+        const empty = document.getElementById("jobs-empty");
+        if (loading) loading.style.display = "none";
+        if (grid) grid.style.display = "none";
+        if (empty) {
+          empty.style.display = "block";
+          const icon = empty.querySelector(".empty-state-icon");
+          const text = empty.querySelector(".empty-state-text");
+          const hint = empty.querySelector(".empty-state-hint");
+          if (icon) icon.textContent = "🚫";
+          if (text) {
+            // Drop the generic data-i18n key so later locale passes don't
+            // overwrite the unavailable message with "No jobs found".
+            text.removeAttribute("data-i18n");
+            text.textContent = t("jobs.libraryNotInstalled", {}, "Jobs library not installed");
+          }
+          if (hint) {
+            const guidance = t(
+              "jobs.libraryNotInstalledHint",
+              {},
+              "Install the jobs library and set paths.jobs to enable this page.",
+            );
+            // Only surface the API reason when it adds information beyond the title
+            hint.textContent =
+              reason && reason !== "Jobs library not installed" ? reason : guidance;
+          }
+        }
+        updateStats();
       }
 
       // Refresh jobs

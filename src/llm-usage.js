@@ -121,11 +121,16 @@ function transformLiveUsageData(usage) {
 }
 
 // Get LLM usage stats - returns cached data immediately, refreshes in background
-function getLlmUsage(statePath) {
+// options.allowSpawn=false suppresses the background CLI refresh (used by
+// secondary instances with fleet.openclawSources=false).
+function getLlmUsage(statePath, options = {}) {
   const now = Date.now();
 
   // If cache is stale or empty, trigger background refresh
-  if (!llmUsageCache.data || now - llmUsageCache.timestamp > LLM_CACHE_TTL_MS) {
+  if (
+    options.allowSpawn !== false &&
+    (!llmUsageCache.data || now - llmUsageCache.timestamp > LLM_CACHE_TTL_MS)
+  ) {
     refreshLlmUsageAsync();
   }
 
@@ -214,23 +219,49 @@ function getLlmUsage(statePath) {
   };
 }
 
+// Routing-stats cache: the optional python `llm_routing` skill can take
+// seconds, so it runs as an async background refresh (keyed by hours) and
+// requests serve the cache or the fast JSONL fallback — never a sync exec.
+const routingStatsCache = new Map(); // hours -> { data, timestamp, refreshing }
+const ROUTING_STATS_TTL_MS = 60000;
+
+function refreshRoutingStatsAsync(skillsPath, hours) {
+  const skillDir = path.join(skillsPath, "llm_routing");
+  if (!fs.existsSync(skillDir)) return;
+  const entry = routingStatsCache.get(hours) || { data: null, timestamp: 0, refreshing: false };
+  if (entry.refreshing) return;
+  entry.refreshing = true;
+  routingStatsCache.set(hours, entry);
+  execFile(
+    "python",
+    ["-m", "llm_routing", "stats", "--hours", String(hours), "--json"],
+    { encoding: "utf8", timeout: 10000, cwd: skillDir, env: getSafeEnv() },
+    (err, stdout) => {
+      entry.refreshing = false;
+      if (err) return;
+      try {
+        entry.data = JSON.parse(stdout);
+        entry.timestamp = Date.now();
+      } catch (e) {
+        // Ignore parse errors; fallback path serves the data
+      }
+    },
+  );
+}
+
 function getRoutingStats(skillsPath, statePath, hours = 24) {
   const safeHours = parseInt(hours, 10) || 24;
-  try {
-    const { execFileSync } = require("child_process");
-    const skillDir = path.join(skillsPath, "llm_routing");
-    const output = execFileSync(
-      "python",
-      ["-m", "llm_routing", "stats", "--hours", String(safeHours), "--json"],
-      {
-        encoding: "utf8",
-        timeout: 10000,
-        cwd: skillDir,
-        env: getSafeEnv(),
-      },
-    );
-    return JSON.parse(output);
-  } catch (e) {
+
+  const cached = routingStatsCache.get(safeHours);
+  if (cached?.data && Date.now() - cached.timestamp < ROUTING_STATS_TTL_MS) {
+    return cached.data;
+  }
+  // Kick a background refresh (no-op if the python skill is absent) and
+  // serve the fast JSONL fallback in the meantime.
+  refreshRoutingStatsAsync(skillsPath, safeHours);
+  if (cached?.data) return cached.data;
+
+  {
     // Fallback: read JSONL directly
     try {
       const logFile = path.join(statePath, "routing-log.jsonl");
@@ -292,8 +323,8 @@ function getRoutingStats(skillsPath, statePath, hours = 24) {
 
 // Start background refresh timers (call explicitly, not on require)
 function startLlmUsageRefresh() {
-  setTimeout(() => refreshLlmUsageAsync(), 1000);
-  setInterval(() => refreshLlmUsageAsync(), LLM_CACHE_TTL_MS);
+  setTimeout(() => refreshLlmUsageAsync(), 1000).unref();
+  setInterval(() => refreshLlmUsageAsync(), LLM_CACHE_TTL_MS).unref();
 }
 
 module.exports = {

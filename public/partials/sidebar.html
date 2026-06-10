@@ -205,21 +205,19 @@
         <span class="nav-icon">📜</span>
         <span data-i18n="sidebar.logs">Logs</span>
       </a>
+      <a
+        href="/#view-alerts"
+        class="nav-item"
+        data-view="alerts"
+        data-page="/"
+        data-tooltip="Alerts"
+      >
+        <span class="nav-icon">🔔</span>
+        <span data-i18n="sidebar.alerts">Alerts</span>
+      </a>
     </div>
     <div class="nav-section">
       <div class="nav-section-title" data-i18n="sidebar.settings">Settings</div>
-      <a
-        href="#"
-        class="nav-item"
-        onclick="
-          window.openPrivacyModal && openPrivacyModal();
-          return false;
-        "
-        data-tooltip="Privacy Settings"
-      >
-        <span class="nav-icon">🔒</span>
-        <span data-i18n="sidebar.privacy">Privacy</span>
-      </a>
       <a
         href="/#view-settings"
         class="nav-item"
@@ -250,44 +248,6 @@
         <span class="nav-icon">ℹ️</span>
         <span data-i18n="sidebar.about">About</span>
       </a>
-    </div>
-    <div class="nav-section">
-      <div class="nav-section-title" data-i18n="sidebar.quickStats">Quick Stats</div>
-      <div class="nav-item" style="cursor: default" data-tooltip="Total tokens (24h)">
-        <span class="nav-icon">🎫</span>
-        <span data-i18n="sidebar.tokens">Tokens</span>
-        <span class="nav-badge" id="nav-tokens">-</span>
-      </div>
-      <div
-        class="nav-item"
-        style="cursor: pointer"
-        onclick="window.openCostModal && openCostModal()"
-        data-tooltip="Click for breakdown"
-      >
-        <span class="nav-icon">💰</span>
-        <span data-i18n="sidebar.estDaily">Est. Daily</span>
-        <span class="nav-badge" id="nav-cost">-</span>
-      </div>
-      <div
-        class="nav-item"
-        style="cursor: pointer"
-        onclick="window.openCostModal && openCostModal()"
-        data-tooltip="Projected monthly cost"
-      >
-        <span class="nav-icon">📅</span>
-        <span data-i18n="sidebar.estMonthly">Est. Monthly</span>
-        <span class="nav-badge" id="nav-monthly-cost">-</span>
-      </div>
-      <div class="nav-item" style="cursor: default" data-tooltip="Average tokens per session">
-        <span class="nav-icon">📊</span>
-        <span data-i18n="sidebar.avgTokSess">Avg Tok/Sess</span>
-        <span class="nav-badge" id="nav-avg-tokens">-</span>
-      </div>
-      <div class="nav-item" style="cursor: default" data-tooltip="Average cost per session">
-        <span class="nav-icon">💵</span>
-        <span data-i18n="sidebar.avgCostSess">Avg $/Sess</span>
-        <span class="nav-badge" id="nav-avg-cost">-</span>
-      </div>
     </div>
   </div>
   <div class="sidebar-footer">

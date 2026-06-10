@@ -31,6 +31,19 @@ const fleetConfig = {
   mesh: { intervalMs: 60000 },
   // Never shell out to external CLIs (openclaw memory-pro / gbrain) in tests
   cortex: { enabled: false },
+  // Engine ON so the alerts/history endpoints are exercisable, but every
+  // sink EXPLICITLY disabled: FLEET_CONFIG_JSON deep-merges over config/
+  // dashboard.local.json, so omitting `sinks` would inherit a real ntfy
+  // topic and fire actual push notifications from tests. The spawn env also
+  // sets OFC_DISABLE_ALERT_DELIVERY=1 (engine-level no-op) as backstop.
+  alerts: {
+    enabled: true,
+    sinks: {
+      ntfy: { enabled: false, topic: "" },
+      slack: { enabled: false, gatewayUrl: "" },
+      webhooks: [],
+    },
+  },
   rateLimit: { windowMs: 60000, max: RATE_LIMIT_MAX },
 };
 
@@ -76,6 +89,7 @@ describe("fleet routes", () => {
         ...process.env,
         PORT: String(TEST_PORT),
         FLEET_CONFIG_JSON: JSON.stringify(fleetConfig),
+        OFC_DISABLE_ALERT_DELIVERY: "1",
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -297,6 +311,83 @@ describe("fleet routes", () => {
     const res = await request("GET", "/api/fleet/alerts");
     assert.strictEqual(res.status, 200);
     assert.ok(Array.isArray(res.body.alerts));
+    assert.strictEqual(res.body.source, "memory");
+  });
+
+  it("fires a (suppressed) test alert, then serves ring + JSONL history with filters", async () => {
+    // The engine runs with NO sinks + OFC_DISABLE_ALERT_DELIVERY=1, so this
+    // cannot deliver anything — it only exercises record/history plumbing.
+    const fired = await request(
+      "POST",
+      "/api/fleet/settings/test-alert",
+      { message: "integration history probe" },
+      { "Tailscale-User-Login": "tester@example.com" },
+    );
+    assert.strictEqual(fired.status, 200);
+    assert.strictEqual(fired.body.result.fired, true);
+
+    // In-memory ring with type filter
+    const ring = await request("GET", "/api/fleet/alerts?type=testAlert&limit=10");
+    assert.strictEqual(ring.status, 200);
+    assert.strictEqual(ring.body.source, "memory");
+    assert.ok(ring.body.alerts.length >= 1);
+    assert.strictEqual(ring.body.alerts[0].type, "testAlert");
+    assert.strictEqual(ring.body.alerts[0].message, "integration history probe");
+
+    // Persistent history read from logs/alerts.jsonl
+    const history = await request("GET", "/api/fleet/alerts?history=1&type=testAlert");
+    assert.strictEqual(history.status, 200);
+    assert.strictEqual(history.body.source, "history");
+    assert.ok(history.body.alerts.length >= 1);
+    assert.strictEqual(history.body.alerts[0].type, "testAlert");
+    assert.match(history.body.alerts[0].id, /^alr_/);
+    const onDisk = fs.readFileSync(path.join(tmpDir, "logs", "alerts.jsonl"), "utf8");
+    assert.match(onDisk, /integration history probe/);
+
+    // Filters that match nothing
+    const none = await request("GET", "/api/fleet/alerts?history=1&type=nodeOffline");
+    assert.strictEqual(none.body.alerts.length, 0);
+    const badSeverity = await request("GET", "/api/fleet/alerts?history=1&severity=panic");
+    assert.strictEqual(badSeverity.status, 400);
+  });
+
+  // NOTE: the spawned server's settings service persists to the repo's REAL
+  // config/dashboard.local.json, so these integration tests only exercise
+  // read-only GETs and PATCHes that FAIL validation (400 = nothing written).
+  // Successful flap/mutes PATCH round-trips are covered by the unit tests in
+  // tests/settings.test.js against a temp config file.
+  it("exposes flap + mutes + nodeRecovered in settings and validates PATCHes", async () => {
+    const headers = { "Tailscale-User-Login": "tester@example.com" };
+
+    const current = await request("GET", "/api/fleet/settings");
+    assert.strictEqual(current.status, 200);
+    assert.deepStrictEqual(current.body.alerts.flap, { consecutive: 3, minDurationMs: 60000 });
+    assert.ok(Array.isArray(current.body.alerts.mutes));
+    assert.strictEqual(current.body.alerts.rules.nodeRecovered, true);
+
+    const badFlap = await request(
+      "PATCH",
+      "/api/fleet/settings",
+      { alerts: { flap: { consecutive: 0 } } },
+      headers,
+    );
+    assert.strictEqual(badFlap.status, 400);
+
+    const badMuteRule = await request(
+      "PATCH",
+      "/api/fleet/settings",
+      { alerts: { mutes: [{ rule: "testAlert" }] } }, // not a known rule name
+      headers,
+    );
+    assert.strictEqual(badMuteRule.status, 400);
+
+    const emptyMute = await request(
+      "PATCH",
+      "/api/fleet/settings",
+      { alerts: { mutes: [{}] } },
+      headers,
+    );
+    assert.strictEqual(emptyMute.status, 400);
   });
 
   it("returns a 404 envelope for unknown fleet routes", async () => {

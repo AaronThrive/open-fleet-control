@@ -9,13 +9,24 @@ const { runCmd, formatBytes } = require("./utils");
 let cachedVitals = null;
 let lastVitalsUpdate = 0;
 const VITALS_CACHE_TTL = 30000; // 30 seconds - vitals don't change fast
-let vitalsRefreshing = false;
+let vitalsInFlight = null;
 
-// Async background refresh of system vitals (non-blocking)
-async function refreshVitalsAsync() {
-  if (vitalsRefreshing) return;
-  vitalsRefreshing = true;
+/**
+ * Refresh system vitals in the background. Coalesced: concurrent callers
+ * share a single in-flight collection and the returned promise resolves
+ * when that collection finishes.
+ * @returns {Promise<void>}
+ */
+function refreshVitalsAsync() {
+  if (vitalsInFlight) return vitalsInFlight;
+  vitalsInFlight = collectVitals().finally(() => {
+    vitalsInFlight = null;
+  });
+  return vitalsInFlight;
+}
 
+// Async collection of system vitals (non-blocking)
+async function collectVitals() {
   const vitals = {
     hostname: "",
     uptime: "",
@@ -295,15 +306,31 @@ async function refreshVitalsAsync() {
   vitals.disk.totalFormatted = formatBytes(vitals.disk.total);
   vitals.disk.freeFormatted = formatBytes(vitals.disk.free);
 
+  vitals.collectedAt = Date.now();
   cachedVitals = vitals;
-  lastVitalsUpdate = Date.now();
-  vitalsRefreshing = false;
+  lastVitalsUpdate = vitals.collectedAt;
   console.log("[Vitals] Cache refreshed async");
 }
 
-// Start background vitals refresh on startup
-setTimeout(() => refreshVitalsAsync(), 500);
-setInterval(() => refreshVitalsAsync(), VITALS_CACHE_TTL);
+// Start background vitals refresh on startup (unref'd so the timers never
+// keep a test process or a shutting-down server alive)
+setTimeout(() => refreshVitalsAsync(), 500).unref();
+setInterval(() => refreshVitalsAsync(), VITALS_CACHE_TTL).unref();
+
+/**
+ * Force a fresh vitals collection (used by GET /api/vitals?refresh=1).
+ * Async-safe: shares any in-flight collection, resolves to the new cache.
+ * @returns {Promise<object>} freshly collected vitals
+ */
+async function forceRefreshVitals() {
+  await refreshVitalsAsync();
+  return getSystemVitals();
+}
+
+/** Age of the vitals cache in ms (Infinity when never collected). */
+function getVitalsCacheAgeMs() {
+  return lastVitalsUpdate ? Date.now() - lastVitalsUpdate : Infinity;
+}
 
 function getSystemVitals() {
   const now = Date.now();
@@ -441,6 +468,8 @@ function getOptionalDeps() {
 
 module.exports = {
   refreshVitalsAsync,
+  forceRefreshVitals,
+  getVitalsCacheAgeMs,
   getSystemVitals,
   checkOptionalDeps,
   getOptionalDeps,

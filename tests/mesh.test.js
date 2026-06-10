@@ -384,6 +384,49 @@ describe("mesh module", () => {
       const state = await mesh.getState();
       assert.strictEqual(state.nodes[0].health.status, "online");
     });
+
+    it("fires onHealth after EVERY poll, including no-transition polls", async () => {
+      const healthEvents = [];
+      let failing = false;
+      const mesh = makeMesh({
+        onHealth: (event) => healthEvents.push(event),
+        fetchFn: async () => {
+          if (failing) throw new Error("connect ECONNREFUSED");
+          return okResponse({ status: "ok", version: "1.0.0" });
+        },
+      });
+      mesh.registerNode({ hostname: "atlas" });
+
+      await mesh._pollOnce(); // unknown -> online
+      await mesh._pollOnce(); // online -> online (still reported)
+      failing = true;
+      await mesh._pollOnce(); // online -> unreachable
+      await mesh._pollOnce(); // unreachable -> unreachable (still reported)
+
+      assert.strictEqual(healthEvents.length, 4);
+      assert.deepStrictEqual(
+        healthEvents.map((e) => e.status),
+        ["online", "online", "unreachable", "unreachable"],
+      );
+      // The failure streak is visible per poll — the alert wiring's flap
+      // tracker depends on this.
+      assert.strictEqual(healthEvents[2].health.consecutiveFailures, 1);
+      assert.strictEqual(healthEvents[3].health.consecutiveFailures, 2);
+      assert.strictEqual(healthEvents[0].node.hostname, "atlas");
+      assert.strictEqual(healthEvents[2].previousStatus, "online");
+    });
+
+    it("survives an onHealth callback that throws", async () => {
+      const mesh = makeMesh({
+        onHealth: () => {
+          throw new Error("tracker bug");
+        },
+      });
+      mesh.registerNode({ hostname: "atlas" });
+      await mesh._pollOnce(); // must not reject
+      const state = await mesh.getState();
+      assert.strictEqual(state.nodes[0].health.status, "online");
+    });
   });
 
   describe("discoverPeers()", () => {

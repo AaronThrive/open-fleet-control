@@ -5,8 +5,9 @@
  * visit of #view-cron and must be idempotent.
  *
  * Data source: GET /api/cron → { cron: [{ id, name, schedule, scheduleHuman,
- * nextRun, enabled, lastStatus }] }, also mirrored in the /api/state `cron`
- * slice delivered over SSE.
+ * nextRun, enabled, lastStatus, agent, node, source }] } (source is
+ * 'openclaw' or 'hermes'), also mirrored in the /api/state `cron` slice
+ * delivered over SSE.
  *
  * Real-time: listens for the `fleet:state` window event (fed by the page's
  * single /api/events EventSource) with a polling fallback.
@@ -24,7 +25,7 @@ let stateListener = null;
 let requestSeq = 0;
 let lastSseAt = 0;
 let currentJobs = [];
-const filters = { status: "all", schedule: "all" };
+const filters = { status: "all", schedule: "all", source: "all", agent: "all" };
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -63,8 +64,11 @@ function classifySchedule(job) {
 
 function buildCard(job) {
   const card = el("div", `cron-card ${job.enabled === false ? "disabled" : ""}`);
+  const source = job.source === "hermes" ? "hermes" : "openclaw";
   card.dataset.enabled = job.enabled !== false ? "true" : "false";
   card.dataset.schedule = classifySchedule(job);
+  card.dataset.source = source;
+  card.dataset.agent = job.agent || "";
 
   card.appendChild(el("div", "cron-icon", "⏰"));
 
@@ -74,6 +78,12 @@ function buildCard(job) {
   if (job.scheduleHuman) {
     info.appendChild(el("div", "cron-schedule-human", job.scheduleHuman));
   }
+
+  const badges = el("div", "cron-badges");
+  if (job.agent) badges.appendChild(el("span", "cron-badge agent", job.agent));
+  if (job.node) badges.appendChild(el("span", "cron-badge node", job.node));
+  badges.appendChild(el("span", "cron-badge source", source === "hermes" ? "Hermes" : "OpenClaw"));
+  info.appendChild(badges);
   card.appendChild(info);
 
   const meta = el("div", "cron-meta");
@@ -117,6 +127,7 @@ function buildCard(job) {
 }
 
 function applyFilters(els) {
+  let shown = 0;
   els.grid.querySelectorAll(".cron-card").forEach((card) => {
     const enabled = card.dataset.enabled === "true";
     const showStatus =
@@ -124,14 +135,80 @@ function applyFilters(els) {
       (filters.status === "enabled" && enabled) ||
       (filters.status === "disabled" && !enabled);
     const showSchedule = filters.schedule === "all" || card.dataset.schedule === filters.schedule;
-    card.classList.toggle("hidden-by-filter", !(showStatus && showSchedule));
+    const showSource = filters.source === "all" || card.dataset.source === filters.source;
+    const showAgent = filters.agent === "all" || card.dataset.agent === filters.agent;
+    const show = showStatus && showSchedule && showSource && showAgent;
+    if (show) shown += 1;
+    card.classList.toggle("hidden-by-filter", !show);
   });
+  updateFilterEmptyNote(els, shown);
+}
+
+/**
+ * When the active filters hide every card, explain why instead of showing a
+ * silently blank grid. The Hermes source slot stays selectable even when no
+ * Hermes scheduled tasks exist yet — it renders empty with a note.
+ */
+function updateFilterEmptyNote(els, shownCount) {
+  if (!els.filterEmpty) return;
+  const hasCards = els.grid.querySelector(".cron-card") !== null;
+  if (!hasCards || shownCount > 0) {
+    els.filterEmpty.hidden = true;
+    return;
+  }
+  if (filters.source === "hermes") {
+    els.filterEmpty.textContent = t(
+      "views.cron.hermesEmpty",
+      {},
+      "No Hermes scheduled tasks found — ~/.hermes/cron/jobs.json has no matching jobs.",
+    );
+  } else {
+    els.filterEmpty.textContent = t(
+      "views.cron.filterEmpty",
+      {},
+      "No cron jobs match the current filters.",
+    );
+  }
+  els.filterEmpty.hidden = false;
+}
+
+/**
+ * Rebuild the agent filter buttons from the agents present in the data,
+ * preserving the active selection when possible.
+ */
+function syncAgentFilter(els, jobs) {
+  const group = els.filtersBar.querySelector('[data-filter-group="agent"]');
+  if (!group) return;
+
+  const agents = [...new Set(jobs.map((job) => job.agent).filter(Boolean))].sort();
+  if (filters.agent !== "all" && !agents.includes(filters.agent)) {
+    filters.agent = "all";
+  }
+
+  group.querySelectorAll(".filter-btn").forEach((btn) => btn.remove());
+  const makeButton = (value, label) => {
+    const btn = el("button", `filter-btn ${filters.agent === value ? "active" : ""}`.trim(), label);
+    btn.type = "button";
+    btn.dataset.filter = value;
+    btn.addEventListener("click", () => {
+      filters.agent = value;
+      group
+        .querySelectorAll(".filter-btn")
+        .forEach((other) => other.classList.toggle("active", other === btn));
+      applyFilters(els);
+    });
+    return btn;
+  };
+
+  group.appendChild(makeButton("all", t("views.cron.filterAll", {}, "All")));
+  agents.forEach((agent) => group.appendChild(makeButton(agent, agent)));
 }
 
 function render(els, jobs) {
   currentJobs = Array.isArray(jobs) ? jobs : [];
   const visible = currentJobs.filter((job) => !isCronHidden(job));
   els.headerCount.textContent = visible.length;
+  syncAgentFilter(els, visible);
 
   if (visible.length === 0) {
     const empty = el("div", "empty-state");
@@ -140,6 +217,7 @@ function render(els, jobs) {
       el("div", "empty-state-text", t("views.cron.empty", {}, "No scheduled jobs")),
     );
     els.grid.replaceChildren(empty);
+    updateFilterEmptyNote(els, 0);
     return;
   }
   els.grid.replaceChildren(...visible.map(buildCard));
@@ -193,6 +271,8 @@ export function init(container) {
   teardown();
   filters.status = "all";
   filters.schedule = "all";
+  filters.source = "all";
+  filters.agent = "all";
 
   const els = {
     grid: container.querySelector("#cron-view-grid"),
@@ -204,9 +284,13 @@ export function init(container) {
     console.error("[Cron] Partial markup is missing expected elements; aborting init.");
     return;
   }
+  // Optional element (added with the dual-source layout); absence is fine.
+  els.filterEmpty = container.querySelector("#cron-view-filter-empty");
 
   els.filtersBar.querySelectorAll(".filter-group").forEach((group) => {
     const groupName = group.dataset.filterGroup;
+    // The agent group is rebuilt dynamically from data in syncAgentFilter().
+    if (groupName === "agent") return;
     group.querySelectorAll(".filter-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         filters[groupName] = btn.dataset.filter;

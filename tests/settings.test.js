@@ -46,10 +46,13 @@ describe("settings module", () => {
       assert.deepStrictEqual(result.alerts.rules, {
         nodeOffline: true,
         nodeUnreachable: true,
+        nodeRecovered: true,
         taskFailed: true,
         taskStale: true,
         lessonPending: true,
       });
+      assert.deepStrictEqual(result.alerts.flap, { consecutive: 3, minDurationMs: 60000 });
+      assert.deepStrictEqual(result.alerts.mutes, []);
       assert.deepStrictEqual(result.alerts.sinks.slack, {
         enabled: false,
         gatewayUrl: "",
@@ -261,6 +264,128 @@ describe("settings module", () => {
     });
   });
 
+  describe("flap config (alerts.flap)", () => {
+    it("accepts a valid flap patch and merges per-field", () => {
+      const settings = createSettings({ configPath });
+      settings.update({ alerts: { flap: { consecutive: 5 } } });
+      assert.deepStrictEqual(settings.get().alerts.flap, { consecutive: 5, minDurationMs: 60000 });
+
+      settings.update({ alerts: { flap: { minDurationMs: 120000 } } });
+      assert.deepStrictEqual(settings.get().alerts.flap, {
+        consecutive: 5, // survived the second patch
+        minDurationMs: 120000,
+      });
+    });
+
+    it("rejects out-of-bounds, non-integer, unknown-key, and empty flap patches", () => {
+      const settings = createSettings({ configPath });
+      assert.throws(() => settings.update({ alerts: { flap: { consecutive: 0 } } }), /consecutive/);
+      assert.throws(
+        () => settings.update({ alerts: { flap: { consecutive: 21 } } }),
+        /consecutive/,
+      );
+      assert.throws(
+        () => settings.update({ alerts: { flap: { consecutive: 2.5 } } }),
+        /consecutive/,
+      );
+      assert.throws(
+        () => settings.update({ alerts: { flap: { minDurationMs: -1 } } }),
+        /minDurationMs/,
+      );
+      assert.throws(
+        () => settings.update({ alerts: { flap: { minDurationMs: 3600001 } } }),
+        /minDurationMs/,
+      );
+      assert.throws(() => settings.update({ alerts: { flap: { bogus: 1 } } }), /unknown key/);
+      assert.throws(() => settings.update({ alerts: { flap: {} } }), /flap/);
+    });
+
+    it("accepts boundary values (1 consecutive, 0ms / 1h duration)", () => {
+      const settings = createSettings({ configPath });
+      settings.update({ alerts: { flap: { consecutive: 1, minDurationMs: 0 } } });
+      assert.deepStrictEqual(settings.get().alerts.flap, { consecutive: 1, minDurationMs: 0 });
+      settings.update({ alerts: { flap: { consecutive: 20, minDurationMs: 3600000 } } });
+      assert.deepStrictEqual(settings.get().alerts.flap, {
+        consecutive: 20,
+        minDurationMs: 3600000,
+      });
+    });
+  });
+
+  describe("mutes (alerts.mutes)", () => {
+    it("accepts node / rule / rule+node mutes and normalizes until to ISO", () => {
+      const settings = createSettings({ configPath });
+      settings.update({
+        alerts: {
+          mutes: [
+            { node: "hermes-1", until: "2030-01-01T00:00:00.000Z" },
+            { rule: "taskStale" },
+            { rule: "nodeOffline", node: "drone-2", until: 1893456000000 },
+          ],
+        },
+      });
+
+      const mutes = settings.get().alerts.mutes;
+      assert.strictEqual(mutes.length, 3);
+      assert.deepStrictEqual(mutes[0], { node: "hermes-1", until: "2030-01-01T00:00:00.000Z" });
+      assert.deepStrictEqual(mutes[1], { rule: "taskStale" });
+      assert.strictEqual(mutes[2].until, new Date(1893456000000).toISOString());
+      // getAlertsConfig carries mutes to the engine
+      assert.strictEqual(settings.getAlertsConfig().mutes.length, 3);
+    });
+
+    it("PATCH replaces the whole mutes array (unmute = send the list minus the entry)", () => {
+      const settings = createSettings({ configPath });
+      settings.update({ alerts: { mutes: [{ node: "a" }, { node: "b" }] } });
+      settings.update({ alerts: { mutes: [{ node: "b" }] } });
+      assert.deepStrictEqual(settings.get().alerts.mutes, [{ node: "b" }]);
+      settings.update({ alerts: { mutes: [] } });
+      assert.deepStrictEqual(settings.get().alerts.mutes, []);
+    });
+
+    it("rejects malformed mute entries", () => {
+      const settings = createSettings({ configPath });
+      assert.throws(() => settings.update({ alerts: { mutes: "nope" } }), /array/);
+      assert.throws(() => settings.update({ alerts: { mutes: [{}] } }), /rule and\/or node/);
+      assert.throws(
+        () => settings.update({ alerts: { mutes: [{ rule: "noSuchRule" }] } }),
+        /unknown rule/,
+      );
+      assert.throws(() => settings.update({ alerts: { mutes: [{ node: "" }] } }), /node/);
+      assert.throws(
+        () => settings.update({ alerts: { mutes: [{ node: "x".repeat(121) }] } }),
+        /node/,
+      );
+      assert.throws(
+        () => settings.update({ alerts: { mutes: [{ node: "a", until: "not-a-date" }] } }),
+        /until/,
+      );
+      assert.throws(
+        () => settings.update({ alerts: { mutes: [{ node: "a", extra: 1 }] } }),
+        /unknown key/,
+      );
+      const tooMany = Array.from({ length: 51 }, (_, i) => ({ node: `n${i}` }));
+      assert.throws(() => settings.update({ alerts: { mutes: tooMany } }), /Too many mutes/);
+    });
+
+    it("hot-applies flap + mutes changes through onChange (no restart required)", () => {
+      const received = [];
+      const settings = createSettings({ configPath, onChange: (cfg) => received.push(cfg) });
+
+      const result = settings.update({
+        alerts: { flap: { consecutive: 4 }, mutes: [{ node: "hermes-1" }] },
+      });
+      assert.deepStrictEqual(result.restartRequired, []);
+      assert.strictEqual(received.length, 1);
+      assert.strictEqual(received[0].flap.consecutive, 4);
+      assert.deepStrictEqual(received[0].mutes, [{ node: "hermes-1" }]);
+      // nodeRecovered rule exists and is patchable
+      settings.update({ alerts: { rules: { nodeRecovered: false } } });
+      assert.strictEqual(settings.get().alerts.rules.nodeRecovered, false);
+      assert.strictEqual(received[1].rules.nodeRecovered, false);
+    });
+  });
+
   describe("webhook operations", () => {
     it("add: generates an id, persists the secret, never returns it", () => {
       const settings = createSettings({ configPath });
@@ -450,10 +575,13 @@ describe("settings module", () => {
       assert.deepStrictEqual(cfg.rules, {
         nodeOffline: true,
         nodeUnreachable: true,
+        nodeRecovered: true,
         taskFailed: true,
         taskStale: true,
         lessonPending: true,
       });
+      assert.deepStrictEqual(cfg.flap, { consecutive: 3, minDurationMs: 60000 }); // engine-ready
+      assert.deepStrictEqual(cfg.mutes, []);
     });
   });
 });

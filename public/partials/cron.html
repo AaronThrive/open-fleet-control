@@ -24,6 +24,36 @@
       color: var(--text-muted);
       background: var(--bg);
     }
+    #cron-view-section .cron-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 5px;
+    }
+    #cron-view-section .cron-badge {
+      font-size: 0.65rem;
+      padding: 1px 8px;
+      border-radius: 10px;
+      white-space: nowrap;
+    }
+    #cron-view-section .cron-badge.agent {
+      color: var(--green);
+      background: rgba(63, 185, 80, 0.12);
+    }
+    #cron-view-section .cron-badge.node {
+      color: #2dd4bf;
+      background: rgba(45, 212, 191, 0.12);
+    }
+    #cron-view-section .cron-badge.source {
+      color: var(--text-muted);
+      background: var(--bg);
+      border: 1px solid rgba(128, 128, 128, 0.3);
+    }
+    #cron-view-section .cron-filter-empty {
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      padding: 12px 4px;
+    }
   </style>
   <section class="view-panel">
     <div class="view-header">
@@ -53,9 +83,20 @@
         <button class="filter-btn" data-filter="daily" type="button">📅 Daily</button>
         <button class="filter-btn" data-filter="weekly" type="button">📆 Weekly</button>
       </div>
+      <div class="filter-group" data-filter-group="source">
+        <span class="filter-label" data-i18n="views.cron.filterSource">Source:</span>
+        <button class="filter-btn active" data-filter="all" type="button">All</button>
+        <button class="filter-btn" data-filter="openclaw" type="button">🦞 OpenClaw</button>
+        <button class="filter-btn" data-filter="hermes" type="button">⚡ Hermes</button>
+      </div>
+      <div class="filter-group" data-filter-group="agent" id="cron-view-agent-filter">
+        <span class="filter-label" data-i18n="views.cron.filterAgent">Agent:</span>
+        <button class="filter-btn active" data-filter="all" type="button">All</button>
+      </div>
     </div>
 
     <div class="cron-view-error" id="cron-view-error" hidden></div>
+    <div class="cron-filter-empty" id="cron-view-filter-empty" hidden></div>
 
     <div class="card-grid" id="cron-view-grid">
       <div class="skeleton-card" style="display: flex; gap: 12px; align-items: center">

@@ -62,7 +62,13 @@ const { getVersion } = require("./utils");
 const { CONFIG, getOpenClawDir } = require("./config");
 const { handleJobsRequest, isJobsRoute } = require("./jobs");
 const { runOpenClaw, runOpenClawAsync, extractJSON } = require("./openclaw");
-const { getSystemVitals, checkOptionalDeps, getOptionalDeps } = require("./vitals");
+const {
+  getSystemVitals,
+  forceRefreshVitals,
+  getVitalsCacheAgeMs,
+  checkOptionalDeps,
+  getOptionalDeps,
+} = require("./vitals");
 const { checkAuth, getUnauthorizedPage } = require("./auth");
 const { loadPrivacySettings, savePrivacySettings } = require("./privacy");
 const {
@@ -112,6 +118,11 @@ const AUTH_CONFIG = {
 const DATA_DIR = path.join(getOpenClawDir(), "command-center", "data");
 const LEGACY_DATA_DIR = path.join(DASHBOARD_DIR, "data");
 
+/** Serialize possibly-Infinity cache ages as null for JSON payloads. */
+function toFiniteOrNull(value) {
+  return Number.isFinite(value) ? value : null;
+}
+
 // ============================================================================
 // SSE (Server-Sent Events)
 // ============================================================================
@@ -135,6 +146,16 @@ function broadcastSSE(event, data) {
 // INITIALIZE MODULES (wire up dependencies)
 // ============================================================================
 
+// Second-instance economy: when fleet.openclawSources is false this
+// instance never spawns the openclaw CLI nor parses OpenClaw session/usage
+// data (the primary instance owns those sources).
+const OPENCLAW_SOURCES = CONFIG.fleet.openclawSources !== false;
+
+// OpenClaw-source wrappers: in economy mode these never spawn the CLI
+// (cron list / status --usage are openclaw CLI calls under the hood).
+const getCronJobsSafe = () => (OPENCLAW_SOURCES ? getCronJobs(getOpenClawDir) : []);
+const getLlmUsageSafe = (statePath) => getLlmUsage(statePath, { allowSpawn: OPENCLAW_SOURCES });
+
 // Sessions module (factory pattern with dependency injection)
 const sessions = createSessionsModule({
   getOpenClawDir,
@@ -142,6 +163,9 @@ const sessions = createSessionsModule({
   runOpenClaw,
   runOpenClawAsync,
   extractJSON,
+  sessionsSource: CONFIG.fleet.sessionsSource,
+  refreshMs: CONFIG.fleet.sessionsRefreshMs,
+  enabled: OPENCLAW_SOURCES,
 });
 
 // State module (factory pattern)
@@ -150,15 +174,15 @@ const state = createStateModule({
   getOpenClawDir,
   getSessions: (opts) => sessions.getSessions(opts),
   getSystemVitals,
-  getCronJobs: () => getCronJobs(getOpenClawDir),
+  getCronJobs: () => getCronJobsSafe(),
   loadOperators: () => loadOperators(DATA_DIR),
   calculateOperatorStats,
-  getLlmUsage: () => getLlmUsage(PATHS.state),
+  getLlmUsage: () => getLlmUsageSafe(PATHS.state),
   getDailyTokenUsage: () => getDailyTokenUsage(getOpenClawDir),
   getTokenStats,
   getCerebroTopics: (opts) => getCerebroTopics(PATHS.cerebro, opts),
-  runOpenClaw,
-  extractJSON,
+  runOpenClawAsync,
+  openclawEnabled: OPENCLAW_SOURCES,
   readTranscript: (sessionId) => sessions.readTranscript(sessionId),
 });
 
@@ -218,9 +242,13 @@ const agentsRoster = createAgentsRoster({
 process.nextTick(() => migrateDataDir(DATA_DIR, LEGACY_DATA_DIR));
 fleet.start();
 docker.start();
-startOperatorsRefresh(DATA_DIR, getOpenClawDir);
-startLlmUsageRefresh();
-startTokenUsageRefresh(getOpenClawDir);
+// OpenClaw-sourced background workers only run when this instance owns the
+// openclaw CLI/data sources (fleet.openclawSources, default true).
+if (OPENCLAW_SOURCES) {
+  startOperatorsRefresh(DATA_DIR, getOpenClawDir);
+  startLlmUsageRefresh();
+  startTokenUsageRefresh(getOpenClawDir);
+}
 
 // ============================================================================
 // STATIC FILE SERVER
@@ -290,7 +318,7 @@ function handleApi(req, res) {
 
   const data = {
     sessions: sessionsList,
-    cron: getCronJobs(getOpenClawDir),
+    cron: getCronJobsSafe(),
     system: state.getSystemStatus(),
     activity: state.getRecentActivity(),
     tokenStats,
@@ -357,9 +385,17 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ error: "Missing session key" }));
       return;
     }
-    const detail = sessions.getSessionDetail(sessionKey);
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(detail, null, 2));
+    Promise.resolve(sessions.getSessionDetail(sessionKey))
+      .then((detail) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(detail, null, 2));
+      })
+      .catch((e) => {
+        console.error("[Sessions] Detail failed:", e.message);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Internal error" }));
+      });
+    return;
   } else if (pathname === "/api/cerebro") {
     const offset = parseInt(query.get("offset") || "0", 10);
     const limit = parseInt(query.get("limit") || "20", 10);
@@ -410,7 +446,7 @@ const server = http.createServer((req, res) => {
     });
     return;
   } else if (pathname === "/api/llm-quota") {
-    const data = getLlmUsage(PATHS.state);
+    const data = getLlmUsageSafe(PATHS.state);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(data, null, 2));
   } else if (pathname === "/api/cost-breakdown") {
@@ -498,14 +534,46 @@ const server = http.createServer((req, res) => {
       })
       .then((fleetSummary) => {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ...(fullState || {}), fleet: fleetSummary }, null, 2));
+        res.end(
+          JSON.stringify(
+            {
+              ...(fullState || {}),
+              fleet: fleetSummary,
+              cacheAgeMs: fullState?.timestamp ? Date.now() - fullState.timestamp : null,
+              sessionsCacheAgeMs: toFiniteOrNull(sessions.getCacheAgeMs()),
+            },
+            null,
+            2,
+          ),
+        );
       });
     return;
   } else if (pathname === "/api/vitals") {
-    const vitals = getSystemVitals();
-    const optionalDeps = getOptionalDeps();
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ vitals, optionalDeps }, null, 2));
+    const wantsRefresh = query.get("refresh") === "1";
+    const respond = () => {
+      const vitals = getSystemVitals();
+      const optionalDeps = getOptionalDeps();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify(
+          { vitals, optionalDeps, cacheAgeMs: toFiniteOrNull(getVitalsCacheAgeMs()) },
+          null,
+          2,
+        ),
+      );
+    };
+    if (wantsRefresh) {
+      // Force a fresh collection (async-safe: coalesced with any in-flight
+      // collection; the event loop is never blocked).
+      forceRefreshVitals()
+        .then(respond)
+        .catch((e) => {
+          console.error("[Vitals] Forced refresh failed:", e.message);
+          respond();
+        });
+      return;
+    }
+    respond();
   } else if (pathname === "/api/capacity") {
     const capacity = state.getCapacity();
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -538,8 +606,8 @@ const server = http.createServer((req, res) => {
     const offset = (page - 1) * pageSize;
     const displaySessions = filteredSessions.slice(offset, offset + pageSize);
 
-    const tokenStats = getTokenStats(allSessions, state.getCapacity(), CONFIG);
     const capacity = state.getCapacity();
+    const tokenStats = getTokenStats(allSessions, capacity, CONFIG);
 
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(
@@ -557,13 +625,14 @@ const server = http.createServer((req, res) => {
           statusCounts,
           tokenStats,
           capacity,
+          cacheAgeMs: toFiniteOrNull(sessions.getCacheAgeMs()),
         },
         null,
         2,
       ),
     );
   } else if (pathname === "/api/cron") {
-    const cron = getCronJobs(getOpenClawDir);
+    const cron = getCronJobsSafe();
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ cron }, null, 2));
   } else if (pathname === "/api/operators") {
@@ -618,7 +687,7 @@ const server = http.createServer((req, res) => {
     }
     return;
   } else if (pathname === "/api/llm-usage") {
-    const usage = getLlmUsage(PATHS.state);
+    const usage = getLlmUsageSafe(PATHS.state);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(usage, null, 2));
   } else if (pathname === "/api/routing-stats") {
@@ -742,19 +811,30 @@ server.listen(PORT, () => {
   setTimeout(async () => {
     console.log("[Startup] Pre-warming caches in background...");
     try {
-      await Promise.all([sessions.refreshSessionsCache(), refreshTokenUsageAsync(getOpenClawDir)]);
+      if (OPENCLAW_SOURCES) {
+        // startSessionsRefresh performs an immediate refresh, then keeps the
+        // cache fresh every CONFIG.fleet.sessionsRefreshMs (request paths
+        // always serve the cache — stale-while-revalidate).
+        sessions.startSessionsRefresh();
+        await refreshTokenUsageAsync(getOpenClawDir);
+      }
       getSystemVitals();
       console.log("[Startup] Caches warmed.");
     } catch (e) {
       console.log("[Startup] Cache warming error:", e.message);
     }
+    // Warm the cortex state cache in the background so the first
+    // /api/fleet/cortex request is served from cache (the underlying CLI
+    // probes can take a long time on a loaded host).
+    if (CONFIG.fleet.cortex?.enabled && fleet.cortex?.getState) {
+      fleet.cortex
+        .getState()
+        .then(() => console.log("[Startup] Cortex state cache warmed."))
+        .catch((e) => console.log("[Startup] Cortex warming error:", e.message));
+    }
     // Check for optional system dependencies (once at startup)
     checkOptionalDeps();
   }, 100);
-
-  // Background cache refresh
-  const SESSIONS_CACHE_TTL = 10000;
-  setInterval(() => sessions.refreshSessionsCache(), SESSIONS_CACHE_TTL);
 });
 
 // SSE heartbeat
