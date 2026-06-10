@@ -29,6 +29,7 @@
     "briefs": "Briefs",
     "cortex": "Cortex",
     "evolution": "Evolution",
+    "federation": "Federation",
     "logs": "Logs",
     "privacy": "Privacy",
     "about": "About",
@@ -115,6 +116,16 @@
       "emptyTitle": "No evolution runs yet",
       "emptyText": "The swarm has not mutated yet. Start a self-improvement cycle to evolve agent skills and track fitness across generations.",
       "cta": "Start a self-improvement cycle →"
+    },
+    "federation": {
+      "title": "Federation",
+      "subtitle": "Fleet-of-fleets: read-only monitoring of other Open Fleet Control dashboards",
+      "readOnlyNote": "v1 is read-only monitoring — this dashboard never issues write operations against federated remotes.",
+      "emptyTitle": "No federated dashboards",
+      "emptyText": "Add another Open Fleet Control dashboard's URL below to watch its fleet — mesh health, kanban flow, evolution gate, and alerts — from a single pane of glass.",
+      "cta": "Add a remote dashboard →",
+      "addTitle": "Add remote dashboard",
+      "tokenHint": "HTTPS only. The token is stored server-side and never displayed again."
     },
     "logs": {
       "title": "Audit Logs",
