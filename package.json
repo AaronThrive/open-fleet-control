@@ -11,6 +11,7 @@
     "build": "esbuild src/index.js --bundle --platform=node --outfile=lib/server.js --banner:js='#!/usr/bin/env node' && prettier --write lib/server.js",
     "test": "node --test",
     "test:coverage": "node --test --experimental-test-coverage",
+    "test:e2e": "node tests-e2e/run.js",
     "lint": "ESLINT_USE_FLAT_CONFIG=true eslint src/ tests/",
     "lint:fix": "ESLINT_USE_FLAT_CONFIG=true eslint src/ tests/ --fix",
     "format": "prettier --write .",
@@ -44,6 +45,7 @@
   "devDependencies": {
     "esbuild": "^0.27.3",
     "eslint": "^8.56.0",
+    "playwright-core": "^1.60.0",
     "prettier": "^3.2.4"
   },
   "dependencies": {
