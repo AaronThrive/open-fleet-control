@@ -14,6 +14,7 @@
 
 const path = require("path");
 const { createMesh } = require("./mesh");
+const { createTailscaleAdapter } = require("./tailscale");
 const { createFleetChat } = require("./fleet-chat");
 const { createKanban, createWatchdog } = require("./kanban");
 const { createBriefs } = require("./briefs");
@@ -25,6 +26,13 @@ const { createRateLimiter } = require("./rate-limit");
 
 const CORTEX_SUMMARY_TTL_MS = 60000;
 
+const TAILSCALE_PENDING_STATUS = Object.freeze({
+  available: false,
+  error: "tailscale status refresh pending",
+  self: null,
+  peers: [],
+});
+
 /**
  * Map an empty configured cortex path to a sentinel that never exists, so
  * the adapter reports "unavailable" instead of probing built-in defaults.
@@ -33,6 +41,51 @@ function cortexPathOrDisabled(configured, stateDir, name) {
   return configured && configured.length > 0
     ? configured
     : path.join(stateDir, ".cortex-disabled", name);
+}
+
+/**
+ * Wrap a tailscale adapter so getStatus() never blocks callers on external
+ * CLI / LocalAPI latency: it resolves immediately with the last-known status
+ * (or a "refresh pending" placeholder before the first refresh lands) and
+ * refreshes in the background with single-flight dedupe. The underlying
+ * adapter keeps its own TTL cache, so refreshes stay cheap.
+ *
+ * @param {object} [adapter] - tailscale adapter ({getStatus})
+ * @returns {{getStatus: function(): Promise<object>}}
+ */
+function createNonBlockingTailscale(adapter = createTailscaleAdapter()) {
+  let lastKnown = null;
+  let refreshing = null;
+
+  function refresh() {
+    if (refreshing) return refreshing;
+    refreshing = adapter
+      .getStatus()
+      .then((status) => {
+        lastKnown = status;
+        return status;
+      })
+      .catch((e) => {
+        // adapter.getStatus never throws by contract — belt and braces
+        lastKnown = { available: false, error: e.message, self: null, peers: [] };
+        return lastKnown;
+      })
+      .finally(() => {
+        refreshing = null;
+      });
+    return refreshing;
+  }
+
+  async function getStatus() {
+    refresh(); // fire-and-forget background refresh
+    return lastKnown || TAILSCALE_PENDING_STATUS;
+  }
+
+  // Warm the cache immediately so the first real consumer usually
+  // sees actual data instead of the pending placeholder.
+  refresh();
+
+  return { getStatus };
 }
 
 /**
@@ -80,6 +133,9 @@ function createFleetRuntime({ config, broadcast }) {
   const mesh = createMesh({
     stateDir,
     intervalMs: config.mesh.intervalMs,
+    // Non-blocking by design: mesh.getState() feeds GET /api/state, which
+    // must never wait on the tailscale CLI / LocalAPI at request time.
+    tailscale: createNonBlockingTailscale(),
     onChange: ({ node, previousStatus, status }) => {
       emit("fleet.mesh", { id: node.id, hostname: node.hostname, previousStatus, status });
       if (status === "offline") {
@@ -201,24 +257,55 @@ function createFleetRuntime({ config, broadcast }) {
   }
 
   // ---------------------------------------------------------------------
-  // Summary for GET /api/state (cortex availability is TTL-cached because
-  // probing it may shell out to CLIs)
+  // Summary for GET /api/state. Probing cortex availability shells out to
+  // external CLIs (openclaw memory-pro, gbrain), so the summary NEVER awaits
+  // it: values are served from the last-known cache and refreshed in the
+  // background (single-flight). The first call returns the default
+  // (all-unavailable) snapshot immediately while the probe warms up.
+  // fleet.cortex.enabled=false disables probing entirely.
   // ---------------------------------------------------------------------
 
+  const cortexEnabled = config.cortex.enabled !== false;
   let cortexCache = { value: null, ts: 0 };
+  let cortexRefresh = null;
 
-  async function getCortexAvailability() {
-    if (cortexCache.value && Date.now() - cortexCache.ts < CORTEX_SUMMARY_TTL_MS) {
-      return cortexCache.value;
+  function refreshCortexAvailability() {
+    if (cortexRefresh) return cortexRefresh;
+    cortexRefresh = cortex
+      .getState()
+      .then((cortexState) => {
+        cortexCache = {
+          value: {
+            memory: cortexState.memory.available,
+            gbrain: cortexState.gbrain.available,
+            gauges: cortexState.gaugeSummary.available,
+          },
+          ts: Date.now(),
+        };
+        return cortexCache.value;
+      })
+      .catch((e) => {
+        console.error("[Fleet] Cortex availability refresh failed:", e.message);
+        return cortexCache.value;
+      })
+      .finally(() => {
+        cortexRefresh = null;
+      });
+    return cortexRefresh;
+  }
+
+  /**
+   * Last-known cortex availability — synchronous, never probes inline.
+   * Kicks a background refresh when the cache is missing or stale.
+   */
+  function getCortexAvailability() {
+    if (!cortexEnabled) {
+      return { memory: false, gbrain: false, gauges: 0 };
     }
-    const cortexState = await cortex.getState();
-    const value = {
-      memory: cortexState.memory.available,
-      gbrain: cortexState.gbrain.available,
-      gauges: cortexState.gaugeSummary.available,
-    };
-    cortexCache = { value, ts: Date.now() };
-    return value;
+    if (!cortexCache.value || Date.now() - cortexCache.ts >= CORTEX_SUMMARY_TTL_MS) {
+      refreshCortexAvailability();
+    }
+    return cortexCache.value || { memory: false, gbrain: false, gauges: 0 };
   }
 
   /**
@@ -276,7 +363,7 @@ function createFleetRuntime({ config, broadcast }) {
     }
 
     try {
-      summary.cortex = { availability: await getCortexAvailability() };
+      summary.cortex = { availability: getCortexAvailability() };
     } catch (e) {
       console.error("[Fleet] Summary cortex failed:", e.message);
     }
