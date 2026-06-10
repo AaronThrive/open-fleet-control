@@ -32,7 +32,7 @@ function httpError(statusCode, message) {
 function statusForError(err) {
   if (Number.isInteger(err.statusCode)) return err.statusCode;
   const message = err.message || "";
-  if (/not found|^Unknown (node|task)/i.test(message)) return 404;
+  if (/not found|^Unknown (node|task|remote)/i.test(message)) return 404;
   if (/expected "pending"/.test(message)) return 409;
   if (/too large/i.test(message)) return 413;
   return 400;
@@ -166,6 +166,45 @@ function createFleetRoutes({ fleet }) {
       const removed = fleet.mesh.unregisterNode(segments[2]);
       recordAudit(user, "node.unregister", removed.hostname, { id: removed.id });
       json(res, 200, { success: true, node: removed });
+      return true;
+    }
+    return false;
+  }
+
+  // -------------------------------------------------------------------
+  // Federation (read-only fleet-of-fleets monitoring)
+  // -------------------------------------------------------------------
+
+  async function handleFederation(req, res, method, segments) {
+    if (segments.length === 1 && method === "GET") {
+      json(res, 200, fleet.federation.getState());
+      return true;
+    }
+    if (segments[1] === "remotes" && segments.length === 2 && method === "POST") {
+      const user = guardMutation(req, res);
+      if (!user) return true;
+      const body = await readJsonBody(req);
+      const remote = fleet.federation.addRemote({
+        label: body.label,
+        baseUrl: body.baseUrl,
+        token: body.token,
+        addedBy: user,
+      });
+      // AUDIT_ACTIONS is a closed enum — reuse node.register with a
+      // detail.kind marker instead of extending it.
+      recordAudit(user, "node.register", remote.baseUrl, { kind: "federation", id: remote.id });
+      json(res, 200, { success: true, remote });
+      return true;
+    }
+    if (segments[1] === "remotes" && segments.length === 3 && method === "DELETE") {
+      const user = guardMutation(req, res);
+      if (!user) return true;
+      const removed = fleet.federation.removeRemote(segments[2]);
+      recordAudit(user, "node.unregister", removed.baseUrl, {
+        kind: "federation",
+        id: removed.id,
+      });
+      json(res, 200, { success: true, remote: removed });
       return true;
     }
     return false;
@@ -477,6 +516,8 @@ function createFleetRoutes({ fleet }) {
     switch (segments[0]) {
       case "mesh":
         return handleMesh(req, res, method, segments);
+      case "federation":
+        return handleFederation(req, res, method, segments);
       case "costs":
         if (segments.length === 1 && method === "GET") {
           json(res, 200, await fleet.mesh.getFleetCosts());

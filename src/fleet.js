@@ -8,12 +8,14 @@
  *   - getSummary(): compact fleet summary for GET /api/state
  *
  * SSE event types broadcast via the injected `broadcast(event, data)`:
- *   fleet.mesh, fleet.chat, fleet.kanban, fleet.evolution, fleet.alert
+ *   fleet.mesh, fleet.chat, fleet.kanban, fleet.evolution, fleet.alert,
+ *   fleet.federation
  * Payloads are minimal — clients refetch detail from the REST routes.
  */
 
 const path = require("path");
 const { createMesh } = require("./mesh");
+const { createFederation } = require("./federation");
 const { createTailscaleAdapter } = require("./tailscale");
 const { createFleetChat } = require("./fleet-chat");
 const { createKanban, createWatchdog } = require("./kanban");
@@ -156,6 +158,20 @@ function createFleetRuntime({ config, broadcast }) {
     },
   });
 
+  // Read-only fleet-of-fleets: polls OTHER dashboards' /api/state.
+  const federation = createFederation({
+    stateDir,
+    intervalMs: config.federation.intervalMs,
+    onChange: ({ remote, previousReachable, reachable }) => {
+      emit("fleet.federation", {
+        id: remote.id,
+        label: remote.label,
+        previousReachable,
+        reachable,
+      });
+    },
+  });
+
   const chat = createFleetChat({ stateDir, logsDir });
   chat.onMessage((message) => {
     emit("fleet.chat", {
@@ -242,12 +258,14 @@ function createFleetRuntime({ config, broadcast }) {
 
   function start() {
     mesh.start();
+    federation.start();
     watchdog.start();
     if (!boardWatcher) boardWatcher = kanban.watch();
   }
 
   function stop() {
     mesh.stop();
+    federation.stop();
     watchdog.stop();
     if (boardWatcher) {
       boardWatcher.close();
@@ -320,6 +338,7 @@ function createFleetRuntime({ config, broadcast }) {
       evolution: { gate: null, pendingCount: 0 },
       cortex: { availability: { memory: false, gbrain: false, gauges: 0 } },
       alerts: { recent: 0 },
+      federation: { remotes: 0, reachable: 0 },
     };
 
     try {
@@ -374,11 +393,18 @@ function createFleetRuntime({ config, broadcast }) {
       console.error("[Fleet] Summary alerts failed:", e.message);
     }
 
+    try {
+      summary.federation = federation.getState().counts;
+    } catch (e) {
+      console.error("[Fleet] Summary federation failed:", e.message);
+    }
+
     return summary;
   }
 
   return {
     mesh,
+    federation,
     chat,
     kanban,
     watchdog,

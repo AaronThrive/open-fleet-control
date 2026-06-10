@@ -195,6 +195,7 @@ const FLEET_DEFAULTS = {
   briefsDir: "briefs",
   workspaceDir: ".",
   mesh: { intervalMs: 15000 },
+  federation: { intervalMs: 30000 },
   watchdog: { thresholdMs: 1800000 },
   alerts: {
     enabled: false,

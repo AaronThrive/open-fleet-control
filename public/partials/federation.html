@@ -1,0 +1,370 @@
+<!-- Federation View Partial -->
+<style>
+  /* Federation panel styles — scoped under #federation-view-section */
+  #federation-view-section .fed-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-top: 16px;
+    flex: 1;
+  }
+  #federation-view-section .fed-note {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    background: rgba(var(--accent-rgb), 0.06);
+    border: 1px solid rgba(var(--accent-rgb), 0.25);
+    color: var(--text-muted);
+    flex-wrap: wrap;
+  }
+  #federation-view-section .fed-note a {
+    color: var(--accent);
+  }
+  #federation-view-section .fed-error {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    background: rgba(248, 81, 73, 0.1);
+    border: 1px solid rgba(248, 81, 73, 0.4);
+    color: var(--red);
+  }
+
+  /* Remote dashboard grid */
+  #federation-view-section .fed-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 12px;
+  }
+  #federation-view-section .fed-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 16px;
+    border-radius: 10px;
+    background: var(--card-hover);
+    border: 1px solid var(--border);
+    transition: border-color 0.15s ease;
+  }
+  #federation-view-section .fed-card:hover {
+    border-color: rgba(var(--accent-rgb), 0.4);
+  }
+  #federation-view-section .fed-card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  #federation-view-section .fed-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--text-muted);
+  }
+  #federation-view-section .fed-status-dot.reachable {
+    background: var(--green);
+    box-shadow: 0 0 6px rgba(var(--accent-rgb), 0.7);
+  }
+  #federation-view-section .fed-status-dot.unreachable {
+    background: var(--red);
+    box-shadow: 0 0 6px rgba(248, 81, 73, 0.6);
+  }
+  #federation-view-section .fed-card-names {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  #federation-view-section .fed-card-label {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #federation-view-section .fed-card-host {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #federation-view-section .fed-latency {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Summary tiles */
+  #federation-view-section .fed-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
+    gap: 8px;
+  }
+  #federation-view-section .fed-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    min-width: 0;
+  }
+  #federation-view-section .fed-tile-label {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  #federation-view-section .fed-tile-value {
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  #federation-view-section .fed-gate-badge {
+    display: inline-block;
+    font-size: 0.66rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    width: fit-content;
+  }
+  #federation-view-section .fed-gate-badge.on {
+    background: rgba(var(--accent-rgb), 0.12);
+    border: 1px solid rgba(var(--accent-rgb), 0.45);
+    color: var(--accent);
+  }
+  #federation-view-section .fed-gate-badge.off {
+    background: rgba(255, 178, 36, 0.12);
+    border: 1px solid rgba(255, 178, 36, 0.5);
+    color: var(--yellow);
+  }
+  #federation-view-section .fed-gate-badge.unknown {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+
+  /* Task mini-bars */
+  #federation-view-section .fed-taskbars {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 26px;
+  }
+  #federation-view-section .fed-taskbar {
+    flex: 1;
+    min-width: 6px;
+    border-radius: 2px 2px 0 0;
+    background: rgba(var(--accent-rgb), 0.55);
+  }
+  #federation-view-section .fed-taskbar.failed {
+    background: rgba(248, 81, 73, 0.7);
+  }
+  #federation-view-section .fed-taskbar.done {
+    background: rgba(var(--accent-2-rgb), 0.6);
+  }
+  #federation-view-section .fed-card-error {
+    font-size: 0.74rem;
+    color: var(--red);
+    word-break: break-word;
+  }
+  #federation-view-section .fed-card-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+  }
+  #federation-view-section .fed-remove-btn {
+    margin-left: auto;
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-size: 0.7rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  #federation-view-section .fed-remove-btn:hover {
+    border-color: var(--red);
+    color: var(--red);
+  }
+
+  /* Add-remote form */
+  #federation-view-section .fed-add {
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  #federation-view-section .fed-add-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  #federation-view-section .fed-add-form {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  #federation-view-section .fed-add-form input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.78rem;
+  }
+  #federation-view-section .fed-add-form input:focus {
+    outline: none;
+    border-color: rgba(var(--accent-rgb), 0.6);
+  }
+  #federation-view-section .fed-add-label-input {
+    width: 150px;
+  }
+  #federation-view-section .fed-add-url-input {
+    flex: 1;
+    min-width: 240px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  #federation-view-section .fed-add-token-input {
+    width: 170px;
+  }
+  #federation-view-section .fed-add-btn {
+    background: rgba(var(--accent-rgb), 0.12);
+    border: 1px solid rgba(var(--accent-rgb), 0.45);
+    color: var(--accent);
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  #federation-view-section .fed-add-btn:hover:not(:disabled) {
+    background: rgba(var(--accent-rgb), 0.25);
+  }
+  #federation-view-section .fed-add-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  #federation-view-section .fed-add-hint {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+  }
+  #federation-view-section .fed-add-error {
+    font-size: 0.76rem;
+    color: var(--red);
+  }
+  #federation-view-section .fed-muted {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+</style>
+<div class="section" id="federation-view-section">
+  <section class="view-panel">
+    <div class="view-header">
+      <div class="view-title">
+        <span class="view-icon">🌐</span>
+        <span data-i18n="views.federation.title">Federation</span>
+      </div>
+      <div class="view-subtitle" data-i18n="views.federation.subtitle">
+        Fleet-of-fleets: read-only monitoring of other Open Fleet Control dashboards
+      </div>
+    </div>
+
+    <!-- Loading / error feedback (managed by federation.js) -->
+    <div class="view-loading" id="fed-loading">Loading federation state...</div>
+    <div class="fed-error" id="fed-fetch-error" hidden></div>
+
+    <div class="fed-body" id="fed-body" hidden>
+      <!-- v1 scope + cross-tailnet hint -->
+      <div class="fed-note">
+        <span>🔭</span>
+        <span data-i18n="views.federation.readOnlyNote">
+          v1 is read-only monitoring — this dashboard never issues write operations against
+          federated remotes.
+        </span>
+        <span>
+          Cross-tailnet access works via Tailscale node sharing — see
+          <a
+            href="https://github.com/AaronThrive/open-fleet-control/blob/main/docs/guides/client-install.md"
+            target="_blank"
+            rel="noopener"
+            >docs/guides/client-install.md</a
+          >.
+        </span>
+      </div>
+
+      <!-- Remote dashboard grid -->
+      <div class="fed-grid" id="fed-grid" hidden></div>
+
+      <!-- Empty state (zero remotes) -->
+      <div class="empty-state" id="fed-empty-state">
+        <div class="empty-state-icon">🌐</div>
+        <div class="empty-state-title" data-i18n="views.federation.emptyTitle">
+          No federated dashboards
+        </div>
+        <p class="empty-state-text" data-i18n="views.federation.emptyText">
+          Add another Open Fleet Control dashboard's URL below to watch its fleet — mesh health,
+          kanban flow, evolution gate, and alerts — from a single pane of glass.
+        </p>
+        <button
+          class="btn-primary empty-state-cta"
+          id="fed-empty-cta"
+          data-i18n="views.federation.cta"
+        >
+          Add a remote dashboard →
+        </button>
+      </div>
+
+      <!-- Add-remote form -->
+      <div class="fed-add" id="fed-add">
+        <div class="fed-add-title" data-i18n="views.federation.addTitle">Add remote dashboard</div>
+        <form class="fed-add-form" id="fed-add-form">
+          <input
+            type="text"
+            id="fed-add-label"
+            class="fed-add-label-input"
+            placeholder="Label"
+            maxlength="120"
+            required
+          />
+          <input
+            type="url"
+            id="fed-add-url"
+            class="fed-add-url-input"
+            placeholder="https://dashboard.tailnet.ts.net"
+            required
+          />
+          <input
+            type="password"
+            id="fed-add-token"
+            class="fed-add-token-input"
+            placeholder="Bearer token (optional)"
+            autocomplete="off"
+          />
+          <button type="submit" class="fed-add-btn" id="fed-add-btn">Add remote</button>
+        </form>
+        <div class="fed-add-hint" data-i18n="views.federation.tokenHint">
+          HTTPS only. The token is stored server-side and never displayed again.
+        </div>
+        <div class="fed-add-error" id="fed-add-error" hidden></div>
+      </div>
+    </div>
+  </section>
+</div>
