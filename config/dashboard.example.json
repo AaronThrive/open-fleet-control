@@ -84,6 +84,56 @@
     "file": null
   },
 
+  "fleet": {
+    "_comment": "Fleet control (mesh / chat / kanban / briefs / evolution / cortex / alerts). Relative dirs resolve against the package root. FLEET_CONFIG_JSON env var (a JSON blob) overrides everything here.",
+    "stateDir": "state",
+    "logsDir": "logs",
+    "briefsDir": "briefs",
+    "workspaceDir": ".",
+    "mesh": {
+      "intervalMs": 15000
+    },
+    "watchdog": {
+      "_comment": "Flag assigned/inprogress tasks with no activity for thresholdMs (default 30 min)",
+      "thresholdMs": 1800000
+    },
+    "alerts": {
+      "enabled": false,
+      "rules": {
+        "nodeOffline": true,
+        "nodeUnreachable": true,
+        "taskFailed": true,
+        "taskStale": true,
+        "lessonPending": true
+      },
+      "sinks": {
+        "slack": {
+          "enabled": false,
+          "gatewayUrl": "",
+          "channel": ""
+        },
+        "webhooks": []
+      }
+    },
+    "validationGate": {
+      "_comment": "Default for the evolution lessons gate (true = lessons require approval)",
+      "default": true
+    },
+    "cortex": {
+      "_comment": "Paths are user-specific; empty string = adapter unavailable. Typical values: lancedbPath ~/.openclaw/memory/lancedb-pro, gbrainCli ~/gbrain/bin/gbrain, headroomStats ~/.headroom/stats.json, leanCtxStats ~/.lean-ctx/stats.json, lcmDb ~/.lcm/lcm.db",
+      "lancedbPath": "",
+      "gbrainCli": "",
+      "headroomStats": "",
+      "leanCtxStats": "",
+      "lcmDb": ""
+    },
+    "rateLimit": {
+      "_comment": "Per user+ip token bucket applied to all mutating /api/fleet routes",
+      "windowMs": 60000,
+      "max": 120
+    }
+  },
+
   "integrations": {
     "linear": {
       "enabled": false,

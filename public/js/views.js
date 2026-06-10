@@ -89,6 +89,40 @@
   }
 
   /**
+   * View JS contract (for panel agents):
+   *
+   * After a view partial is injected, the loader attempts a dynamic
+   * `import('/js/views/<name>.js')`. If the module exists and exports an
+   * `init` function, `init(containerEl)` is called with the container that
+   * holds the freshly injected partial HTML.
+   *
+   *  - A missing module (404) is silently skipped — views without JS yet
+   *    simply render their static partial.
+   *  - `init` is called again on EVERY revisit of the view, so panels must
+   *    be idempotent: clean up / re-bind from scratch inside init (e.g.
+   *    clear timers stored on window/module scope, re-query DOM each time).
+   *  - The module is fetched once by the browser (ES module cache); only
+   *    `init` re-runs.
+   */
+  async function initViewModule(view, container) {
+    let module;
+    try {
+      module = await import(`/js/views/${view}.js`);
+    } catch (error) {
+      // Module missing (404) or failed to load — view has no JS yet.
+      return;
+    }
+    if (currentView !== view) return; // user navigated away mid-import
+    if (typeof module.init === "function") {
+      try {
+        module.init(container);
+      } catch (error) {
+        console.error(`[Views] init() failed for view "${view}":`, error);
+      }
+    }
+  }
+
+  /**
    * Activate a view: hide the dashboard, swap in the (cached) partial
    */
   async function showView(view) {
@@ -107,6 +141,7 @@
       if (currentView !== view) return; // user navigated away mid-fetch
       container.innerHTML = html;
       translate(container);
+      await initViewModule(view, container);
     } catch (error) {
       console.error("[Views] Failed to load view:", error);
       if (currentView === view) renderError(container);
