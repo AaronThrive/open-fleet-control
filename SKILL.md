@@ -10,18 +10,19 @@ metadata:
       - id: start
         kind: shell
         command: "node lib/server.js"
-        label: "Start Command Center (http://localhost:3333)"
+        label: "Start OpenFleetControl (http://localhost:3333)"
 ---
 
-# OpenClaw Command Center
+# OpenFleetControl
 
-Mission control for your AI workforce.
+Mission control for your AI workforce. Built by Aaron May.
 
 ## Quick Start
 
 ```bash
-npx clawhub@latest install command-center
-cd skills/command-center
+git clone https://github.com/AaronThrive/open-fleet-control
+cd open-fleet-control
+npm install && npm run build
 node lib/server.js
 ```
 
@@ -64,6 +65,5 @@ DASHBOARD_AUTH_MODE=tailscale node lib/server.js
 
 ## Links
 
-- [GitHub](https://github.com/jontsai/openclaw-command-center)
-- [ClawHub](https://www.clawhub.ai/jontsai/command-center)
-- [Documentation](https://github.com/jontsai/openclaw-command-center#readme)
+- [GitHub](https://github.com/AaronThrive/open-fleet-control)
+- [Documentation](https://github.com/AaronThrive/open-fleet-control#readme)

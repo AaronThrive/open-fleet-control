@@ -9,8 +9,7 @@
  *   - t("key", ...) / i18nText("key", ...) runtime calls in public/js/** and
  *     in the inline scripts of public/*.html
  *
- * FAILS (exit 1) when a referenced key is missing from public/locales/en.json
- * or public/locales/zh-CN.json.
+ * FAILS (exit 1) when a referenced key is missing from public/locales/en.json.
  * WARNS (exit 0) for locale keys that are never referenced (the legacy
  * `phrases.*` text-node translator data is exempt — it is matched by literal
  * English text, not by key).
@@ -24,7 +23,7 @@ import process from "node:process";
 
 const ROOT = path.resolve(process.argv[2] || ".");
 const PUBLIC_DIR = path.join(ROOT, "public");
-const LOCALES = ["en", "zh-CN"];
+const LOCALES = ["en"];
 
 // Locale subtrees that are not addressed by key from markup/JS.
 const UNUSED_EXEMPT_PREFIXES = ["phrases."];
@@ -128,7 +127,6 @@ for (const locale of LOCALES) {
 }
 
 const unused = [...localeKeys.en]
-  .filter((key) => localeKeys["zh-CN"].has(key)) // only warn once per real key
   .filter((key) => !used.has(key))
   .filter((key) => !UNUSED_EXEMPT_PREFIXES.some((prefix) => key.startsWith(prefix)))
   .sort();

@@ -1,6 +1,6 @@
 {
   "app": {
-    "title": "OpenClaw Command Center",
+    "title": "OpenFleetControl",
     "connecting": "Connecting...",
     "connected": "🟢 Live",
     "disconnected": "🔴 Disconnected",
@@ -10,7 +10,7 @@
     "stale": "STALE — last update {time}"
   },
   "sidebar": {
-    "title": "Command Center",
+    "title": "OpenFleetControl",
     "navigation": "Navigation",
     "settings": "Settings",
     "quickStats": "Quick Stats",
@@ -425,7 +425,7 @@
     }
   },
   "jobs": {
-    "pageTitle": "AI Jobs - OpenClaw Command Center",
+    "pageTitle": "AI Jobs - OpenFleetControl",
     "dashboard": "🤖 AI Jobs Dashboard",
     "refresh": "🔄 Refresh",
     "totalJobs": "Total Jobs",
