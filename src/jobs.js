@@ -14,6 +14,7 @@ const JOBS_STATE_DIR = path.join(CONFIG.paths.state, "jobs");
 
 let apiInstance = null;
 let forceApiUnavailable = false; // For testing
+let cronFallbackFn = null; // () => cron jobs; injected by index.js (see setCronFallback)
 
 /**
  * Initialize the jobs API (lazy-loaded due to ESM)
@@ -43,6 +44,106 @@ async function getAPI() {
 function _resetForTesting(options = {}) {
   apiInstance = null;
   forceApiUnavailable = options.forceUnavailable || false;
+  cronFallbackFn = null;
+}
+
+/**
+ * Inject a cron jobs source used when the optional jobs library is absent.
+ * The fallback presents scheduled cron jobs (OpenClaw/Hermes dual-source) as
+ * read-only jobs so the AI Jobs page works without the library.
+ * @param {() => Array<Object>} fn - returns cron jobs (see src/cron.js shape)
+ */
+function setCronFallback(fn) {
+  cronFallbackFn = fn;
+}
+
+/** Map a cron job (src/cron.js shape) to the jobs-page job shape. */
+function cronJobToJob(job) {
+  const failing = job.lastStatus === "error";
+  return {
+    id: job.id,
+    name: job.name,
+    description: [job.agent, job.node].filter(Boolean).join(" @ "),
+    schedule: job.schedule,
+    scheduleHuman: job.scheduleHuman || null,
+    paused: !job.enabled,
+    nextRunRelative: job.nextRun || null,
+    lastRun: null,
+    lane: job.source,
+    tags: [job.source, job.agent].filter(Boolean),
+    readOnly: true,
+    ...(failing ? { stats: { streak: { type: "failed", count: 2 } } } : {}),
+  };
+}
+
+/** Cron jobs mapped for the jobs page, or null when unavailable/empty. */
+function getCronBackedJobs() {
+  if (!cronFallbackFn) return null;
+  try {
+    const cronJobs = cronFallbackFn();
+    if (!Array.isArray(cronJobs) || cronJobs.length === 0) return null;
+    return cronJobs.map(cronJobToJob);
+  } catch (e) {
+    console.error("Jobs cron fallback failed:", e.message);
+    return null;
+  }
+}
+
+/** Serve /api/jobs/* from the cron source (read-only). Returns true if handled. */
+function handleCronBackedRequest(res, pathname, method, jobs) {
+  const json = (code, payload) => {
+    res.writeHead(code, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(payload, null, 2));
+  };
+
+  if (method !== "GET") {
+    json(405, { error: "Jobs are backed by the read-only cron source — manage them in Cron." });
+    return true;
+  }
+
+  if (pathname === "/api/jobs") {
+    json(200, { available: true, source: "cron", readOnly: true, jobs, timestamp: Date.now() });
+    return true;
+  }
+
+  if (pathname === "/api/jobs/stats") {
+    json(200, {
+      available: true,
+      source: "cron",
+      stats: {
+        totalJobs: jobs.length,
+        activeJobs: jobs.filter((j) => !j.paused).length,
+        pausedJobs: jobs.filter((j) => j.paused).length,
+      },
+      timestamp: Date.now(),
+    });
+    return true;
+  }
+
+  if (pathname === "/api/jobs/scheduler/status") {
+    json(200, { available: true, source: "cron", running: true, readOnly: true });
+    return true;
+  }
+
+  const historyMatch = pathname.match(/^\/api\/jobs\/([^/]+)\/history$/);
+  if (historyMatch) {
+    json(200, { available: true, source: "cron", history: [] });
+    return true;
+  }
+
+  const jobMatch = pathname.match(/^\/api\/jobs\/([^/]+)$/);
+  if (jobMatch) {
+    const job = jobs.find((j) => j.id === decodeURIComponent(jobMatch[1]));
+    if (!job) {
+      json(404, { error: "Job not found" });
+      return true;
+    }
+    json(200, { available: true, source: "cron", readOnly: true, job });
+    return true;
+  }
+
+  json(404, { error: "Not found" });
+  return true;
 }
 
 /**
@@ -75,6 +176,14 @@ async function handleJobsRequest(req, res, pathname, query, method) {
   const api = await getAPI();
 
   if (!api) {
+    // The optional jobs library is absent — present cron jobs (OpenClaw +
+    // Hermes dual-source) as read-only jobs so the page still works.
+    const cronJobs = getCronBackedJobs();
+    if (cronJobs) {
+      handleCronBackedRequest(res, pathname, method, cronJobs);
+      return;
+    }
+
     // Graceful degradation: the optional jobs library is not installed.
     // Return 200 with an availability flag so clients can hide the feature
     // instead of surfacing a server error.
@@ -268,4 +377,4 @@ function isJobsRoute(pathname) {
   return pathname.startsWith("/api/jobs");
 }
 
-module.exports = { handleJobsRequest, isJobsRoute, _resetForTesting };
+module.exports = { handleJobsRequest, isJobsRoute, setCronFallback, _resetForTesting };
