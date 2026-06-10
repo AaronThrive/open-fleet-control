@@ -1,0 +1,245 @@
+/**
+ * Cron Jobs view module.
+ *
+ * Loaded by views.js via dynamic import; `init(containerEl)` runs on every
+ * visit of #view-cron and must be idempotent.
+ *
+ * Data source: GET /api/cron → { cron: [{ id, name, schedule, scheduleHuman,
+ * nextRun, enabled, lastStatus }] }, also mirrored in the /api/state `cron`
+ * slice delivered over SSE.
+ *
+ * Real-time: listens for the `fleet:state` window event (fed by the page's
+ * single /api/events EventSource) with a polling fallback.
+ *
+ * All dynamic values are rendered via textContent — XSS-safe.
+ */
+
+import { t } from "../utils.js";
+
+const POLL_MS = 30000;
+const SSE_FRESH_MS = 20000;
+
+let pollTimer = null;
+let stateListener = null;
+let requestSeq = 0;
+let lastSseAt = 0;
+let currentJobs = [];
+const filters = { status: "all", schedule: "all" };
+
+/* ------------------------------------------------------------------ */
+/* Helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function isCronHidden(job) {
+  return typeof window.isCronHidden === "function" ? window.isCronHidden(job) : false;
+}
+
+/**
+ * Rough schedule classification from the cron expression for the
+ * frequent/daily/weekly filter.
+ */
+function classifySchedule(job) {
+  const expr = String(job.schedule || "").trim();
+  const parts = expr.split(/\s+/);
+  if (parts.length < 5) return "other"; // "once", "—", etc.
+  const [minute, hour, , , dayOfWeek] = parts.slice(-5);
+  if (dayOfWeek !== "*" && dayOfWeek !== "?") return "weekly";
+  if (minute.includes("*") || minute.includes(",") || hour.includes("*") || hour.includes("/")) {
+    return "frequent";
+  }
+  return "daily";
+}
+
+/* ------------------------------------------------------------------ */
+/* Rendering                                                           */
+/* ------------------------------------------------------------------ */
+
+function buildCard(job) {
+  const card = el("div", `cron-card ${job.enabled === false ? "disabled" : ""}`);
+  card.dataset.enabled = job.enabled !== false ? "true" : "false";
+  card.dataset.schedule = classifySchedule(job);
+
+  card.appendChild(el("div", "cron-icon", "⏰"));
+
+  const info = el("div", "cron-info");
+  info.appendChild(el("div", "cron-name", job.name || job.id || "?"));
+  info.appendChild(el("div", "cron-schedule", job.schedule || "—"));
+  if (job.scheduleHuman) {
+    info.appendChild(el("div", "cron-schedule-human", job.scheduleHuman));
+  }
+  card.appendChild(info);
+
+  const meta = el("div", "cron-meta");
+  meta.appendChild(
+    el(
+      "span",
+      `cron-status ${job.enabled !== false ? "enabled" : "disabled"}`,
+      job.enabled !== false
+        ? t("views.cron.enabled", {}, "✓ Enabled")
+        : t("views.cron.disabled", {}, "○ Disabled"),
+    ),
+  );
+
+  const lastStatus = job.lastStatus ? String(job.lastStatus) : "";
+  const statusClass =
+    lastStatus === "ok" || lastStatus === "success" ? "ok" : lastStatus ? "error" : "unknown";
+  meta.appendChild(
+    el(
+      "span",
+      `cron-last-status ${statusClass}`,
+      lastStatus
+        ? t("views.cron.lastStatus", { status: lastStatus }, "last: {status}")
+        : t("views.cron.neverRan", {}, "no runs yet"),
+    ),
+  );
+  meta.appendChild(el("div", "cron-next", `⏭ ${job.nextRun || "—"}`));
+
+  if (typeof window.quickHideCron === "function") {
+    const hideBtn = el("button", "hide-btn", "👁️");
+    hideBtn.type = "button";
+    hideBtn.title = t("views.cron.hideJob", {}, "Hide cron job");
+    hideBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      window.quickHideCron(job.id || job.name || "", job.name || "");
+      card.remove();
+    });
+    meta.appendChild(hideBtn);
+  }
+  card.appendChild(meta);
+  return card;
+}
+
+function applyFilters(els) {
+  els.grid.querySelectorAll(".cron-card").forEach((card) => {
+    const enabled = card.dataset.enabled === "true";
+    const showStatus =
+      filters.status === "all" ||
+      (filters.status === "enabled" && enabled) ||
+      (filters.status === "disabled" && !enabled);
+    const showSchedule = filters.schedule === "all" || card.dataset.schedule === filters.schedule;
+    card.classList.toggle("hidden-by-filter", !(showStatus && showSchedule));
+  });
+}
+
+function render(els, jobs) {
+  currentJobs = Array.isArray(jobs) ? jobs : [];
+  const visible = currentJobs.filter((job) => !isCronHidden(job));
+  els.headerCount.textContent = visible.length;
+
+  if (visible.length === 0) {
+    const empty = el("div", "empty-state");
+    empty.appendChild(el("div", "empty-state-icon", "⏰"));
+    empty.appendChild(
+      el("div", "empty-state-text", t("views.cron.empty", {}, "No scheduled jobs")),
+    );
+    els.grid.replaceChildren(empty);
+    return;
+  }
+  els.grid.replaceChildren(...visible.map(buildCard));
+  applyFilters(els);
+}
+
+/* ------------------------------------------------------------------ */
+/* Data loading                                                        */
+/* ------------------------------------------------------------------ */
+
+async function load(els) {
+  const seq = ++requestSeq;
+  try {
+    const response = await fetch("/api/cron");
+    const payload = await response.json();
+    if (seq !== requestSeq || !els.grid.isConnected) return;
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    els.error.hidden = true;
+    render(els, payload.cron || []);
+  } catch (error) {
+    if (seq !== requestSeq || !els.grid.isConnected) return;
+    els.error.hidden = false;
+    els.error.textContent = t(
+      "views.cron.loadError",
+      {},
+      "Could not reach the cron API — is the server up?",
+    );
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Lifecycle                                                           */
+/* ------------------------------------------------------------------ */
+
+function teardown() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  if (stateListener) {
+    window.removeEventListener("fleet:state", stateListener);
+    stateListener = null;
+  }
+}
+
+/**
+ * Initialize the Cron view. Called by views.js on every visit.
+ * @param {HTMLElement} container
+ */
+export function init(container) {
+  teardown();
+  filters.status = "all";
+  filters.schedule = "all";
+
+  const els = {
+    grid: container.querySelector("#cron-view-grid"),
+    headerCount: container.querySelector("#cron-view-count"),
+    error: container.querySelector("#cron-view-error"),
+    filtersBar: container.querySelector("#cron-view-filters"),
+  };
+  if (Object.values(els).some((node) => !node)) {
+    console.error("[Cron] Partial markup is missing expected elements; aborting init.");
+    return;
+  }
+
+  els.filtersBar.querySelectorAll(".filter-group").forEach((group) => {
+    const groupName = group.dataset.filterGroup;
+    group.querySelectorAll(".filter-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        filters[groupName] = btn.dataset.filter;
+        group
+          .querySelectorAll(".filter-btn")
+          .forEach((other) => other.classList.toggle("active", other === btn));
+        applyFilters(els);
+      });
+    });
+  });
+
+  stateListener = (event) => {
+    if (!els.grid.isConnected) {
+      teardown();
+      return;
+    }
+    lastSseAt = Date.now();
+    if (Array.isArray(event.detail?.cron)) {
+      els.error.hidden = true;
+      render(els, event.detail.cron);
+    }
+  };
+  window.addEventListener("fleet:state", stateListener);
+
+  pollTimer = setInterval(() => {
+    if (!els.grid.isConnected) {
+      teardown();
+      return;
+    }
+    if (document.hidden) return;
+    if (Date.now() - lastSseAt < SSE_FRESH_MS) return;
+    load(els);
+  }, POLL_MS);
+
+  load(els);
+}

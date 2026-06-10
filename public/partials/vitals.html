@@ -1,0 +1,200 @@
+<!-- System Vitals View Partial -->
+<div class="section" id="vitals-view-section">
+  <style>
+    #vitals-view-section .vitals-view-error {
+      color: var(--red);
+      font-size: 0.8rem;
+      margin-bottom: 8px;
+    }
+    #vitals-view-section .vitals-dep-hint {
+      margin-top: 8px;
+      padding: 6px 10px;
+      background: rgba(136, 192, 208, 0.08);
+      border: 1px solid rgba(136, 192, 208, 0.2);
+      border-radius: 6px;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+  </style>
+  <section class="view-panel">
+    <div class="view-header">
+      <div class="view-title">
+        <span class="view-icon">🖥️</span>
+        <span data-i18n="views.vitals.title">System Vitals</span>
+      </div>
+      <div class="view-subtitle" data-i18n="views.vitals.subtitle">
+        CPU, memory, disk, and temperature for the host running the fleet
+      </div>
+    </div>
+
+    <div class="vitals-view-error" id="vitals-view-error" hidden></div>
+
+    <div class="vitals-panel">
+      <div class="vitals-header">
+        <div class="vitals-title">
+          🖥️ <span data-i18n="views.vitals.host">Host</span>
+          <span class="vitals-hostname" id="vv-hostname">-</span>
+        </div>
+        <div class="vitals-uptime">Uptime: <span id="vv-uptime">-</span></div>
+      </div>
+      <div class="vitals-grid">
+        <!-- CPU -->
+        <div class="vital-card">
+          <div class="vital-header">
+            <span class="vital-label">⚡ CPU</span>
+            <span class="vital-value" id="vv-cpu-percent">-%</span>
+          </div>
+          <div
+            id="vv-cpu-chip"
+            style="font-size: 0.7rem; color: var(--accent); margin-bottom: 8px"
+          ></div>
+          <div class="vital-bar">
+            <div class="vital-bar-fill blue" id="vv-cpu-bar" style="width: 0%"></div>
+          </div>
+          <div class="vital-detail" style="margin-bottom: 8px">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="vv-cpu-user">-%</span>
+              <span class="vital-detail-label">user</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="vv-cpu-sys">-%</span>
+              <span class="vital-detail-label">sys</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="vv-cpu-idle">-%</span>
+              <span class="vital-detail-label">idle</span>
+            </div>
+          </div>
+          <div class="vital-detail">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="vv-cpu-load-1">-</span>
+              <span class="vital-detail-label">1m avg</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="vv-cpu-load-5">-</span>
+              <span class="vital-detail-label">5m avg</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="vv-cpu-load-15">-</span>
+              <span class="vital-detail-label">15m avg</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="vv-cpu-cores">-</span>
+              <span class="vital-detail-label">cores</span>
+            </div>
+          </div>
+          <div
+            id="vv-cpu-topology"
+            style="margin-top: 8px; font-size: 0.7rem; color: var(--text-muted); text-align: center"
+          ></div>
+        </div>
+
+        <!-- Memory -->
+        <div class="vital-card">
+          <div class="vital-header">
+            <span class="vital-label">🧠 Memory</span>
+            <span class="vital-value" id="vv-mem-percent"
+              >-% <small style="font-size: 0.6em; opacity: 0.7">used</small></span
+            >
+          </div>
+          <div class="vital-bar">
+            <div class="vital-bar-fill green" id="vv-mem-bar" style="width: 0%"></div>
+          </div>
+          <div class="vital-detail">
+            <div class="vital-detail-item" style="flex: 2">
+              <span class="vital-detail-value" id="vv-mem-summary">-</span>
+              <span class="vital-detail-label">used of total</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="vv-mem-free">-</span>
+              <span class="vital-detail-label">available</span>
+            </div>
+          </div>
+          <div
+            class="vital-detail"
+            style="margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px"
+          >
+            <div class="vital-detail-item" title="Memory actively used by apps">
+              <span class="vital-detail-value" id="vv-mem-active">-</span>
+              <span class="vital-detail-label">App</span>
+            </div>
+            <div class="vital-detail-item" title="Memory that can't be swapped (kernel, drivers)">
+              <span class="vital-detail-value" id="vv-mem-wired">-</span>
+              <span class="vital-detail-label">Wired</span>
+            </div>
+            <div class="vital-detail-item" title="Memory compressed to save space">
+              <span class="vital-detail-value" id="vv-mem-compressed">-</span>
+              <span class="vital-detail-label">Compressed</span>
+            </div>
+            <div class="vital-detail-item" title="Recently-used data, can be reclaimed">
+              <span class="vital-detail-value" id="vv-mem-cached">-</span>
+              <span class="vital-detail-label">Cached</span>
+            </div>
+          </div>
+          <div style="margin-top: 8px; text-align: center">
+            <span class="pressure-indicator normal" id="vv-mem-pressure">Normal</span>
+          </div>
+        </div>
+
+        <!-- Disk -->
+        <div class="vital-card">
+          <div class="vital-header">
+            <span class="vital-label">💾 Disk</span>
+            <span class="vital-value" id="vv-disk-percent"
+              >-% <small style="font-size: 0.6em; opacity: 0.7">used</small></span
+            >
+          </div>
+          <div class="vital-bar">
+            <div class="vital-bar-fill green" id="vv-disk-bar" style="width: 0%"></div>
+          </div>
+          <div class="vital-detail">
+            <div class="vital-detail-item" style="flex: 2">
+              <span class="vital-detail-value" id="vv-disk-summary">-</span>
+              <span class="vital-detail-label">used of total</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="vv-disk-free">-</span>
+              <span class="vital-detail-label">available</span>
+            </div>
+          </div>
+          <div
+            class="vital-detail"
+            style="margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px"
+          >
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="vv-disk-iops">-</span>
+              <span class="vital-detail-label">IOPS</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="vv-disk-throughput">-</span>
+              <span class="vital-detail-label">MB/s</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="vv-disk-kbt">-</span>
+              <span class="vital-detail-label">KB/t</span>
+            </div>
+          </div>
+          <div class="vitals-dep-hint" id="vv-disk-hint" hidden></div>
+        </div>
+
+        <!-- Temperature -->
+        <div class="vital-card" id="vv-temp-card">
+          <div class="vital-header">
+            <span class="vital-label">🌡️ Temperature</span>
+          </div>
+          <div class="temp-display">
+            <span class="temp-value" id="vv-temp-value">-</span>
+            <span class="temp-unit">°C</span>
+          </div>
+          <div class="vital-detail" style="margin-top: 8px">
+            <span id="vv-temp-status" style="font-size: 0.75rem; color: var(--text-muted)"
+              >Checking...</span
+            >
+          </div>
+          <div class="vitals-dep-hint" id="vv-temp-hint" hidden></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>

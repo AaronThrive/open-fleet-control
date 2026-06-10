@@ -1,16 +1,27 @@
 /**
- * Alert engine with pluggable sinks (webhooks + Slack via OpenClaw gateway).
+ * Alert engine with pluggable sinks (webhooks + Slack via OpenClaw gateway
+ * + ntfy push notifications).
  *
  * Events are deduplicated (same type+node/task within 5 minutes fires once),
  * recorded in a ring buffer for the UI, and dispatched to all matching sinks.
  * Sink delivery is resilient: 10s timeout, one retry, failures are logged and
  * never thrown to the caller. The dashboard never holds Slack tokens — the
  * Slack sink only POSTs {channel, text} to the configured gateway URL.
+ *
+ * ntfy sink: POSTs the alert message as plain text to <server>/<topic> with
+ * ntfy publish headers (Title = event type + node/task context, Priority
+ * mapped from severity, Tags from severity). No credentials are stored —
+ * access control is the topic name itself (treat it like a secret).
  */
 
 const crypto = require("crypto");
 
 const SEVERITIES = new Set(["info", "warn", "critical"]);
+const NTFY_DEFAULT_SERVER = "https://ntfy.sh";
+// Severity → ntfy Priority header (https://docs.ntfy.sh/publish/#message-priority)
+const NTFY_PRIORITIES = { critical: "urgent", warn: "high", info: "default" };
+// Severity → ntfy Tags header (emoji shortcodes rendered by ntfy clients)
+const NTFY_TAGS = { critical: "rotating_light", warn: "warning", info: "information_source" };
 const DEDUPE_WINDOW_MS = 5 * 60 * 1000;
 const RING_BUFFER_SIZE = 200;
 const DEFAULT_TIMEOUT_MS = 10000;
@@ -56,7 +67,12 @@ function normalizeEvent(event, nowFn) {
  * @param {object} options
  * @param {object} options.config - The `fleet.alerts` config section:
  *   {enabled, rules: {nodeOffline, nodeUnreachable, taskFailed, taskStale, lessonPending},
- *    sinks: {slack: {enabled, gatewayUrl, channel}, webhooks: [{url, secret, events}]}}
+ *    sinks: {slack: {enabled, gatewayUrl, channel},
+ *            ntfy: {enabled, server?, topic, priorityMap?},
+ *            webhooks: [{url, secret, events}]}}
+ *   ntfy.server defaults to https://ntfy.sh; ntfy.priorityMap optionally
+ *   overrides the default severity→priority mapping per severity, e.g.
+ *   {critical: "max", info: "min"}.
  * @param {function} [options.fetchFn=fetch] - Injectable fetch for tests
  * @param {function} [options.nowFn=Date.now] - Injectable clock for tests
  * @param {number} [options.timeoutMs=10000] - Per-request timeout
@@ -156,20 +172,47 @@ function createAlerts({
     return postWithRetry("webhook", webhook.url, body, headers);
   }
 
-  function dispatchToSlack(slack, alert) {
-    const context = [
-      alert.node ? `node=${alert.node}` : null,
-      alert.task ? `task=${alert.task}` : null,
-    ]
+  /** "node=<node> task=<task>" context fragment shared by text-y sinks. */
+  function alertContext(alert) {
+    return [alert.node ? `node=${alert.node}` : null, alert.task ? `task=${alert.task}` : null]
       .filter(Boolean)
       .join(" ");
+  }
 
+  function dispatchToSlack(slack, alert) {
+    const context = alertContext(alert);
     const text = `[${alert.severity.toUpperCase()}] ${alert.type}${context ? ` (${context})` : ""}: ${alert.message}`;
     const body = JSON.stringify({ channel: slack.channel, text });
 
     return postWithRetry("slack", slack.gatewayUrl, body, {
       "Content-Type": "application/json",
     });
+  }
+
+  /**
+   * ntfy: POST <server>/<topic>, plain-text body, publish metadata in
+   * headers. Same resilience contract as the other sinks (timeout, one
+   * retry, isolated failure, never throws).
+   */
+  function dispatchToNtfy(ntfy, alert) {
+    const server = String(ntfy.server || NTFY_DEFAULT_SERVER).replace(/\/+$/, "");
+    const url = `${server}/${encodeURIComponent(String(ntfy.topic))}`;
+
+    const context = alertContext(alert);
+    const title = `${alert.type}${context ? ` (${context})` : ""}`;
+    const priorityMap =
+      ntfy.priorityMap && typeof ntfy.priorityMap === "object" && !Array.isArray(ntfy.priorityMap)
+        ? ntfy.priorityMap
+        : {};
+
+    const headers = {
+      "Content-Type": "text/plain; charset=utf-8",
+      Title: title,
+      Priority: priorityMap[alert.severity] || NTFY_PRIORITIES[alert.severity] || "default",
+      Tags: NTFY_TAGS[alert.severity] || NTFY_TAGS.info,
+    };
+
+    return postWithRetry("ntfy", url, alert.message || title, headers);
   }
 
   /**
@@ -213,6 +256,10 @@ function createAlerts({
 
     if (sinks.slack && sinks.slack.enabled && sinks.slack.gatewayUrl) {
       dispatches.push(dispatchToSlack(sinks.slack, alert));
+    }
+
+    if (sinks.ntfy && sinks.ntfy.enabled && sinks.ntfy.topic) {
+      dispatches.push(dispatchToNtfy(sinks.ntfy, alert));
     }
 
     const results = await Promise.allSettled(dispatches);

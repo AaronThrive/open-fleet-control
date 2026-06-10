@@ -88,6 +88,9 @@ const { migrateDataDir } = require("./data");
 const { createStateModule } = require("./state");
 const { createFleetRuntime } = require("./fleet");
 const { createFleetRoutes, isFleetRoute } = require("./fleet-routes");
+const { createSettings } = require("./settings");
+const { createDocker } = require("./docker");
+const { createUsageSources } = require("./usage-sources");
 
 // ============================================================================
 // CONFIGURATION
@@ -162,13 +165,50 @@ const state = createStateModule({
 // REST routes. SSE events: fleet.mesh, fleet.chat, fleet.kanban,
 // fleet.evolution, fleet.alert (minimal payloads; clients refetch detail).
 const fleet = createFleetRuntime({ config: CONFIG.fleet, broadcast: broadcastSSE });
-const fleetRoutes = createFleetRoutes({ fleet });
+
+// Settings service — persists the editable fleet config subset to
+// config/dashboard.local.json and hot-applies alerts changes by rebuilding
+// the fleet runtime's alert engine (no restart needed for alerts.*).
+const settings = createSettings({
+  configPath: path.join(__dirname, "..", "config", "dashboard.local.json"),
+  onChange: (alertsConfig) => fleet.applyAlertsConfig(alertsConfig),
+});
+
+const fleetRoutes = createFleetRoutes({ fleet, settings });
+
+// Usage sources — read-only adapters over Claude Code / Codex / 9Router /
+// Headroom / OpenRouter usage data (paths configurable via fleet.usage).
+const usageSources = createUsageSources({
+  claudeProjectsDir: CONFIG.fleet.usage.claudeProjectsDir,
+  codexDir: CONFIG.fleet.usage.codexDir,
+  nineRouterDb: CONFIG.fleet.usage.nineRouterDb,
+  headroomStats: CONFIG.fleet.usage.headroomStats || CONFIG.fleet.cortex.headroomStats,
+  openrouterKey: process.env.OPENROUTER_API_KEY || CONFIG.fleet.usage.openrouterKey,
+});
+
+// Docker containers — read-only poller over the local Docker socket.
+// State/health transitions broadcast as SSE "fleet.docker" (minimal payload;
+// the docker view refetches GET /api/docker for detail).
+const docker = createDocker({
+  onChange: ({ container, previousState, previousHealth }) =>
+    broadcastSSE("fleet.docker", {
+      id12: container.id12 || null,
+      name: container.name || null,
+      state: container.state,
+      health: container.health,
+      previousState,
+      previousHealth,
+      ts: Date.now(),
+    }),
+  portainerUrl: CONFIG.fleet.docker?.portainerUrl ?? null,
+});
 
 // ============================================================================
 // STARTUP: Data migration + background tasks
 // ============================================================================
 process.nextTick(() => migrateDataDir(DATA_DIR, LEGACY_DATA_DIR));
 fleet.start();
+docker.start();
 startOperatorsRefresh(DATA_DIR, getOpenClawDir);
 startLlmUsageRefresh();
 startTokenUsageRefresh(getOpenClawDir);
@@ -619,6 +659,40 @@ const server = http.createServer((req, res) => {
       res.writeHead(405, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Method not allowed" }));
     }
+    return;
+  } else if (pathname === "/api/docker") {
+    // Docker route handlers write the full JSON response themselves.
+    const dockerHandler = docker.routes[`${req.method} ${pathname}`];
+    if (!dockerHandler) {
+      res.writeHead(405, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    dockerHandler(req, res).catch((e) => {
+      console.error("[Docker] Route failed:", e.message);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Internal error" }));
+    });
+    return;
+  } else if (pathname.startsWith("/api/usage/")) {
+    // Usage-source handlers are async (ctx) => jsonObject and never throw
+    // by contract; the catch is belt and braces.
+    const usageHandler = usageSources.routes[`${req.method} ${pathname}`];
+    if (!usageHandler) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: `Unknown usage route: ${req.method} ${pathname}` }));
+      return;
+    }
+    usageHandler({ query })
+      .then((payload) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(payload, null, 2));
+      })
+      .catch((e) => {
+        console.error("[Usage] Route failed:", e.message);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Internal error" }));
+      });
     return;
   } else if (isFleetRoute(pathname)) {
     fleetRoutes.handle(req, res, pathname, query);

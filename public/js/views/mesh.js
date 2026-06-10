@@ -12,6 +12,7 @@
  *   POST   /api/fleet/mesh/nodes      — register a node
  *   DELETE /api/fleet/mesh/nodes/:id  — unregister a node
  *   GET    /api/fleet/costs           — fleet-wide cost rollup
+ *   GET    /api/state                 — own vitals for the self card (local)
  *   SSE    /api/events  (event "fleet.mesh") — node status transitions
  */
 
@@ -56,6 +57,7 @@ export function init(containerEl) {
     selfCard: root.querySelector("#mesh-self-card"),
     selfHostname: root.querySelector("#mesh-self-hostname"),
     selfFqdn: root.querySelector("#mesh-self-fqdn"),
+    selfVitals: root.querySelector("#mesh-self-vitals"),
     costs: root.querySelector("#mesh-costs"),
     cost24h: root.querySelector("#mesh-cost-24h"),
     cost7d: root.querySelector("#mesh-cost-7d"),
@@ -177,6 +179,17 @@ async function refreshAll({ initial }) {
   } catch (err) {
     if (seq === fetchSeq && refs) refs.costs.hidden = true;
   }
+
+  // Self vitals are best-effort too: this dashboard's own /api/state always
+  // carries a vitals block (same software), so the self card can show them
+  // without any remote fetch.
+  try {
+    const ownState = await fetchJson("/api/state");
+    if (seq !== fetchSeq || !isActive()) return;
+    renderSelfVitals(ownState && ownState.vitals);
+  } catch (err) {
+    if (seq === fetchSeq && refs && refs.selfVitals) refs.selfVitals.hidden = true;
+  }
 }
 
 // --- Rendering: top-level state ----------------------------------------------
@@ -237,6 +250,207 @@ function renderCosts(costs) {
   refs.cost24h.textContent = formatCost(totals.cost24h);
   refs.cost7d.textContent = formatCost(totals.cost7d);
   refs.costReporting.textContent = String(totals.nodesReporting);
+}
+
+function renderSelfVitals(rawVitals) {
+  if (!refs || !refs.selfVitals) return;
+  const section = buildVitalsSection(rawVitals);
+  if (!section) {
+    refs.selfVitals.hidden = true;
+    refs.selfVitals.replaceChildren();
+    return;
+  }
+  refs.selfVitals.hidden = false;
+  refs.selfVitals.replaceChildren(...section.childNodes);
+}
+
+// --- Rendering: vitals ----------------------------------------------------------
+
+/**
+ * Tolerant reader: accepts both the mesh-normalized vitals shape
+ * ({pct, load, percent}) and the raw /api/state shape ({percent, loadAvg,
+ * usage}). Any missing leaf degrades to null.
+ */
+function normalizeVitals(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const cpu = raw.cpu && typeof raw.cpu === "object" ? raw.cpu : {};
+  const memory = raw.memory && typeof raw.memory === "object" ? raw.memory : {};
+  const disk = raw.disk && typeof raw.disk === "object" ? raw.disk : {};
+  const num = (...vals) => {
+    for (const v of vals) if (isFiniteNumber(v)) return v;
+    return null;
+  };
+  return {
+    uptime: typeof raw.uptime === "string" || isFiniteNumber(raw.uptime) ? raw.uptime : null,
+    cpu: {
+      load: num(cpu.load, Array.isArray(cpu.loadAvg) ? cpu.loadAvg[0] : null),
+      percent: num(cpu.percent, cpu.usage, cpu.pct),
+      cores: num(cpu.cores),
+    },
+    memory: {
+      used: num(memory.used),
+      total: num(memory.total),
+      pct: num(memory.pct, memory.percent),
+    },
+    disk: {
+      used: num(disk.used),
+      free: num(disk.free),
+      total: num(disk.total),
+      pct: num(disk.pct, disk.percent),
+    },
+    temperature: num(raw.temperature),
+  };
+}
+
+/** Percentage to display: explicit pct, else derived from used/total. */
+function resolvePct(pct, used, total) {
+  if (isFiniteNumber(pct)) return clampPct(pct);
+  if (isFiniteNumber(used) && isFiniteNumber(total) && total > 0) {
+    return clampPct((used / total) * 100);
+  }
+  return null;
+}
+
+function clampPct(value) {
+  return Math.max(0, Math.min(100, value));
+}
+
+function pctSeverity(pct) {
+  if (pct >= 90) return "crit";
+  if (pct >= 75) return "warn";
+  return "";
+}
+
+/** One labeled neon bar: LABEL [====  ] 72% — tooltip carries absolutes. */
+function buildVitalBar(label, pct, valueText, tooltip) {
+  const row = el("div", "mesh-vital");
+  if (tooltip) row.title = tooltip;
+  row.appendChild(el("span", "mesh-vital-label", label));
+  const bar = el("span", "mesh-vital-bar");
+  const fill = el("span", `mesh-vital-fill ${pctSeverity(pct)}`.trim());
+  fill.style.width = `${clampPct(pct)}%`;
+  bar.appendChild(fill);
+  row.appendChild(bar);
+  row.appendChild(el("span", "mesh-vital-value", valueText));
+  return row;
+}
+
+/**
+ * Compact vitals block (mem / disk / cpu bars + uptime line) for a node
+ * card or the self card. Returns null when the node reports nothing —
+ * older versions without a vitals block are quietly omitted.
+ */
+function buildVitalsSection(rawVitals) {
+  const vitals = normalizeVitals(rawVitals);
+  if (!vitals) return null;
+
+  const section = el("div", "mesh-node-vitals");
+
+  const memPct = resolvePct(vitals.memory.pct, vitals.memory.used, vitals.memory.total);
+  if (memPct !== null) {
+    const abs = formatUsedTotal(vitals.memory.used, vitals.memory.total);
+    section.appendChild(
+      buildVitalBar(
+        t("views.mesh.vitalsMem", {}, "MEM"),
+        memPct,
+        `${Math.round(memPct)}%${abs ? ` · ${abs}` : ""}`,
+        t(
+          "views.mesh.vitalsMemTooltip",
+          { used: formatBytes(vitals.memory.used), total: formatBytes(vitals.memory.total) },
+          "Memory: {used} used of {total}",
+        ),
+      ),
+    );
+  }
+
+  const diskPct = resolvePct(vitals.disk.pct, vitals.disk.used, vitals.disk.total);
+  if (diskPct !== null) {
+    const abs = formatUsedTotal(vitals.disk.used, vitals.disk.total);
+    section.appendChild(
+      buildVitalBar(
+        t("views.mesh.vitalsDisk", {}, "DISK"),
+        diskPct,
+        `${Math.round(diskPct)}%${abs ? ` · ${abs}` : ""}`,
+        t(
+          "views.mesh.vitalsDiskTooltip",
+          {
+            used: formatBytes(vitals.disk.used),
+            total: formatBytes(vitals.disk.total),
+            free: formatBytes(vitals.disk.free),
+          },
+          "Disk: {used} used of {total} ({free} free)",
+        ),
+      ),
+    );
+  }
+
+  if (vitals.cpu.percent !== null) {
+    const loadPart = vitals.cpu.load !== null ? ` · load ${vitals.cpu.load.toFixed(2)}` : "";
+    section.appendChild(
+      buildVitalBar(
+        t("views.mesh.vitalsCpu", {}, "CPU"),
+        vitals.cpu.percent,
+        `${Math.round(clampPct(vitals.cpu.percent))}%${loadPart}`,
+        t(
+          "views.mesh.vitalsCpuTooltip",
+          {
+            percent: Math.round(clampPct(vitals.cpu.percent)),
+            load: vitals.cpu.load !== null ? vitals.cpu.load.toFixed(2) : "—",
+            cores: vitals.cpu.cores !== null ? vitals.cpu.cores : "—",
+          },
+          "CPU: {percent}% busy · load {load} · {cores} cores",
+        ),
+      ),
+    );
+  } else if (vitals.cpu.load !== null) {
+    const meta = el(
+      "div",
+      "mesh-vital-meta",
+      t("views.mesh.vitalsLoad", { load: vitals.cpu.load.toFixed(2) }, "load {load}"),
+    );
+    if (vitals.cpu.cores !== null) meta.title = `load avg / ${vitals.cpu.cores} cores`;
+    section.appendChild(meta);
+  }
+
+  const uptimeText = formatUptime(vitals.uptime);
+  if (uptimeText || vitals.temperature !== null) {
+    const parts = [];
+    if (uptimeText) parts.push(t("views.mesh.vitalsUptime", { value: uptimeText }, "up {value}"));
+    if (vitals.temperature !== null) parts.push(`${Math.round(vitals.temperature)}°C`);
+    const meta = el("div", "mesh-vital-meta", parts.join(" · "));
+    if (uptimeText) {
+      meta.title = t("views.mesh.vitalsUptimeTooltip", { value: uptimeText }, "Uptime: {value}");
+    }
+    section.appendChild(meta);
+  }
+
+  return section.childNodes.length > 0 ? section : null;
+}
+
+function formatUsedTotal(used, total) {
+  if (!isFiniteNumber(used) || !isFiniteNumber(total)) return "";
+  return `${formatBytes(used)}/${formatBytes(total)}`;
+}
+
+function formatBytes(value) {
+  if (!isFiniteNumber(value) || value < 0) return "—";
+  const GB = 1024 ** 3;
+  const MB = 1024 ** 2;
+  if (value >= GB) return `${(value / GB).toFixed(1)}G`;
+  if (value >= MB) return `${(value / MB).toFixed(0)}M`;
+  return `${Math.round(value / 1024)}K`;
+}
+
+/** Uptime arrives as a preformatted string ("54 days") or seconds. */
+function formatUptime(uptime) {
+  if (typeof uptime === "string" && uptime.trim()) return uptime.trim();
+  if (!isFiniteNumber(uptime) || uptime < 0) return "";
+  const days = Math.floor(uptime / 86400);
+  const hours = Math.floor((uptime % 86400) / 3600);
+  const minutes = Math.floor((uptime % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
 }
 
 // --- Rendering: node grid -----------------------------------------------------
@@ -315,6 +529,11 @@ function buildNodeCard(node, hasSkew) {
   const spark = buildSparkline(health.samples);
   if (spark) latencyRow.appendChild(spark);
   card.appendChild(latencyRow);
+
+  // Vitals: mem/disk/cpu bars + uptime — quietly omitted when the node does
+  // not report vitals (older versions / non-OFC services on the port).
+  const vitalsSection = buildVitalsSection(node.vitals);
+  if (vitalsSection) card.appendChild(vitalsSection);
 
   // Foot: version chip, last seen, unregister
   const foot = el("div", "mesh-node-foot");

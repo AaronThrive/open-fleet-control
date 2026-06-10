@@ -220,6 +220,18 @@ const FLEET_DEFAULTS = {
     leanCtxStats: "",
     lcmDb: "",
   },
+  docker: { portainerUrl: null },
+  usage: {
+    claudeProjectsDir: "~/.claude/projects",
+    codexDir: "~/.codex",
+    nineRouterDb: "~/.openclaw/9router/data/db/data.sqlite",
+    // Empty = reuse fleet.cortex.headroomStats (single source of truth for
+    // the headroom subscription stats file).
+    headroomStats: "",
+    // OpenRouter API key for credit/key info. OPENROUTER_API_KEY env var
+    // takes precedence at wiring time (src/index.js).
+    openrouterKey: "",
+  },
   rateLimit: { windowMs: 60000, max: 120 },
 };
 
@@ -257,7 +269,16 @@ function buildFleetConfig(fileFleet) {
     }
   }
 
-  return { ...fleet, ...resolvedDirs, cortex: resolvedCortex };
+  // Usage source paths get the same ~/$HOME expansion as cortex paths
+  // (openrouterKey is a secret, not a path — leave it untouched).
+  const resolvedUsage = { ...fleet.usage };
+  for (const key of ["claudeProjectsDir", "codexDir", "nineRouterDb", "headroomStats"]) {
+    if (typeof resolvedUsage[key] === "string" && resolvedUsage[key].length > 0) {
+      resolvedUsage[key] = expandPath(resolvedUsage[key]);
+    }
+  }
+
+  return { ...fleet, ...resolvedDirs, cortex: resolvedCortex, usage: resolvedUsage };
 }
 
 /**

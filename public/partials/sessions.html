@@ -1,0 +1,177 @@
+<!-- Sessions View Partial -->
+<div class="section" id="sessions-view-section">
+  <style>
+    #sessions-view-section .sessions-subagent-strip {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 12px 14px;
+      margin-bottom: 14px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      align-items: center;
+    }
+    #sessions-view-section .sessions-subagent-strip-title {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-right: 4px;
+      white-space: nowrap;
+    }
+    #sessions-view-section .sessions-subagent-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.78rem;
+      padding: 4px 10px;
+      border-radius: 12px;
+      background: rgba(63, 185, 80, 0.08);
+      border: 1px solid rgba(63, 185, 80, 0.35);
+      color: var(--text);
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    #sessions-view-section .sessions-subagent-chip .chip-meta {
+      color: var(--text-muted);
+      font-size: 0.7rem;
+    }
+    #sessions-view-section .sessions-subagent-empty {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+    #sessions-view-section .sessions-error {
+      color: var(--red);
+      font-size: 0.8rem;
+      margin-bottom: 8px;
+    }
+    #sessions-view-section .sessions-inline-detail {
+      margin-top: 14px;
+      padding: 14px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    #sessions-view-section .sessions-inline-detail h3 {
+      font-size: 0.85rem;
+      margin: 10px 0 6px;
+      color: var(--accent);
+    }
+    #sessions-view-section .sessions-inline-detail pre {
+      margin: 0;
+      padding: 8px;
+      font-size: 0.75rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+  </style>
+  <section class="view-panel">
+    <div class="view-header">
+      <div class="view-title">
+        <span class="view-icon">📡</span>
+        <span data-i18n="views.sessions.title">Sessions</span>
+        <span class="section-count" id="sessions-view-count">0</span>
+      </div>
+      <div class="view-subtitle" data-i18n="views.sessions.subtitle">
+        Live, recent, and idle agent sessions across every channel
+      </div>
+    </div>
+
+    <div class="sessions-subagent-strip" id="sessions-subagent-strip">
+      <span class="sessions-subagent-strip-title" data-i18n="views.sessions.subagentStrip"
+        >🦞 Active sub-agents</span
+      >
+      <span
+        class="sessions-subagent-empty"
+        id="sessions-subagent-empty"
+        data-i18n="views.sessions.noSubagents"
+        >No active sub-agents</span
+      >
+      <span id="sessions-subagent-chips"></span>
+    </div>
+
+    <div class="section-filters" id="sessions-view-filters">
+      <div class="filter-group" data-filter-group="status">
+        <span class="filter-label" data-i18n="views.sessions.filterStatus">Status:</span>
+        <button class="filter-btn active" data-filter="all" type="button">
+          All <span class="filter-count" id="sessions-filter-all-count">0</span>
+        </button>
+        <button class="filter-btn" data-filter="live" type="button">
+          <span class="filter-dot live"></span>
+          Live <span class="filter-count" id="sessions-filter-live-count">0</span>
+        </button>
+        <button class="filter-btn" data-filter="recent" type="button">
+          <span class="filter-dot recent"></span>
+          Recent <span class="filter-count" id="sessions-filter-recent-count">0</span>
+        </button>
+        <button class="filter-btn" data-filter="idle" type="button">
+          <span class="filter-dot idle"></span>
+          Idle <span class="filter-count" id="sessions-filter-idle-count">0</span>
+        </button>
+      </div>
+      <div class="filter-group" data-filter-group="channel">
+        <span class="filter-label" data-i18n="views.sessions.filterChannel">Channel:</span>
+        <button class="filter-btn active" data-filter="all" type="button">All</button>
+        <button class="filter-btn" data-filter="slack" type="button">💬 Slack</button>
+        <button class="filter-btn" data-filter="telegram" type="button">📱 Telegram</button>
+        <button class="filter-btn" data-filter="discord" type="button">🎮 Discord</button>
+        <button class="filter-btn" data-filter="signal" type="button">🔒 Signal</button>
+        <button class="filter-btn" data-filter="whatsapp" type="button">📲 WhatsApp</button>
+      </div>
+      <div class="filter-group" data-filter-group="kind">
+        <span class="filter-label" data-i18n="views.sessions.filterKind">Kind:</span>
+        <button class="filter-btn active" data-filter="all" type="button">All</button>
+        <button class="filter-btn" data-filter="main" type="button">Main</button>
+        <button class="filter-btn" data-filter="subagent" type="button">Subagent</button>
+        <button class="filter-btn" data-filter="cron" type="button">⏰ Cron</button>
+      </div>
+    </div>
+
+    <div class="sessions-error" id="sessions-view-error" hidden></div>
+
+    <div class="card-grid" id="sessions-view-grid">
+      <div class="skeleton-card">
+        <div class="skeleton-header">
+          <div class="skeleton-circle"></div>
+          <div style="flex: 1">
+            <div class="skeleton-bar title"></div>
+            <div class="skeleton-bar subtitle"></div>
+          </div>
+          <div class="skeleton-badge"></div>
+        </div>
+        <div class="skeleton-bar text"></div>
+        <div class="skeleton-bar text short"></div>
+      </div>
+      <div class="skeleton-card">
+        <div class="skeleton-header">
+          <div class="skeleton-circle"></div>
+          <div style="flex: 1">
+            <div class="skeleton-bar title"></div>
+            <div class="skeleton-bar subtitle"></div>
+          </div>
+          <div class="skeleton-badge"></div>
+        </div>
+        <div class="skeleton-bar text"></div>
+        <div class="skeleton-bar text short"></div>
+      </div>
+    </div>
+
+    <div class="pagination" id="sessions-view-pagination" style="display: none">
+      <button class="pagination-btn" id="sessions-view-prev" type="button">← Prev</button>
+      <div class="pagination-pages" id="sessions-view-pages"></div>
+      <button class="pagination-btn" id="sessions-view-next" type="button">Next →</button>
+      <div class="pagination-info" id="sessions-view-info"></div>
+    </div>
+
+    <!-- Inline fallback detail (used only when the global detail panel is absent) -->
+    <div class="sessions-inline-detail" id="sessions-inline-detail" hidden></div>
+  </section>
+</div>

@@ -109,9 +109,11 @@ function parseIntParam(query, name, fallback) {
  *
  * @param {object} options
  * @param {object} options.fleet - runtime from createFleetRuntime()
+ * @param {object} [options.settings] - service from createSettings(); when
+ *   omitted the /api/fleet/settings routes respond 404
  * @returns {{handle: function, isFleetRoute: function}}
  */
-function createFleetRoutes({ fleet }) {
+function createFleetRoutes({ fleet, settings = null }) {
   if (!fleet) throw new Error("createFleetRoutes requires a fleet runtime");
 
   /**
@@ -561,6 +563,56 @@ function createFleetRoutes({ fleet }) {
   }
 
   // -------------------------------------------------------------------
+  // Settings (editable fleet config subset, persisted to dashboard.local.json)
+  // -------------------------------------------------------------------
+
+  async function handleSettings(req, res, method, segments) {
+    if (!settings) return false;
+
+    if (segments.length === 1 && method === "GET") {
+      json(res, 200, settings.get());
+      return true;
+    }
+    if (segments.length === 1 && method === "PATCH") {
+      const user = guardMutation(req, res);
+      if (!user) return true;
+      const body = await readJsonBody(req);
+      // update() validates strictly (400 on unknown/malformed keys) and
+      // hot-applies alerts changes via the createSettings onChange hook.
+      const result = settings.update(body, user);
+      recordAudit(user, "alerts.config", null, {
+        sections: Object.keys(body),
+        restartRequired: result.restartRequired,
+      });
+      json(res, 200, {
+        success: true,
+        applied: result.applied,
+        restartRequired: result.restartRequired,
+      });
+      return true;
+    }
+    if (segments[1] === "test-alert" && segments.length === 2 && method === "POST") {
+      const user = guardMutation(req, res);
+      if (!user) return true;
+      const body = await readJsonBody(req);
+      // Unique task per call bypasses the 5-minute dedupe window; fireAlert
+      // also broadcasts fleet.alert over SSE when the alert actually fires.
+      const result = await fleet.fireAlert({
+        type: "testAlert",
+        severity: "info",
+        task: String(Date.now()),
+        message:
+          typeof body.message === "string" && body.message
+            ? body.message
+            : "Test alert from Settings",
+      });
+      json(res, 200, { success: true, result });
+      return true;
+    }
+    return false;
+  }
+
+  // -------------------------------------------------------------------
   // Dispatch
   // -------------------------------------------------------------------
 
@@ -603,6 +655,8 @@ function createFleetRoutes({ fleet }) {
         return handleAudit(res, method, segments, query);
       case "alerts":
         return handleAlerts(res, method, segments, query);
+      case "settings":
+        return handleSettings(req, res, method, segments);
       default:
         return false;
     }

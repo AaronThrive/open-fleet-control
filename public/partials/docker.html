@@ -1,0 +1,405 @@
+<!-- Docker View Partial (READ-ONLY containers panel) -->
+<style>
+  /* Docker panel styles — scoped under #docker-view-section */
+  /* Explicit display rules below would defeat the `hidden` attribute */
+  #docker-view-section [hidden] {
+    display: none !important;
+  }
+  #docker-view-section .docker-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-top: 16px;
+    flex: 1;
+  }
+  #docker-view-section .docker-error {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    background: rgba(248, 81, 73, 0.1);
+    border: 1px solid rgba(248, 81, 73, 0.4);
+    color: var(--red);
+  }
+  #docker-view-section .docker-warning {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    background: rgba(255, 178, 36, 0.1);
+    border: 1px solid rgba(255, 178, 36, 0.4);
+    color: var(--yellow);
+  }
+
+  /* Summary strip */
+  #docker-view-section .docker-summary {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  #docker-view-section .docker-summary-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 16px;
+    border-radius: 10px;
+    background: var(--card-hover);
+    border: 1px solid var(--border);
+    min-width: 130px;
+  }
+  #docker-view-section .docker-summary-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+  }
+  #docker-view-section .docker-summary-value {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Filter bar */
+  #docker-view-section .docker-filters {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  #docker-view-section .docker-filter-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: 999px;
+    padding: 4px 14px;
+    font-size: 0.74rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  #docker-view-section .docker-filter-btn:hover {
+    border-color: rgba(var(--accent-rgb), 0.5);
+    color: var(--text);
+  }
+  #docker-view-section .docker-filter-btn.active {
+    background: rgba(var(--accent-rgb), 0.12);
+    border-color: rgba(var(--accent-rgb), 0.5);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  #docker-view-section .docker-search {
+    margin-left: auto;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 0.78rem;
+    width: 200px;
+  }
+  #docker-view-section .docker-search:focus {
+    outline: none;
+    border-color: rgba(var(--accent-rgb), 0.6);
+  }
+
+  /* Container grid + cards */
+  #docker-view-section .docker-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 12px;
+  }
+  #docker-view-section .docker-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 16px;
+    border-radius: 10px;
+    background: var(--card-hover);
+    border: 1px solid var(--border);
+    transition: border-color 0.15s ease;
+  }
+  #docker-view-section .docker-card:hover {
+    border-color: rgba(var(--accent-rgb), 0.4);
+  }
+  #docker-view-section .docker-card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  #docker-view-section .docker-state-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--text-muted);
+  }
+  #docker-view-section .docker-state-dot.running {
+    background: var(--green);
+    box-shadow: 0 0 6px rgba(0, 255, 102, 0.7);
+  }
+  #docker-view-section .docker-state-dot.exited {
+    background: #5b6470;
+  }
+  #docker-view-section .docker-state-dot.restarting {
+    background: var(--yellow);
+    box-shadow: 0 0 6px rgba(255, 178, 36, 0.6);
+  }
+  #docker-view-section .docker-state-dot.unhealthy {
+    background: var(--red);
+    box-shadow: 0 0 6px rgba(248, 81, 73, 0.7);
+  }
+  #docker-view-section .docker-card-names {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  #docker-view-section .docker-card-name {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #docker-view-section .docker-card-image {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #docker-view-section .docker-image-tag {
+    color: var(--accent-2);
+  }
+  #docker-view-section .docker-portainer-link {
+    margin-left: auto;
+    flex-shrink: 0;
+    text-decoration: none;
+    font-size: 0.95rem;
+    line-height: 1;
+    padding: 4px 6px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    transition: all 0.15s ease;
+  }
+  #docker-view-section .docker-portainer-link:hover {
+    border-color: rgba(var(--accent-rgb), 0.5);
+    background: rgba(var(--accent-rgb), 0.1);
+  }
+
+  /* Badges row */
+  #docker-view-section .docker-badges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    font-size: 0.7rem;
+  }
+  #docker-view-section .docker-badge {
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  #docker-view-section .docker-badge.health-healthy {
+    background: rgba(0, 255, 102, 0.1);
+    border-color: rgba(0, 255, 102, 0.45);
+    color: var(--green);
+  }
+  #docker-view-section .docker-badge.health-unhealthy {
+    background: rgba(248, 81, 73, 0.1);
+    border-color: rgba(248, 81, 73, 0.45);
+    color: var(--red);
+  }
+  #docker-view-section .docker-badge.health-starting {
+    background: rgba(255, 178, 36, 0.1);
+    border-color: rgba(255, 178, 36, 0.45);
+    color: var(--yellow);
+  }
+  #docker-view-section .docker-badge.restarts-warn {
+    background: rgba(255, 178, 36, 0.12);
+    border-color: rgba(255, 178, 36, 0.5);
+    color: var(--yellow);
+  }
+
+  /* Resource meters (neon green fills) */
+  #docker-view-section .docker-meters {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  #docker-view-section .docker-meter-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+  }
+  #docker-view-section .docker-meter-label {
+    width: 34px;
+    flex-shrink: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  #docker-view-section .docker-meter-track {
+    flex: 1;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  #docker-view-section .docker-meter-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(0, 255, 102, 0.55), var(--green));
+    box-shadow: 0 0 8px rgba(0, 255, 102, 0.75);
+    transition: width 0.4s ease;
+  }
+  #docker-view-section .docker-meter-fill.hot {
+    background: linear-gradient(90deg, rgba(255, 178, 36, 0.6), var(--red));
+    box-shadow: 0 0 8px rgba(248, 81, 73, 0.7);
+  }
+  #docker-view-section .docker-meter-value {
+    width: 120px;
+    flex-shrink: 0;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+  }
+
+  /* Ports + footer */
+  #docker-view-section .docker-ports {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  #docker-view-section .docker-port-chip {
+    font-size: 0.68rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(var(--accent-2-rgb), 0.1);
+    border: 1px solid rgba(var(--accent-2-rgb), 0.3);
+    color: var(--accent-2);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  #docker-view-section .docker-card-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    overflow: hidden;
+  }
+  #docker-view-section .docker-uptime {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #docker-view-section .docker-muted {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+</style>
+<div class="section" id="docker-view-section">
+  <section class="view-panel">
+    <div class="view-header">
+      <div class="view-title">
+        <span class="view-icon">🐳</span>
+        <span data-i18n="views.docker.title">Docker</span>
+      </div>
+      <div class="view-subtitle" data-i18n="views.docker.subtitle">
+        Read-only view of containers on this host — state, health, and resource usage
+      </div>
+    </div>
+
+    <!-- Loading / error feedback (managed by views/docker.js) -->
+    <div class="view-loading" id="docker-loading" data-i18n="views.docker.loading">
+      Loading containers...
+    </div>
+    <div class="docker-error" id="docker-fetch-error" hidden></div>
+
+    <div class="docker-body" id="docker-body" hidden>
+      <!-- Docker daemon unavailable -->
+      <div class="docker-warning" id="docker-unavailable" hidden>
+        <span>⚠️</span>
+        <span data-i18n="views.docker.unavailable"
+          >Docker is unavailable on this host — check that the daemon is running and the socket is
+          accessible.
+        </span>
+        <span id="docker-unavailable-detail"></span>
+      </div>
+
+      <!-- Summary strip -->
+      <div class="docker-summary" id="docker-summary" hidden>
+        <div class="docker-summary-item">
+          <span class="docker-summary-label" data-i18n="views.docker.summaryRunning"
+            >Containers</span
+          >
+          <span class="docker-summary-value" id="docker-summary-running">—</span>
+        </div>
+        <div class="docker-summary-item">
+          <span class="docker-summary-label" data-i18n="views.docker.summaryCpu">Total CPU</span>
+          <span class="docker-summary-value" id="docker-summary-cpu">—</span>
+        </div>
+        <div class="docker-summary-item">
+          <span class="docker-summary-label" data-i18n="views.docker.summaryMem">Total memory</span>
+          <span class="docker-summary-value" id="docker-summary-mem">—</span>
+        </div>
+      </div>
+
+      <!-- Filter bar -->
+      <div class="docker-filters" id="docker-filters" hidden>
+        <button
+          class="docker-filter-btn active"
+          data-filter="all"
+          data-i18n="views.docker.filterAll"
+        >
+          All
+        </button>
+        <button
+          class="docker-filter-btn"
+          data-filter="running"
+          data-i18n="views.docker.filterRunning"
+        >
+          Running
+        </button>
+        <button
+          class="docker-filter-btn"
+          data-filter="stopped"
+          data-i18n="views.docker.filterStopped"
+        >
+          Stopped
+        </button>
+        <input
+          type="search"
+          class="docker-search"
+          id="docker-search"
+          data-i18n-placeholder="views.docker.searchPlaceholder"
+          placeholder="Filter by name or image..."
+        />
+      </div>
+
+      <!-- Container grid -->
+      <div class="docker-grid" id="docker-grid" hidden></div>
+
+      <!-- No match for the current filter -->
+      <div class="docker-muted" id="docker-no-match" hidden data-i18n="views.docker.noMatch">
+        No containers match the current filter.
+      </div>
+
+      <!-- Empty state (daemon up, zero containers) -->
+      <div class="empty-state" id="docker-empty-state" hidden>
+        <div class="empty-state-icon">🐳</div>
+        <div class="empty-state-title" data-i18n="views.docker.emptyTitle">No containers</div>
+        <p class="empty-state-text" data-i18n="views.docker.emptyText">
+          The Docker daemon is reachable but no containers exist on this host yet.
+        </p>
+      </div>
+    </div>
+  </section>
+</div>

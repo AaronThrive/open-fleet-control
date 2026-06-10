@@ -1,0 +1,184 @@
+<!-- LLM Usage (Fuel Gauges) View Partial -->
+<div class="section" id="llm-view-section">
+  <style>
+    #llm-view-section .llm-view-error {
+      color: var(--red);
+      font-size: 0.8rem;
+      margin-bottom: 8px;
+    }
+    #llm-view-section .llm-extra-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+    #llm-view-section .llm-extra-card .llm-extra-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 0.78rem;
+      padding: 3px 0;
+      color: var(--text-muted);
+    }
+    #llm-view-section .llm-extra-card .llm-extra-row .value {
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    #llm-view-section .llm-auth-error {
+      color: #f59e0b;
+      font-size: 0.8rem;
+    }
+  </style>
+  <section class="view-panel">
+    <div class="view-header">
+      <div class="view-title">
+        <span class="view-icon">⛽</span>
+        <span data-i18n="views.llmUsage.title">LLM Fuel Gauges</span>
+      </div>
+      <div class="view-subtitle" data-i18n="views.llmUsage.subtitle">
+        Provider quotas, task routing, and usage across every connected LLM source
+      </div>
+    </div>
+
+    <div class="llm-view-error" id="llm-view-error" hidden></div>
+    <div class="llm-auth-error" id="llm-view-auth" hidden>
+      ⚠️ Auth error — run <code>claude setup-token</code> and refresh
+    </div>
+
+    <div class="vitals-panel">
+      <div class="vitals-header">
+        <div class="vitals-title">
+          ⛽ <span data-i18n="views.llmUsage.gauges">Fuel Gauges</span>
+          <span class="vitals-hostname" id="lv-sync-time">-</span>
+        </div>
+        <div class="vitals-uptime">Routing: <span id="lv-routing-summary">-</span></div>
+      </div>
+      <div class="vitals-grid">
+        <!-- Claude Session -->
+        <div class="vital-card">
+          <div class="vital-header">
+            <span class="vital-label">🔮 Session Limit</span>
+            <span class="vital-value" id="lv-claude-session-pct">-%</span>
+          </div>
+          <div class="vital-bar">
+            <div class="vital-bar-fill purple" id="lv-claude-session-bar" style="width: 0%"></div>
+          </div>
+          <div class="vital-detail">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lv-claude-session-remaining">-%</span>
+              <span class="vital-detail-label">remaining</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lv-claude-session-reset">-</span>
+              <span class="vital-detail-label">resets in</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Claude Weekly -->
+        <div class="vital-card">
+          <div class="vital-header">
+            <span class="vital-label">📅 Weekly (All Models)</span>
+            <span class="vital-value" id="lv-claude-weekly-pct">-%</span>
+          </div>
+          <div class="vital-bar">
+            <div class="vital-bar-fill blue" id="lv-claude-weekly-bar" style="width: 0%"></div>
+          </div>
+          <div class="vital-detail">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lv-claude-weekly-remaining">-%</span>
+              <span class="vital-detail-label">remaining</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lv-claude-weekly-reset">-</span>
+              <span class="vital-detail-label">resets in</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sonnet Weekly -->
+        <div class="vital-card">
+          <div class="vital-header">
+            <span class="vital-label">✨ Sonnet Weekly</span>
+            <span class="vital-value" id="lv-sonnet-weekly-pct">-%</span>
+          </div>
+          <div class="vital-bar">
+            <div class="vital-bar-fill green" id="lv-sonnet-weekly-bar" style="width: 0%"></div>
+          </div>
+          <div class="vital-detail">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lv-sonnet-weekly-remaining">-%</span>
+              <span class="vital-detail-label">remaining</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lv-sonnet-weekly-reset">-</span>
+              <span class="vital-detail-label">resets</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Codex -->
+        <div class="vital-card">
+          <div class="vital-header">
+            <span class="vital-label">⚡ Codex (OpenAI)</span>
+            <span class="vital-value" id="lv-codex-5h-pct">-%</span>
+          </div>
+          <div class="vital-bar">
+            <div class="vital-bar-fill blue" id="lv-codex-5h-bar" style="width: 0%"></div>
+          </div>
+          <div class="vital-detail">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lv-codex-day-pct">-%</span>
+              <span class="vital-detail-label">daily used</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lv-codex-tasks">-</span>
+              <span class="vital-detail-label">tasks today</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Task Routing -->
+        <div class="vital-card">
+          <div class="vital-header">
+            <span class="vital-label">🦞 Task Routing</span>
+            <span class="vital-value" id="lv-total-routed">-</span>
+          </div>
+          <div class="vital-detail" style="margin-top: 12px">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lv-claude-tasks">-</span>
+              <span class="vital-detail-label">Claude</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lv-codex-task-count">-</span>
+              <span class="vital-detail-label">Codex</span>
+            </div>
+          </div>
+          <div class="vital-detail" style="margin-top: 8px">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lv-llama-tasks">-</span>
+              <span class="vital-detail-label">🦙 Llama</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lv-qwen-tasks">-</span>
+              <span class="vital-detail-label">🐱 Qwen</span>
+            </div>
+          </div>
+          <div
+            style="margin-top: 8px; text-align: center"
+            title="Average routing latency (classification + execution)"
+          >
+            <span class="pressure-indicator" id="lv-routing-latency">Avg latency: -</span>
+          </div>
+          <div style="margin-top: 6px; text-align: center">
+            <span class="pressure-indicator" id="lv-codex-floor">Codex ≥20%: -</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Additional usage sources (headroom / nine-router / openrouter / future
+         adapters) render here from whatever /api/llm-usage exposes. -->
+    <div class="llm-extra-grid" id="lv-extra-sources"></div>
+  </section>
+</div>
