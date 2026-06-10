@@ -1,7 +1,7 @@
 {
-  "name": "openclaw-command-center",
-  "version": "1.4.1",
-  "description": "🦞 AI agent command and control dashboard — Spawn more Overlords!",
+  "name": "open-fleet-control",
+  "version": "1.5.0",
+  "description": "🦞 Open Fleet Control — AI agent fleet mission control. Spawn more Overlords!",
   "main": "lib/server.js",
   "type": "commonjs",
   "scripts": {
@@ -32,12 +32,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jontsai/openclaw-command-center.git"
+    "url": "git+https://github.com/AaronThrive/open-fleet-control.git"
   },
   "bugs": {
-    "url": "https://github.com/jontsai/openclaw-command-center/issues"
+    "url": "https://github.com/AaronThrive/open-fleet-control/issues"
   },
-  "homepage": "https://github.com/jontsai/openclaw-command-center#readme",
+  "homepage": "https://github.com/AaronThrive/open-fleet-control#readme",
   "engines": {
     "node": ">=18.0.0"
   },
