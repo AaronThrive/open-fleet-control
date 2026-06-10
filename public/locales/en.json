@@ -5,7 +5,9 @@
     "connected": "🟢 Live",
     "disconnected": "🔴 Disconnected",
     "pollingMode": "Polling Mode",
-    "error": "🔴 Error"
+    "error": "🔴 Error",
+    "live": "LIVE",
+    "stale": "STALE — last update {time}"
   },
   "sidebar": {
     "title": "Command Center",
@@ -20,6 +22,14 @@
     "memory": "Memory",
     "cerebro": "Cerebro",
     "operators": "Operators",
+    "fleet": "Fleet",
+    "mesh": "Mesh",
+    "fleetChat": "Fleet Chat",
+    "kanban": "Kanban",
+    "briefs": "Briefs",
+    "cortex": "Cortex",
+    "evolution": "Evolution",
+    "logs": "Logs",
     "privacy": "Privacy",
     "about": "About",
     "tokens": "Tokens",
@@ -60,6 +70,59 @@
   "connection": {
     "realtime": "Real-time updates via SSE ⚡",
     "polling": "Polling mode (SSE disconnected)"
+  },
+  "views": {
+    "loading": "Loading view...",
+    "loadError": "Failed to load view — check the server and try again.",
+    "mesh": {
+      "title": "Mesh",
+      "subtitle": "Fleet node topology, reachability, and health across your tailnet",
+      "emptyTitle": "No nodes registered",
+      "emptyText": "The hive has no nodes yet. Once nodes join the mesh, their topology and health will appear here in real time.",
+      "cta": "Discover nodes on your tailnet →"
+    },
+    "fleetChat": {
+      "title": "Fleet Chat",
+      "subtitle": "Broadcast channel between you and every agent in the fleet",
+      "emptyTitle": "No fleet messages yet",
+      "emptyText": "When agents report in or you broadcast an order, the conversation will appear here.",
+      "cta": "Send your first broadcast →"
+    },
+    "kanban": {
+      "title": "Kanban",
+      "subtitle": "Task board for work assigned to the swarm",
+      "emptyTitle": "No tasks on the board",
+      "emptyText": "Queue work for your agents and track it from backlog to done.",
+      "cta": "Create your first task →"
+    },
+    "briefs": {
+      "title": "Briefs",
+      "subtitle": "Digest reports compiled by the fleet — daily standups, incident recaps, summaries",
+      "emptyTitle": "No briefs generated",
+      "emptyText": "The fleet has not filed any briefs yet. Generated digests of fleet activity will land here.",
+      "cta": "Generate a daily brief →"
+    },
+    "cortex": {
+      "title": "Cortex",
+      "subtitle": "Shared knowledge base the whole fleet can read and write",
+      "emptyTitle": "Cortex is empty",
+      "emptyText": "No knowledge has been ingested yet. Feed the Cortex documents, notes, and lessons so every agent shares the same brain.",
+      "cta": "Ingest knowledge →"
+    },
+    "evolution": {
+      "title": "Evolution",
+      "subtitle": "Self-improvement cycles — lessons learned, mutations applied, fitness over time",
+      "emptyTitle": "No evolution runs yet",
+      "emptyText": "The swarm has not mutated yet. Start a self-improvement cycle to evolve agent skills and track fitness across generations.",
+      "cta": "Start a self-improvement cycle →"
+    },
+    "logs": {
+      "title": "Audit Logs",
+      "subtitle": "Immutable trail of every action taken by the fleet and its operators",
+      "emptyTitle": "No audit entries yet",
+      "emptyText": "Every command, mutation, and agent action will be recorded here as soon as the fleet starts acting.",
+      "cta": "Refresh the log →"
+    }
   },
   "jobs": {
     "pageTitle": "AI Jobs - OpenClaw Command Center",

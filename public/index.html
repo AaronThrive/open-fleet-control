@@ -10,6 +10,8 @@
     <script src="js/i18n.js"></script>
     <!-- Shared Sidebar Loader -->
     <script src="js/sidebar.js"></script>
+    <!-- Fleet View Loader (dynamic partials) -->
+    <script src="js/views.js"></script>
   </head>
   <body>
     <!-- Sidebar container (populated by sidebar.js) -->
@@ -138,6 +140,10 @@
           <div class="stat-label" data-i18n="stats.subagents">Sub-agents</div>
         </div>
       </div>
+
+      <!-- Fleet views (Mesh, Fleet Chat, Kanban, Briefs, Cortex, Evolution, Logs)
+           swapped in by js/views.js without a page reload -->
+      <div id="view-container" class="view-container" style="display: none"></div>
 
       <!-- Legend & Filters -->
       <main>
@@ -1190,7 +1196,7 @@
                     width: 12px;
                     height: 12px;
                     border-radius: 50%;
-                    background: linear-gradient(135deg, #58a6ff, #388bfd);
+                    background: linear-gradient(135deg, var(--accent-2), #09b3a6);
                   "
                 ></span>
                 <span style="font-size: 0.85rem">User</span>
@@ -4244,21 +4250,29 @@
       let sseReconnectAttempts = 0;
       const SSE_MAX_RECONNECT_DELAY = 30000; // Max 30s between reconnects
       let pollInterval = null;
+      let lastSseUpdateAt = null; // Timestamp of last SSE update/heartbeat
+
+      function staleStatusMessage() {
+        const time = lastSseUpdateAt ? lastSseUpdateAt.toLocaleTimeString() : "--:--:--";
+        return i18nText("app.stale", { time }, `STALE — last update ${time}`);
+      }
 
       function setConnectionStatus(status, message) {
         const pill = document.getElementById("connection-status");
         const statusText = document.getElementById("gateway-status");
         const refreshMode = document.getElementById("refresh-mode");
 
-        pill.classList.remove("connected", "disconnected", "connecting");
+        pill.classList.remove("connected", "disconnected", "connecting", "stale");
         pill.classList.add(status);
 
         // Update the data-i18n attribute so the i18n system doesn't overwrite our status.
         // The i18n translateSubtree() re-applies data-i18n text, so we must keep the
         // attribute in sync with the intended display state.
         // Map status to i18n key, or remove data-i18n for custom messages
+        // "stale" is intentionally absent: its message interpolates a
+        // timestamp, so data-i18n is removed and the text is set directly.
         const i18nKeyMap = {
-          connected: "app.connected",
+          connected: "app.live",
           connecting: "app.connecting",
           disconnected: "app.disconnected",
         };
@@ -4277,7 +4291,7 @@
             {},
             "Real-time updates via SSE ⚡",
           );
-        } else if (status === "disconnected") {
+        } else if (status === "disconnected" || status === "stale") {
           refreshMode.textContent = i18nText(
             "connection.polling",
             {},
@@ -4308,7 +4322,7 @@
             console.log("[SSE] Connected");
             sseConnected = true;
             sseReconnectAttempts = 0;
-            setConnectionStatus("connected", "🟢 Live");
+            setConnectionStatus("connected", i18nText("app.live", {}, "LIVE"));
             stopPolling(); // Stop polling when SSE connects
           };
 
@@ -4322,6 +4336,7 @@
           eventSource.addEventListener("update", function (e) {
             try {
               const data = JSON.parse(e.data);
+              lastSseUpdateAt = new Date();
               handleSSEUpdate(data);
             } catch (err) {
               console.error("[SSE] Failed to parse update:", err);
@@ -4331,6 +4346,7 @@
           eventSource.addEventListener("heartbeat", function (e) {
             try {
               const data = JSON.parse(e.data);
+              lastSseUpdateAt = new Date();
               console.log("[SSE] Heartbeat, clients:", data.clients);
               // Update timestamp on heartbeat
               const now = new Date().toLocaleTimeString();
@@ -4348,7 +4364,7 @@
             sseConnected = false;
             eventSource.close();
             eventSource = null;
-            setConnectionStatus("disconnected", "🔴 Disconnected");
+            setConnectionStatus("stale", staleStatusMessage());
 
             // Exponential backoff for reconnection
             sseReconnectAttempts++;
