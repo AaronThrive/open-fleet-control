@@ -29,6 +29,7 @@
     "briefs": "简报",
     "cortex": "Cortex",
     "evolution": "进化",
+    "federation": "联邦",
     "logs": "日志",
     "privacy": "隐私",
     "about": "关于",
@@ -115,6 +116,16 @@
       "emptyTitle": "暂无进化运行",
       "emptyText": "蜂群尚未发生变异。启动自我改进周期以进化代理技能，并跨代追踪适应度。",
       "cta": "启动自我改进周期 →"
+    },
+    "federation": {
+      "title": "联邦",
+      "subtitle": "舰队之舰队：以只读方式监控其他 Open Fleet Control 仪表盘",
+      "readOnlyNote": "v1 仅支持只读监控——本仪表盘绝不会对联邦远端执行写操作。",
+      "emptyTitle": "暂无联邦仪表盘",
+      "emptyText": "在下方添加另一个 Open Fleet Control 仪表盘的 URL，即可在同一块屏幕上观察它的舰队——网格健康、看板流转、进化闸门与告警。",
+      "cta": "添加远端仪表盘 →",
+      "addTitle": "添加远端仪表盘",
+      "tokenHint": "仅限 HTTPS。Token 存储在服务器端，添加后不再显示。"
     },
     "logs": {
       "title": "审计日志",

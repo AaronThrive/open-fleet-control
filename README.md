@@ -1,400 +1,236 @@
-# 🦞 OpenClaw Command Center
+# 🦞 Open Fleet Control
 
 English | [简体中文](README.zh-CN.md)
 
 <div align="center">
 
-**Mission control for your AI agents**
+**Fleet mission control for distributed OpenClaw nodes — over your tailnet**
 
-[![CI](https://github.com/jontsai/openclaw-command-center/actions/workflows/ci.yml/badge.svg)](https://github.com/jontsai/openclaw-command-center/actions/workflows/ci.yml)
+[![CI](https://github.com/AaronThrive/open-fleet-control/actions/workflows/ci.yml/badge.svg)](https://github.com/AaronThrive/open-fleet-control/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
-[![ClawHub](https://img.shields.io/badge/ClawHub-command--center-blue)](https://www.clawhub.ai/jontsai/command-center)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/jontsai/openclaw-command-center/pulls)
+[![Version](https://img.shields.io/badge/version-1.5.0-blue)](package.json)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/AaronThrive/open-fleet-control/pulls)
 
-[Features](#features) • [Quick Start](#quick-start) • [Security](#-security) • [Configuration](#configuration)
+[Feature Tour](#feature-tour) • [Quick Start](#quick-start) • [Fleet Configuration](#fleet-configuration) • [API](#fleet-api) • [Deployment](#deployment)
 
 </div>
 
 ---
 
-## Why Command Center?
+## What Is It?
 
-Your AI agents are running 24/7. You need to know what they're doing.
+Your AI agents are no longer one process on one box. They are a **fleet**: OpenClaw nodes scattered across machines, joined by a Tailscale tailnet, each running sessions, burning tokens, and filing work.
 
-Command Center gives you **real-time visibility** into your OpenClaw deployment — sessions, costs, system health, scheduled tasks — all in one secure dashboard.
+Open Fleet Control is the **Overmind's command deck** for that fleet — one dashboard that sees every node, every conversation, every task, and every credit spent. It builds on the excellent [OpenClaw Command Center](https://github.com/jontsai/openclaw-command-center) (sessions, costs, vitals, cron) and extends it with fleet-wide coordination: mesh topology, agent chat, a kanban board, shared memory, and a self-improvement loop with a human gate.
 
-### ⚡ Fast
+### ⚡ Still Fast, Still Light
 
-- **Single API call** — unified state endpoint, not 16+ separate requests
-- **2-second updates** — real-time SSE push, not polling
-- **5-second cache** — backend stays responsive under load
-- **Instant startup** — no build step, no compilation
-
-### 🪶 Lightweight
-
-- **Zero dependencies** for users — just Node.js
-- **~200KB total** — dashboard + server
-- **No webpack/vite/bundler** — runs directly
-- **No React/Vue/Angular** — vanilla JS, works everywhere
-
-### 📱 Responsive
-
-- **Desktop & mobile** — works on any screen size
-- **Dark mode** — easy on the eyes, Starcraft-inspired
-- **Live updates** — no manual refresh needed
-- **Offline-friendly** — graceful degradation
-
-### 🔧 Modern
-
-- **ES Modules** — clean component architecture
-- **SSE streaming** — efficient real-time updates
-- **REST API** — integrate with your tools
-- **TypeScript-ready** — JSDoc types included
-
-### 🔒 Security (Most Important)
-
-Command Center takes security seriously:
-
-| Feature                  | Description                                         |
-| ------------------------ | --------------------------------------------------- |
-| **Auth Modes**           | Token, Tailscale, Cloudflare Access, IP allowlist   |
-| **No external calls**    | Dashboard runs 100% locally — no telemetry, no CDNs |
-| **Localhost default**    | Binds to `127.0.0.1` by default                     |
-| **Read-only by default** | View your agents without exposing control           |
-| **No secrets in UI**     | API keys, tokens never displayed                    |
-| **Audit logging**        | Know who accessed what, when                        |
-
-```bash
-# Secure deployment example (Tailscale)
-DASHBOARD_AUTH_MODE=tailscale node lib/server.js
-# Only users on your Tailscale network can access
-```
+- **Single unified state call** + 2-second SSE push — no polling storms
+- **No build step for the frontend** — vanilla JS, ES modules, morphdom
+- **One production dependency** (`@lancedb/lancedb`, lazy-loaded) — everything else is Node built-ins, including `node:sqlite`
+- **Dark, Starcraft-inspired UI** — the swarm deserves atmosphere
 
 ---
 
-## Features
+## Feature Tour
 
-| Feature                    | Description                                 |
-| -------------------------- | ------------------------------------------- |
-| 📊 **Session Monitoring**  | Real-time view of active AI sessions        |
-| ⛽ **LLM Fuel Gauges**     | Token usage, costs, quota remaining         |
-| 💻 **System Vitals**       | CPU, memory, disk, temperature              |
-| ⏰ **Cron Jobs**           | View and manage scheduled tasks             |
-| 🧠 **Cerebro Topics**      | Automatic conversation tagging              |
-| 👥 **Operators**           | Who's talking to your agents                |
-| 📝 **Memory Browser**      | View agent memory files                     |
-| 🔒 **Privacy Controls**    | Hide sensitive topics for demos/screenshots |
-| 💰 **Cost Breakdown**      | Detailed per-model cost analysis            |
-| 📈 **Savings Projections** | Monthly cost vs. manual estimates           |
+| Panel | What it does |
+| --- | --- |
+| 🕸️ **Mesh** | Registry of fleet nodes with health polling over the tailnet. Node URLs are composed at runtime from the MagicDNS suffix Tailscale reports — **no tailnet name is ever hardcoded**. Latency sparklines, peer discovery, offline/unreachable detection, and best-effort cost rollups from each node's `/api/state`. |
+| 💬 **Fleet Chat** | Agent-to-agent broadcast bus. Every message lands in a durable JSONL trail (`logs/fleet-chat.jsonl`, rotated at 50MB) **and** a SQLite history (`state/fleet-chat.db`, via `node:sqlite`) for filtered queries. |
+| 🚨 **Alerts** | Rule-based alert engine (`nodeOffline`, `nodeUnreachable`, `taskFailed`, `taskStale`, `lessonPending`) with 5-minute dedupe and two sink types: **webhooks** (HMAC-signed, see below) and **Slack** via your OpenClaw gateway — the dashboard never holds Slack tokens. |
+| 📋 **Kanban** | Task board for the swarm: `inbox → assigned → inprogress → review → done \| failed`. The board file is agent-editable; every read goes through a safe store that quarantines corrupt JSON and auto-restores backups. A watchdog flags stale in-flight tasks. |
+| 📑 **Briefs** | A markdown SOP/report library served from `briefs/*.md` — daily standups, runbooks, incident recaps. Strict filename allowlist + path containment, double-checked. |
+| 🧠 **Cortex** | The fleet's shared brain: LanceDB **memory-pro** dataset (direct reads; search and **all writes go through the `openclaw memory-pro` CLI**), the **gbrain** knowledge graph (read-only via its CLI — never opens the PGLite DB directly), and **compression fuel gauges** (headroom / lean-ctx / lcm token-savings telemetry). Each adapter degrades gracefully when unconfigured. |
+| 🧬 **Evolution + Validation Gate** | Lessons-learned ledger (`lessons_learned.md`) with a human approval gate. Gate ON: new lessons are `pending` until approved into `lessons_learned.approved.md`. Gate OFF: auto-approve, still fully recorded. Approvals rewrite only the target section's status line, atomically. |
+| 🌐 **Federation** | Fleet-of-fleets: register other Open Fleet Control dashboards (HTTPS-only, optional bearer token — stored server-side, always redacted in responses) and watch their compact fleet summaries from one pane of glass. **Read-only in v1**: never issues writes against remotes. |
+| 🧾 **Audit Logs** | Append-only JSONL trail of every mutation: who (Tailscale identity), what (a fixed action enum), when, against which target. Rotated at 50MB, queryable by user/action/time range. |
+| 🔐 **Tailnet-open auth** | Designed to sit behind Tailscale Serve: the tailnet is the perimeter, and every mutating request is attributed to the `Tailscale-User-Login` identity header (falling back to `anonymous`). Token, Cloudflare Access, and IP-allowlist modes remain available from upstream. |
+
+Plus everything inherited from upstream: session monitoring, LLM fuel gauges, system vitals, cron jobs, Cerebro topics, operators, memory browser, privacy controls, and cost breakdowns.
 
 ---
 
 ## Quick Start
 
 ```bash
-npx clawhub@latest install command-center
-cd skills/command-center
-node lib/server.js
+git clone https://github.com/AaronThrive/open-fleet-control
+cd open-fleet-control
+npm install
+npm run build     # bundles src/ → lib/server.js (esbuild)
+npm start
 ```
 
 **Dashboard runs at http://localhost:3333** 🎉
 
-<details>
-<summary>Alternative: Git clone</summary>
+The server auto-detects your OpenClaw workspace (`$OPENCLAW_WORKSPACE`, `~/.openclaw/workspace`, gateway config, and common legacy paths). Fleet working directories (`state/`, `logs/`, `briefs/`) are created relative to the package root by default.
 
 ```bash
-git clone https://github.com/jontsai/openclaw-command-center
-cd openclaw-command-center
-node lib/server.js
+# Recommended deployment: tailnet perimeter + identity attribution
+DASHBOARD_AUTH_MODE=tailscale node lib/server.js
 ```
-
-</details>
 
 ---
 
-## Zero-Config Experience
+## Fleet Configuration
 
-Command Center **auto-detects** your OpenClaw workspace:
-
-1. `$OPENCLAW_WORKSPACE` environment variable
-2. `~/.openclaw-workspace` or `~/openclaw-workspace`
-3. Common names: `~/molty`, `~/clawd`, `~/moltbot`
-
-If you have `memory/` or `state/` directories, you're good to go.
-
----
-
-## Optional System Dependencies
-
-Command Center requires **only Node.js** to run. However, some system vitals features benefit from optional packages. Without them, the dashboard still works — those metrics simply show zeros or fall back gracefully.
-
-| OS                    | Package             | Purpose                            | Install                                                       | Without It                        |
-| --------------------- | ------------------- | ---------------------------------- | ------------------------------------------------------------- | --------------------------------- |
-| Linux                 | `sysstat`           | Disk I/O vitals (IOPS, throughput) | `sudo apt install sysstat`                                    | Disk stats show zeros             |
-| Linux                 | `lm-sensors`        | Additional temperature sensors     | `sudo apt install lm-sensors`                                 | Uses thermal_zone (usually works) |
-| macOS (Intel)         | `osx-cpu-temp`      | CPU temperature                    | [Build from source](https://github.com/lavoiesl/osx-cpu-temp) | Battery temp fallback             |
-| macOS (Apple Silicon) | passwordless `sudo` | CPU temperature via `powermetrics` | Configure in sudoers                                          | Shows note in UI                  |
-
-Command Center logs hints for missing optional dependencies once at startup.
-
----
-
-## Configuration
-
-### Environment Variables
-
-| Variable             | Description    | Default     |
-| -------------------- | -------------- | ----------- |
-| `PORT`               | Server port    | `3333`      |
-| `OPENCLAW_WORKSPACE` | Workspace root | Auto-detect |
-| `OPENCLAW_PROFILE`   | Profile name   | (none)      |
-
-### 🔒 Authentication
-
-| Mode         | Use Case      | Config                                                    |
-| ------------ | ------------- | --------------------------------------------------------- |
-| `none`       | Local dev     | `DASHBOARD_AUTH_MODE=none`                                |
-| `token`      | API access    | `DASHBOARD_AUTH_MODE=token DASHBOARD_TOKEN=secret`        |
-| `tailscale`  | Team access   | `DASHBOARD_AUTH_MODE=tailscale`                           |
-| `cloudflare` | Public deploy | `DASHBOARD_AUTH_MODE=cloudflare`                          |
-| `allowlist`  | IP whitelist  | `DASHBOARD_AUTH_MODE=allowlist DASHBOARD_ALLOWED_IPS=...` |
-
-### 📋 Recommended OpenClaw Settings
-
-For the best Command Center experience, configure your OpenClaw gateway:
-
-#### Slack Threading (Critical)
-
-Enable threading for all messages to get proper topic tracking:
-
-```yaml
-# In your OpenClaw config (gateway.yaml or via openclaw gateway config)
-slack:
-  capabilities:
-    threading: all # Options: all, dm, group, none
-```
-
-**Why this matters:** Without threading, the dashboard can't track conversation topics properly. Each thread becomes a trackable unit of work.
-
-#### Session Labels
-
-Use descriptive session labels for better dashboard visibility:
-
-```yaml
-sessions:
-  labelFormat: "{channel}:{topic}" # Customize as needed
-```
-
-#### Cerebro (Topic Tracking)
-
-Enable Cerebro for automatic conversation tagging:
+All fleet behavior lives in the `fleet` section of `config/dashboard.json` (copy from [`config/dashboard.example.json`](config/dashboard.example.json), local overrides in `dashboard.local.json`). Resolution order: built-in defaults ← `dashboard.json` ← `dashboard.local.json` ← **`FLEET_CONFIG_JSON`** (an env var holding a JSON blob — handy for containers and tests):
 
 ```bash
-# Initialize Cerebro directories
-mkdir -p ~/your-workspace/cerebro/topics
-mkdir -p ~/your-workspace/cerebro/orphans
+FLEET_CONFIG_JSON='{"mesh":{"intervalMs":30000},"alerts":{"enabled":true}}' npm start
 ```
 
-The dashboard will automatically detect and display topic data.
+```jsonc
+"fleet": {
+  "stateDir": "state",          // kanban.json, mesh-nodes.json, fleet-chat.db, evolution.json
+  "logsDir": "logs",            // audit.jsonl, fleet-chat.jsonl (+ rotations)
+  "briefsDir": "briefs",        // *.md SOPs and reports
+  "workspaceDir": ".",          // home of lessons_learned.md
+  "mesh":      { "intervalMs": 15000 },        // node health poll cadence
+  "watchdog":  { "thresholdMs": 1800000 },     // stale-task threshold (30 min)
+  "alerts": {
+    "enabled": false,                          // master switch (default OFF)
+    "rules": { "nodeOffline": true, "nodeUnreachable": true,
+               "taskFailed": true, "taskStale": true, "lessonPending": true },
+    "sinks": {
+      "slack":    { "enabled": false, "gatewayUrl": "", "channel": "" },
+      "webhooks": [ { "url": "https://...", "secret": "...", "events": ["*"] } ]
+    }
+  },
+  "validationGate": { "default": true },       // evolution lessons need approval
+  "cortex": {
+    "enabled": true,                           // false = skip all CLI probing
+    "lancedbPath": "",                         // e.g. ~/.openclaw/memory/lancedb-pro
+    "gbrainCli": "",                           // e.g. ~/gbrain/bin/gbrain
+    "headroomStats": "", "leanCtxStats": "", "lcmDb": ""   // fuel gauge sources
+  },
+  "rateLimit": { "windowMs": 60000, "max": 120 }   // per user+IP, mutating routes
+}
+```
+
+Empty cortex paths mean "adapter unavailable" — the panel reports it honestly instead of probing your machine for defaults.
+
+### Webhook signatures
+
+When a webhook sink has a `secret`, every delivery carries an HMAC so the receiver can verify authenticity:
+
+```
+POST <webhook.url>
+Content-Type: application/json
+X-OFC-Signature: sha256=<hex HMAC-SHA256 of the raw request body, keyed by secret>
+
+{"event":"nodeOffline","severity":"critical","node":"hermes","task":null,
+ "message":"Node hermes went offline (was online)","ts":1717900000000,
+ "source":"open-fleet-control"}
+```
+
+Delivery is resilient: 10s timeout, one retry after 30s, failures logged but never fatal. Slack sink posts only `{channel, text}` to your gateway URL.
 
 ---
 
-### Multi-Profile Support
+## Fleet API
 
-Running multiple OpenClaw instances?
+All fleet endpoints live under `/api/fleet/*`. Mutations are rate-limited (token bucket per user+IP, `429` + `retryAfterMs` when exceeded), audited, and attributed to the Tailscale identity header.
+
+| Endpoint | Method | Description |
+| --- | --- | --- |
+| `/api/fleet/mesh` | GET | Node registry + health + tailscale status |
+| `/api/fleet/mesh/discover` | GET | Tailnet peers not yet registered |
+| `/api/fleet/mesh/nodes` | POST | Register a node |
+| `/api/fleet/mesh/nodes/:id` | DELETE | Unregister a node |
+| `/api/fleet/costs` | GET | Best-effort cost rollup across nodes |
+| `/api/fleet/chat` | GET | Query messages (sender/receiver/text/limit/before) |
+| `/api/fleet/chat/publish` | POST | Publish a message to the bus |
+| `/api/fleet/kanban` | GET | Full board |
+| `/api/fleet/kanban/tasks` | POST | Create task |
+| `/api/fleet/kanban/tasks/:id` | PATCH / DELETE | Update / delete task |
+| `/api/fleet/kanban/tasks/:id/move` | POST | Move between columns |
+| `/api/fleet/kanban/tasks/:id/comments` | POST | Add comment |
+| `/api/fleet/kanban/tasks/:id/attempts` | POST | Record an agent attempt |
+| `/api/fleet/briefs` | GET | List briefs |
+| `/api/fleet/briefs/:name` | GET / PUT / DELETE | Read / write (≤1MB markdown) / delete |
+| `/api/fleet/evolution` | GET | Gate state + lessons ledger |
+| `/api/fleet/evolution/gate` | GET / PUT | Read / toggle the validation gate |
+| `/api/fleet/evolution/lessons` | POST | File a lesson |
+| `/api/fleet/evolution/lessons/:id/approve` · `/reject` | POST | Gate decisions |
+| `/api/fleet/cortex` | GET | Unified cortex state (memory/graph/gauges) |
+| `/api/fleet/cortex/memory` | GET / POST | List/search memory · store (via CLI) |
+| `/api/fleet/cortex/graph` | GET | gbrain knowledge graph (read-only) |
+| `/api/fleet/cortex/gauges` | GET | Compression fuel gauges |
+| `/api/fleet/federation` | GET | Federated remotes + their fleet summaries |
+| `/api/fleet/federation/remotes` | POST | Register a remote dashboard |
+| `/api/fleet/federation/remotes/:id` | DELETE | Remove a remote |
+| `/api/fleet/audit` | GET | Audit trail (user/action/since/until filters) |
+| `/api/fleet/alerts` | GET | Recent fired alerts (ring buffer) |
+
+`GET /api/state` additionally carries a compact `fleet` summary, and SSE (`/api/events`) pushes `fleet.mesh`, `fleet.chat`, `fleet.kanban`, `fleet.evolution`, and `fleet.alert` events with minimal payloads — clients refetch detail over REST.
+
+---
+
+## Agent Integration
+
+The kanban columns and task lifecycle are aligned 1:1 with the **agent-team-orchestration** skill's task states (`inbox → assigned → inprogress → review → done | failed`), so agent teams running that skill can drive the board directly through `/api/fleet/kanban/*` — create tasks, log attempts, move cards — while Fleet Chat (`/api/fleet/chat/publish`) is the reporting channel and Briefs hold their standing orders. The board file is also safe for agents to edit on disk: the state-safety layer validates, quarantines, and restores around them.
+
+---
+
+## Deployment
+
+### Docker
+
+A production [`Dockerfile`](Dockerfile) ships the bundled server + static dashboard on `node:22-alpine`:
 
 ```bash
-# Production dashboard
-node lib/server.js --profile production --port 3333
-
-# Development dashboard
-node lib/server.js --profile dev --port 3334
+docker build -t fleet-control:latest .
+docker run -p 3333:3333 fleet-control:latest
 ```
 
----
+Cortex adapters need their host data paths mounted in (read-only is fine) and pointed at via `FLEET_CONFIG_JSON`; without them the dashboard runs normally and the cortex panel reports "adapter unavailable".
 
-## API
+### Appliance overlay (openclaw-stack)
 
-Command Center exposes a REST API:
+Fleet Control slots into the `openclaw-stack` appliance as two extra Compose containers: a dedicated `tailscale/tailscale` sidecar (declarative `TS_SERVE_CONFIG` proxying tailnet HTTPS 443 → loopback 3333) and the dashboard sharing its network namespace. Result: `https://<hostname>.<client-tailnet>.ts.net`, zero public exposure.
 
-| Endpoint            | Description                                        |
-| ------------------- | -------------------------------------------------- |
-| `GET /api/state`    | **Unified state** — all dashboard data in one call |
-| `GET /api/health`   | Health check                                       |
-| `GET /api/vitals`   | System metrics                                     |
-| `GET /api/sessions` | Active sessions                                    |
-| `GET /api/events`   | SSE stream for real-time updates                   |
+### Step-by-step guides
+
+- **[Node Setup Guide](docs/guides/node-setup.md)** — onboard a machine so the mesh can monitor it (MagicDNS, HTTPS certs, gateway health endpoint, registration).
+- **[Client Install Runbook](docs/guides/client-install.md)** — the full click-here-type-this appliance install on a client's own tailnet.
 
 ---
 
-## Architecture
+## 🚀 Roadmap (v1.6)
 
-```
-command-center/
-├── lib/
-│   ├── server.js           # HTTP server + API
-│   ├── config.js           # Configuration
-│   └── jobs.js             # Cron integration
-├── public/
-│   ├── index.html          # Dashboard UI
-│   └── js/                 # Components (ES modules)
-└── scripts/
-    ├── setup.sh            # First-time setup
-    └── verify.sh           # Health check
-```
+- **Kanban keyboard accessibility** — full keyboard navigation and ARIA semantics for the board.
+- **Federation write-actions** — drive remote nodes (not just observe them) from the mesh panel.
+- **Full panel i18n** — the HTML shells of all panels are keyed (`data-i18n`) and covered in `en`/`zh-CN` today, but **JS-generated runtime strings inside the fleet panels are not yet keyed**; closing that gap is a known v1.6 item.
 
 ---
 
-## 🚀 Coming Soon
+## Credits
 
-### Advanced Job Scheduling
-
-Building on OpenClaw's native cron system with intelligent scheduling primitives:
-
-| Primitive            | Description                                 |
-| -------------------- | ------------------------------------------- |
-| **run-if-not**       | Skip if job already running (dedupe)        |
-| **run-if-idle**      | Only execute when system capacity available |
-| **run-after**        | Dependency chains between jobs              |
-| **run-with-backoff** | Exponential retry on failure                |
-| **priority-queue**   | Critical vs. background work prioritization |
-
-### Multi-Agent Orchestration
-
-- Agent-to-agent handoffs
-- Swarm coordination patterns
-- Specialized agent routing (data analysis, documentation, testing)
-- Cross-session context sharing
-
-### Integration Ecosystem
-
-- Webhook triggers for external systems
-- Slack slash commands for quick actions
-- API for custom integrations
-- Plugin architecture for specialized agents
-
----
-
-## Screenshots
-
-### Dashboard Overview
-
-The hero view shows key metrics at a glance: total tokens, costs, active sessions, estimated savings, and system capacity.
-
-<p align="center">
-  <img src="docs/screenshots/hero.png" alt="Dashboard Hero" width="800">
-</p>
-
-### Sessions Panel
-
-Monitor all active AI sessions in real-time. Each card shows model, channel, token usage, cost, and activity status. Filter by status (live/recent/idle), channel, or session type.
-
-<p align="center">
-  <img src="docs/screenshots/sessions-panel.png" alt="Sessions Panel" width="800">
-</p>
-
-### Cron Jobs
-
-View and manage scheduled tasks. See run history, next scheduled time, and enable/disable jobs. The dashboard shows job success/failure sparklines and filters by status and schedule type.
-
-<p align="center">
-  <img src="docs/screenshots/cron-panel.png" alt="Cron Jobs Panel" width="800">
-</p>
-
-### Cerebro Topics
-
-Automatic conversation organization. Topics are auto-detected from Slack threads, with status tracking (active/resolved/parked), thread counts, and quick navigation. Privacy controls let you hide sensitive topics.
-
-<p align="center">
-  <img src="docs/screenshots/cerebro-panel.png" alt="Cerebro Topics Panel" width="800">
-</p>
-
-### Operators
-
-See who's interacting with your AI agents. Track active sessions per operator, permission levels, and last activity timestamps.
-
-<p align="center">
-  <img src="docs/screenshots/operators-panel.png" alt="Operators Panel" width="800">
-</p>
-
-### Memory Browser
-
-Browse your agent's memory files — daily logs, long-term memory, and workspace files. Quick navigation with file sizes and modification times.
-
-<p align="center">
-  <img src="docs/screenshots/memory-panel.png" alt="Memory Panel" width="800">
-</p>
-
-### Cost Breakdown Modal
-
-Click on any cost stat to see detailed breakdowns: token usage by type, pricing rates, and calculation methodology. Includes estimated savings vs. manual work.
-
-<p align="center">
-  <img src="docs/screenshots/cost-modal.png" alt="Cost Breakdown Modal" width="800">
-</p>
-
-### Operator Details
-
-Click on an operator card to see their session history, stats, and activity timeline.
-
-<p align="center">
-  <img src="docs/screenshots/operator-modal.png" alt="Operator Details Modal" width="800">
-</p>
-
-### Privacy Settings
-
-Control what's visible for demos and screenshots. Hide sensitive topics, sessions, or cron jobs. Settings sync to the server automatically.
-
-<p align="center">
-  <img src="docs/screenshots/privacy-modal.png" alt="Privacy Settings Modal" width="800">
-</p>
-
-### Session Details
-
-Click any session card to see detailed information: summary, key facts, tools used, and recent messages.
-
-<p align="center">
-  <img src="docs/screenshots/session-detail.png" alt="Session Details Panel" width="800">
-</p>
-
-### Full Dashboard
-
-The complete dashboard with all panels visible.
-
-<details>
-<summary>Click to expand full dashboard view</summary>
-<p align="center">
-  <img src="docs/screenshots/dashboard-full.png" alt="Full Dashboard" width="800">
-</p>
-</details>
-
----
+Open Fleet Control is a grateful fork of [**jontsai/openclaw-command-center**](https://github.com/jontsai/openclaw-command-center) — the zero-dependency dashboard core, the SSE/state architecture, and the Zerg soul all originate there. Spawn more Overlords. 🦞
 
 ## Contributing
 
-Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md).
-
-### Development
+Contributions welcome! Read [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md) (yes, the agents have their own onboarding doc).
 
 ```bash
-npm install        # Install dev dependencies
-npm run dev        # Watch mode
-npm run lint       # Check code style
-npm run format     # Auto-format
-./scripts/verify.sh  # Run health checks
+npm install        # dev dependencies
+npm run build      # bundle src/ → lib/server.js
+npm test           # node --test
+npm run lint       # eslint src/ tests/
 ```
-
----
 
 ## License
 
-MIT © [Jonathan Tsai](https://github.com/jontsai)
+MIT — upstream © [Jonathan Tsai](https://github.com/jontsai), fleet extensions © OpenClaw Contributors.
 
 ---
 
 <div align="center">
 
-**[Install from ClawHub](https://www.clawhub.ai/jontsai/command-center)** · **[OpenClaw](https://github.com/openclaw/openclaw)** · **[Discord](https://discord.gg/clawd)**
+_"The Overmind sees all through its Overlords."_
+
+**[Upstream Command Center](https://github.com/jontsai/openclaw-command-center)** · **[OpenClaw](https://github.com/openclaw/openclaw)** · **[Tailscale](https://tailscale.com)**
 
 </div>
