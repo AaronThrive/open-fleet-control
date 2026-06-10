@@ -294,6 +294,24 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     color: var(--text);
   }
+
+  /* "1Password" badge for fields whose stored value is an op:// ref */
+  #settings-view-section .set-op-badge {
+    display: inline-block;
+    width: fit-content;
+    font-size: 0.64rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(var(--accent-rgb), 0.45);
+    color: var(--accent);
+    background: rgba(var(--accent-rgb), 0.08);
+  }
+
+  /* Budget per-provider rows */
+  #settings-view-section .set-budget-usd {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+  }
 </style>
 <div class="section" id="settings-view-section">
   <section class="view-panel">
@@ -368,8 +386,9 @@
               type="url"
               class="set-url-input"
               id="set-slack-url"
-              placeholder="https://gateway.example/slack"
+              placeholder="https://gateway.example/slack or op://vault/item/field"
             />
+            <span class="set-op-badge" id="set-slack-url-badge" hidden>🔐 1Password</span>
           </div>
           <div class="set-field">
             <span class="set-field-label" data-i18n="views.settings.slackChannel">Channel</span>
@@ -398,10 +417,11 @@
               type="text"
               class="set-url-input"
               id="set-ntfy-topic"
-              placeholder="my-fleet-topic"
+              placeholder="my-fleet-topic or op://vault/item/field"
               maxlength="256"
               autocomplete="off"
             />
+            <span class="set-op-badge" id="set-ntfy-topic-badge" hidden>🔐 1Password</span>
           </div>
           <button type="button" class="set-action-btn" id="set-ntfy-test">Send test alert</button>
         </div>
@@ -489,6 +509,138 @@
           Allowed range: 5 seconds to 1 hour. Interval changes take effect after a service restart.
         </div>
         <div class="set-inline-error" id="set-intervals-error" hidden></div>
+      </div>
+
+      <!-- ============================ Budgets =========================== -->
+      <div class="set-card">
+        <div class="set-card-head">
+          <button
+            type="button"
+            class="set-collapse-toggle"
+            data-collapse-toggle
+            aria-expanded="true"
+          >
+            <span class="set-collapse-chevron" aria-hidden="true">▼</span>
+            <span class="set-card-title" data-i18n="views.settings.budgetsTitle"
+              >💸 Cost budgets</span
+            >
+          </button>
+          <button type="button" class="set-save-btn" id="set-budgets-save">Save budgets</button>
+        </div>
+
+        <div class="set-row">
+          <label class="set-toggle">
+            <input type="checkbox" id="set-budgets-enabled" />
+            <span data-i18n="views.settings.budgetsEnabled"
+              >Budget alerts enabled (fires the budgetBreach rule)</span
+            >
+          </label>
+          <div class="set-field">
+            <span class="set-field-label" data-i18n="views.settings.budgetsInterval"
+              >Check interval (minutes)</span
+            >
+            <input
+              type="number"
+              class="set-num-input"
+              id="set-budgets-interval"
+              min="1"
+              max="1440"
+            />
+          </div>
+        </div>
+
+        <div class="set-row">
+          <div class="set-field">
+            <span class="set-field-label" data-i18n="views.settings.budgetsDailyTotal"
+              >Daily total (USD, 0 = no limit)</span
+            >
+            <input
+              type="number"
+              class="set-num-input"
+              id="set-budget-daily-total"
+              min="0"
+              step="0.01"
+            />
+          </div>
+          <div class="set-field">
+            <span class="set-field-label" data-i18n="views.settings.budgetsWeeklyTotal"
+              >Weekly total (USD, 0 = no limit)</span
+            >
+            <input
+              type="number"
+              class="set-num-input"
+              id="set-budget-weekly-total"
+              min="0"
+              step="0.01"
+            />
+          </div>
+        </div>
+
+        <div class="set-subtitle" data-i18n="views.settings.budgetsDailyProviders">
+          Per-provider limits — daily
+        </div>
+        <div class="set-priv-list" id="set-budget-daily-list"></div>
+        <div
+          class="set-muted"
+          id="set-budget-daily-empty"
+          data-i18n="views.settings.budgetsNoProviders"
+        >
+          No per-provider limits.
+        </div>
+        <div class="set-row">
+          <input
+            type="text"
+            id="set-budget-daily-provider"
+            placeholder="provider (e.g. kimi, openrouter)"
+            maxlength="64"
+          />
+          <input
+            type="number"
+            class="set-num-input"
+            id="set-budget-daily-usd"
+            min="0.01"
+            step="0.01"
+            placeholder="USD"
+          />
+          <button type="button" class="set-action-btn" id="set-budget-daily-add">Add</button>
+        </div>
+
+        <div class="set-subtitle" data-i18n="views.settings.budgetsWeeklyProviders">
+          Per-provider limits — weekly
+        </div>
+        <div class="set-priv-list" id="set-budget-weekly-list"></div>
+        <div
+          class="set-muted"
+          id="set-budget-weekly-empty"
+          data-i18n="views.settings.budgetsNoProviders"
+        >
+          No per-provider limits.
+        </div>
+        <div class="set-row">
+          <input
+            type="text"
+            id="set-budget-weekly-provider"
+            placeholder="provider (e.g. kimi, openrouter)"
+            maxlength="64"
+          />
+          <input
+            type="number"
+            class="set-num-input"
+            id="set-budget-weekly-usd"
+            min="0.01"
+            step="0.01"
+            placeholder="USD"
+          />
+          <button type="button" class="set-action-btn" id="set-budget-weekly-add">Add</button>
+        </div>
+
+        <div class="set-hint" data-i18n="views.settings.budgetsHint">
+          Budgets guard real API spend: Nine-Router provider names (e.g. kimi) plus "openrouter"
+          and "claude-code" (estimated cost — informational for OAuth subscriptions). Warn fires
+          at 80%, critical at 100%, once per day/ISO-week per scope. Provider rows and totals
+          apply on Save budgets.
+        </div>
+        <div class="set-inline-error" id="set-budgets-error" hidden></div>
       </div>
 
       <!-- ============================= Gate ============================= -->

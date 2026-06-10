@@ -224,6 +224,41 @@ describe("sessions files source", () => {
   });
 });
 
+describe("resolveTranscriptForId()", () => {
+  let dir;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "ofc-sessions-resolve-"));
+    writeStore(dir, fixtureStore());
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("resolves only ids present in the session store", async () => {
+    const sessionsDir = path.join(dir, "agents", "main", "sessions");
+    const knownId = "11111111-1111-4111-8111-111111111111";
+    const transcript = path.join(sessionsDir, `${knownId}.jsonl`);
+    fs.writeFileSync(transcript, "{}\n", "utf8");
+
+    const mod = createModule(dir);
+    assert.strictEqual(await mod.resolveTranscriptForId(knownId), transcript);
+    // Unknown UUID — well-formed but not in the store.
+    assert.strictEqual(
+      await mod.resolveTranscriptForId("99999999-9999-4999-8999-999999999999"),
+      null,
+    );
+  });
+
+  it("rejects malformed / path-traversal ids before any fs access", async () => {
+    const mod = createModule(dir);
+    for (const id of ["../../etc/passwd", "a/b", "a\\b", "..", ".", "id with space", "", null]) {
+      assert.strictEqual(await mod.resolveTranscriptForId(id), null, `id ${id} must resolve null`);
+    }
+  });
+});
+
 describe("sessions worker coalescing (cli source)", () => {
   it("concurrent refreshes share a single in-flight CLI call", async () => {
     let calls = 0;

@@ -57,6 +57,20 @@ describe("audit module", () => {
       assert.strictEqual(audit.query({ limit: 1000 }).length, AUDIT_ACTIONS.length);
     });
 
+    it("includes session.kill in the enum and records it", () => {
+      assert.ok(AUDIT_ACTIONS.includes("session.kill"));
+      const rec = audit.record({
+        user: "alice",
+        action: "session.kill",
+        target: "12345",
+        detail: { source: "terminal", signal: "SIGTERM" },
+      });
+      assert.strictEqual(rec.action, "session.kill");
+      assert.strictEqual(rec.target, "12345");
+      assert.deepStrictEqual(rec.detail, { source: "terminal", signal: "SIGTERM" });
+      assert.strictEqual(audit.query({ action: "session.kill" }).length, 1);
+    });
+
     it("rejects non-string user and target", () => {
       assert.throws(() => audit.record({ action: "task.create", user: 42 }), /user/);
       assert.throws(() => audit.record({ action: "task.create", target: {} }), /target/);

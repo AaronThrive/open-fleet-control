@@ -583,6 +583,129 @@
     .kb-delete-btn:hover {
       background: rgba(248, 81, 73, 0.12);
     }
+
+    /* ---- Dispatch (kanban → agent) ---- */
+    .kb-dispatch-btn {
+      margin-left: auto;
+      background: transparent;
+      border: 1px solid rgba(var(--accent-rgb), 0.45);
+      border-radius: 6px;
+      color: var(--accent);
+      cursor: pointer;
+      font-size: 0.68rem;
+      font-weight: 700;
+      padding: 1px 7px;
+      white-space: nowrap;
+    }
+    .kb-dispatch-btn:hover {
+      background: rgba(var(--accent-rgb), 0.12);
+    }
+    .kb-dispatch-btn:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+    .kb-badge-dispatched {
+      color: var(--accent);
+      background: rgba(var(--accent-rgb), 0.1);
+      border: 1px solid rgba(var(--accent-rgb), 0.4);
+      animation: kb-stale-pulse 1.6s ease-in-out infinite;
+    }
+    .kb-drawer-dispatch {
+      background: transparent;
+      border: 1px solid rgba(var(--accent-rgb), 0.55);
+      border-radius: 6px;
+      color: var(--accent);
+      cursor: pointer;
+      font-size: 0.76rem;
+      font-weight: 600;
+      padding: 7px 0;
+      width: 100%;
+    }
+    .kb-drawer-dispatch:hover {
+      background: rgba(var(--accent-rgb), 0.12);
+    }
+    .kb-dispatch-modal {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 560px;
+      max-width: 94vw;
+      max-height: 84vh;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      z-index: 1003;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 18px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+      overflow: hidden;
+    }
+    .kb-dispatch-modal h3 {
+      margin: 0;
+      font-size: 0.9rem;
+      color: var(--text);
+    }
+    .kb-dispatch-modal .kb-dispatch-target {
+      font-size: 0.76rem;
+      color: var(--text-muted);
+    }
+    .kb-dispatch-target strong {
+      color: var(--accent);
+    }
+    .kb-dispatch-preview {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      margin: 0;
+      font-family: monospace;
+      font-size: 0.7rem;
+      line-height: 1.45;
+      color: var(--text);
+      overflow: auto;
+      flex: 1;
+      min-height: 120px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .kb-dispatch-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .kb-dispatch-confirm {
+      background: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      color: var(--on-accent);
+      cursor: pointer;
+      font-size: 0.76rem;
+      font-weight: 700;
+      padding: 6px 16px;
+    }
+    .kb-dispatch-confirm:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    .kb-dispatch-cancel {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.76rem;
+      font-weight: 600;
+      padding: 6px 14px;
+    }
+    .kb-dispatch-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      z-index: 1002;
+    }
   </style>
 
   <section class="view-panel">
@@ -723,8 +846,43 @@
       </button>
     </div>
 
+    <button
+      class="kb-drawer-dispatch"
+      id="kb-dispatch"
+      data-i18n="views.kanban.dispatchTask"
+      hidden
+    >
+      ⚡ Dispatch to Agent
+    </button>
     <button class="kb-delete-btn" id="kb-delete" data-i18n="views.kanban.deleteTask">
       Delete Task
     </button>
   </aside>
+
+  <div class="kb-dispatch-backdrop" id="kb-dispatch-backdrop" hidden></div>
+  <div
+    class="kb-dispatch-modal"
+    id="kb-dispatch-modal"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Confirm dispatch"
+    data-i18n-aria-label="views.kanban.dispatchModalAria"
+    hidden
+  >
+    <h3 data-i18n="views.kanban.dispatchModalTitle">⚡ Dispatch task to agent</h3>
+    <div class="kb-dispatch-target" id="kb-dispatch-target"></div>
+    <pre class="kb-dispatch-preview" id="kb-dispatch-preview"></pre>
+    <div class="kb-dispatch-actions">
+      <button class="kb-dispatch-cancel" id="kb-dispatch-cancel" data-i18n="views.kanban.cancel">
+        Cancel
+      </button>
+      <button
+        class="kb-dispatch-confirm"
+        id="kb-dispatch-confirm"
+        data-i18n="views.kanban.dispatchConfirm"
+      >
+        ⚡ Dispatch
+      </button>
+    </div>
+  </div>
 </div>

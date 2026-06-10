@@ -77,6 +77,8 @@ function makeRoster(tree, overrides = {}) {
     agentsDir: tree.agentsDir,
     nowFn: () => NOW,
     hostname: "self-host",
+    // Hermetic default: never fall back to the real CONFIG singleton.
+    agentsConfig: {},
     ...overrides,
   });
 }
@@ -344,6 +346,257 @@ describe("fleet aggregation", () => {
     const fleet = await roster.getRoster();
     assert.equal(fleet.agents.length, 2);
     assert.deepEqual(fleet.counts, { total: 2, active: 0, nodes: 1 });
+  });
+
+  it("attributes mesh agents with via=mesh and a default openclaw source", async () => {
+    const t = tree(configFixture());
+    const roster = makeRoster(t, {
+      mesh: meshFixture([onlineNode("hermes", "https://hermes/health")]),
+      fetchFn: async () => okResponse({ hostname: "hermes", agents: remoteAgents }),
+    });
+    const fleet = await roster.getRoster();
+    const remote = fleet.byNode.hermes[0];
+    assert.equal(remote.via, "mesh");
+    assert.equal(remote.source, "openclaw");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fleet aggregation (federation remotes)
+// ---------------------------------------------------------------------------
+
+describe("federation aggregation", () => {
+  const hermesAgent = {
+    id: "main",
+    name: "Hermes",
+    model: "openai-codex/gpt-5.5",
+    sessionCount: 4,
+    lastActiveAt: NOW - 2000,
+    active: true,
+    source: "hermes",
+  };
+
+  function federationStateFixture(remotes) {
+    return async () => ({ remotes, counts: { remotes: remotes.length } });
+  }
+
+  it("merges agents from reachable remotes with via=federation", async () => {
+    const t = tree(configFixture());
+    const calls = [];
+    const roster = makeRoster(t, {
+      federationStateFn: federationStateFixture([
+        {
+          id: "r1",
+          label: "hermes-ofc",
+          baseUrl: "https://hermes-agent-1.tail.net",
+          status: { reachable: true },
+        },
+        {
+          id: "r2",
+          label: "down-ofc",
+          baseUrl: "https://down.tail.net",
+          status: { reachable: false },
+        },
+        { id: "r3", label: "unchecked", baseUrl: "https://new.tail.net", status: {} },
+      ]),
+      fetchFn: async (url) => {
+        calls.push(url);
+        return okResponse({ hostname: "hermes-host", agents: [hermesAgent] });
+      },
+    });
+
+    const fleet = await roster.getRoster();
+    // Only the reachable remote is queried.
+    assert.deepEqual(calls, ["https://hermes-agent-1.tail.net/api/agents"]);
+    assert.equal(fleet.agents.length, 3); // 2 local + 1 federation
+    const fed = fleet.byNode["hermes-host"][0];
+    assert.equal(fed.via, "federation");
+    assert.equal(fed.source, "hermes");
+    assert.equal(fed.node, "hermes-host");
+    assert.deepEqual(fleet.counts, { total: 3, active: 1, nodes: 2 });
+  });
+
+  it("accepts a flat reachable flag (no status wrapper)", async () => {
+    const t = tree(configFixture());
+    const roster = makeRoster(t, {
+      federationStateFn: federationStateFixture([
+        { id: "r1", label: "flat", baseUrl: "https://flat.tail.net", reachable: true },
+      ]),
+      fetchFn: async () => okResponse({ hostname: "flat-host", agents: [hermesAgent] }),
+    });
+    const fleet = await roster.getRoster();
+    assert.equal(fleet.byNode["flat-host"].length, 1);
+  });
+
+  it("dedupes federation remotes already covered by a mesh node (by hostname)", async () => {
+    const t = tree(configFixture());
+    const roster = makeRoster(t, {
+      mesh: meshFixture([onlineNode("mesh-node", "https://mesh-node/health")]),
+      federationStateFn: federationStateFixture([
+        { id: "r1", label: "dup-mesh", baseUrl: "https://dup.tail.net", reachable: true },
+      ]),
+      fetchFn: async (url) => {
+        // Same machine reachable through both transports — federation copy
+        // must be dropped.
+        void url;
+        return okResponse({ hostname: "mesh-node", agents: [{ id: "ops", active: false }] });
+      },
+    });
+
+    const fleet = await roster.getRoster();
+    assert.equal(fleet.agents.length, 3); // 2 local + 1 mesh, zero federation
+    assert.deepEqual(Object.keys(fleet.byNode).sort(), ["mesh-node", "self-host"]);
+    assert.equal(fleet.byNode["mesh-node"].length, 1);
+  });
+
+  it("keeps a same-host second instance, grouped under the remote label", async () => {
+    // Real deployment shape: a Hermes-sourced OFC instance runs on the SAME
+    // machine as this one (same os.hostname()) but serves a different
+    // roster — it must NOT be deduped away, and its group must not collide
+    // with the local node group.
+    const t = tree(configFixture());
+    const roster = makeRoster(t, {
+      federationStateFn: federationStateFixture([
+        {
+          id: "r1",
+          label: "hermes-ofc",
+          baseUrl: "https://hermes-agent-1.tail.net",
+          reachable: true,
+        },
+      ]),
+      fetchFn: async () => okResponse({ hostname: "self-host", agents: [hermesAgent] }),
+    });
+
+    const fleet = await roster.getRoster();
+    assert.equal(fleet.agents.length, 3); // 2 local + 1 hermes
+    assert.deepEqual(Object.keys(fleet.byNode).sort(), ["hermes-ofc", "self-host"]);
+    assert.equal(fleet.byNode["hermes-ofc"][0].source, "hermes");
+    assert.equal(fleet.byNode["hermes-ofc"][0].via, "federation");
+  });
+
+  it("falls back to the remote label when the body has no hostname", async () => {
+    const t = tree(configFixture());
+    const roster = makeRoster(t, {
+      federationStateFn: federationStateFixture([
+        { id: "r1", label: "labeled-remote", baseUrl: "https://x.tail.net", reachable: true },
+      ]),
+      fetchFn: async () => okResponse({ agents: [hermesAgent] }),
+    });
+    const fleet = await roster.getRoster();
+    assert.ok(fleet.byNode["labeled-remote"]);
+  });
+
+  it("tolerates 404s, network failures, and a throwing federationStateFn", async () => {
+    const t = tree(configFixture());
+
+    const flaky = makeRoster(t, {
+      federationStateFn: federationStateFixture([
+        { id: "r1", label: "old", baseUrl: "https://old.tail.net", reachable: true },
+        { id: "r2", label: "down", baseUrl: "https://down.tail.net", reachable: true },
+        { id: "r3", label: "bad-url", baseUrl: "::::not-a-url", reachable: true },
+      ]),
+      fetchFn: async (url) => {
+        if (url.startsWith("https://old"))
+          return { ok: false, status: 404, json: async () => ({}) };
+        throw new Error("ECONNREFUSED");
+      },
+    });
+    const fleet = await flaky.getRoster();
+    assert.equal(fleet.agents.length, 2); // local-only
+
+    const throwing = makeRoster(tree(configFixture()), {
+      federationStateFn: async () => {
+        throw new Error("federation offline");
+      },
+    });
+    assert.equal((await throwing.getRoster()).agents.length, 2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Agents source config (fleet.agents)
+// ---------------------------------------------------------------------------
+
+describe("agents source config", () => {
+  const hermesEntries = [
+    {
+      id: "main",
+      name: "Hermes",
+      model: "openai-codex/gpt-5.5",
+      workspace: "/home/user/.hermes/workspace",
+      subagentsMax: null,
+      sessionCount: 3,
+      lastActiveAt: NOW - 60_000,
+      active: true,
+      source: "hermes",
+    },
+  ];
+
+  it("source=openclaw (default) tags local agents with source=openclaw", () => {
+    const roster = makeRoster(tree(configFixture()));
+    for (const agent of roster.getLocalRoster().agents) {
+      assert.equal(agent.source, "openclaw");
+    }
+  });
+
+  it("source=hermes serves the hermes adapter as the local roster", () => {
+    const roster = createAgentsRoster({
+      agentsConfig: { source: "hermes" },
+      hermesAgents: { listAgents: () => hermesEntries },
+      nowFn: () => NOW,
+      hostname: "hermes-host",
+    });
+    const local = roster.getLocalRoster();
+    assert.deepEqual(local.agents, hermesEntries);
+    assert.deepEqual(local.counts, { total: 1, active: 1 });
+    assert.equal(local.hostname, "hermes-host");
+  });
+
+  it("source=hermes tolerates a throwing adapter", () => {
+    const roster = createAgentsRoster({
+      agentsConfig: { source: "hermes" },
+      hermesAgents: {
+        listAgents: () => {
+          throw new Error("boom");
+        },
+      },
+      nowFn: () => NOW,
+    });
+    assert.deepEqual(roster.getLocalRoster().agents, []);
+  });
+
+  it("source=none serves an empty local roster without openclaw paths", () => {
+    const roster = createAgentsRoster({ agentsConfig: { source: "none" }, nowFn: () => NOW });
+    assert.deepEqual(roster.getLocalRoster().agents, []);
+  });
+
+  it("source=openclaw still requires the openclaw paths", () => {
+    assert.throws(
+      () => createAgentsRoster({ agentsConfig: { source: "openclaw" } }),
+      /openclawConfigPath/,
+    );
+  });
+
+  it("config paths override constructor paths", () => {
+    const t = tree(configFixture());
+    const roster = createAgentsRoster({
+      openclawConfigPath: "/nonexistent/openclaw.json",
+      agentsDir: "/nonexistent/agents",
+      agentsConfig: {
+        source: "openclaw",
+        openclawConfigPath: t.configPath,
+        agentsDir: t.agentsDir,
+      },
+      nowFn: () => NOW,
+      hostname: "self-host",
+    });
+    assert.equal(roster.getLocalRoster().agents.length, 2);
+  });
+
+  it("unknown source values fall back to openclaw", () => {
+    const t = tree(configFixture());
+    const roster = makeRoster(t, { agentsConfig: { source: "martian" } });
+    assert.equal(roster.getLocalRoster().agents.length, 2);
   });
 });
 

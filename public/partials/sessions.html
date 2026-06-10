@@ -158,6 +158,142 @@
       font-style: italic;
       margin-top: 6px;
     }
+    /* ---- Row/card action buttons (kill + transcript) ---- */
+    #sessions-view-section .session-action-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      font-size: 0.72rem;
+      line-height: 1;
+      padding: 3px 8px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #sessions-view-section .session-action-btn:hover:not(:disabled) {
+      border-color: var(--accent);
+    }
+    #sessions-view-section .session-action-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    #sessions-view-section .session-action-btn.kill {
+      color: var(--red, #f85149);
+      border-color: rgba(248, 81, 73, 0.5);
+      background: rgba(248, 81, 73, 0.08);
+      font-weight: 700;
+    }
+    #sessions-view-section .session-action-btn.kill:hover:not(:disabled) {
+      border-color: var(--red, #f85149);
+      background: rgba(248, 81, 73, 0.18);
+    }
+    /* ---- Transcript viewer modal ---- */
+    #sessions-view-section .sessions-transcript-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 1200;
+      background: rgba(0, 0, 0, 0.65);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    #sessions-view-section .sessions-transcript-modal {
+      width: min(860px, 100%);
+      max-height: min(80vh, 720px);
+      display: flex;
+      flex-direction: column;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+      overflow: hidden;
+    }
+    #sessions-view-section .sessions-transcript-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.85rem;
+      font-weight: 700;
+    }
+    #sessions-view-section .sessions-transcript-title {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.78rem;
+    }
+    #sessions-view-section .sessions-transcript-status {
+      font-size: 0.7rem;
+      font-weight: 400;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    #sessions-view-section .sessions-transcript-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 14px;
+      font-size: 0.78rem;
+      background: var(--bg);
+      min-height: 220px;
+    }
+    #sessions-view-section .sessions-transcript-foot {
+      padding: 6px 14px;
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border);
+    }
+    #sessions-view-section .tmsg {
+      margin-bottom: 12px;
+    }
+    #sessions-view-section .tmsg-head {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 3px;
+      font-size: 0.68rem;
+      color: var(--text-muted);
+    }
+    #sessions-view-section .tmsg-role {
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    #sessions-view-section .tmsg.user .tmsg-role {
+      color: var(--accent, #58a6ff);
+    }
+    #sessions-view-section .tmsg.assistant .tmsg-role {
+      color: var(--green, #3fb950);
+    }
+    #sessions-view-section .tmsg-text {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.74rem;
+    }
+    #sessions-view-section .tmsg-tool {
+      display: inline-block;
+      font-size: 0.66rem;
+      padding: 1px 7px;
+      margin: 2px 4px 0 0;
+      border-radius: 8px;
+      background: rgba(137, 87, 229, 0.12);
+      border: 1px solid rgba(137, 87, 229, 0.45);
+      color: var(--purple, #a371f7);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    #sessions-view-section .sessions-transcript-empty {
+      color: var(--text-muted);
+      font-style: italic;
+      padding: 8px 0;
+    }
   </style>
   <section class="view-panel">
     <div class="view-header">
@@ -285,5 +421,33 @@
 
     <!-- Inline fallback detail (used only when the global detail panel is absent) -->
     <div class="sessions-inline-detail" id="sessions-inline-detail" hidden></div>
+
+    <!-- Live transcript viewer (read-only tail, both session sources) -->
+    <div class="sessions-transcript-overlay" id="sessions-transcript-overlay" hidden>
+      <div
+        class="sessions-transcript-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sessions-transcript-title"
+      >
+        <div class="sessions-transcript-head">
+          <span>📜</span>
+          <span class="sessions-transcript-title" id="sessions-transcript-title"></span>
+          <span class="sessions-transcript-status" id="sessions-transcript-status"></span>
+          <button
+            class="session-action-btn"
+            id="sessions-transcript-close"
+            type="button"
+            title="Close (Esc)"
+          >
+            ✕
+          </button>
+        </div>
+        <div class="sessions-transcript-body" id="sessions-transcript-body"></div>
+        <div class="sessions-transcript-foot">
+          Read-only transcript tail — refreshes every 3s while open.
+        </div>
+      </div>
+    </div>
   </section>
 </div>
