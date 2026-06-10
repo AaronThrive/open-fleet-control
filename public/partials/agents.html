@@ -105,6 +105,18 @@
     font-weight: 400;
     color: var(--text-muted);
   }
+  #agents-view-section .agents-node-badge {
+    font-size: 0.64rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(var(--accent-2-rgb), 0.12);
+    border: 1px solid rgba(var(--accent-2-rgb), 0.35);
+    color: var(--accent-2);
+    white-space: nowrap;
+  }
 
   /* Agent cards */
   #agents-view-section .agents-grid {
@@ -200,6 +212,26 @@
     border-color: rgba(0, 255, 102, 0.45);
     color: var(--green);
   }
+  #agents-view-section .agent-source-chip {
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.64rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  #agents-view-section .agent-source-chip.agent-source-openclaw {
+    background: rgba(var(--accent-rgb), 0.1);
+    border: 1px solid rgba(var(--accent-rgb), 0.35);
+    color: var(--accent);
+  }
+  #agents-view-section .agent-source-chip.agent-source-hermes {
+    background: rgba(var(--accent-2-rgb), 0.1);
+    border: 1px solid rgba(var(--accent-2-rgb), 0.35);
+    color: var(--accent-2);
+  }
   #agents-view-section .agent-card-foot {
     display: flex;
     align-items: center;
@@ -229,7 +261,8 @@
         <span data-i18n="views.agents.title">Agents</span>
       </div>
       <div class="view-subtitle" data-i18n="views.agents.subtitle">
-        Unified roster of OpenClaw agents across every fleet node — model, activity, and sessions
+        Unified roster of agents across every fleet node and federation remote — model, activity,
+        and sessions
       </div>
     </div>
 
@@ -282,7 +315,8 @@
         <div class="empty-state-icon">🦾</div>
         <div class="empty-state-title" data-i18n="views.agents.emptyTitle">No agents</div>
         <p class="empty-state-text" data-i18n="views.agents.emptyText">
-          No agents are configured in openclaw.json on this host or any online fleet node yet.
+          No agents are configured on this host, any online fleet node, or any reachable federation
+          remote yet.
         </p>
       </div>
     </div>

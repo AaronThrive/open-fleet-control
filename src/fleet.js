@@ -25,6 +25,8 @@ const { createAudit } = require("./audit");
 const { createCortex } = require("./cortex");
 const { createAlerts, createNodeAlertTracker } = require("./alerts");
 const { createRateLimiter } = require("./rate-limit");
+const { createBudgets } = require("./budgets");
+const { defaultSecrets } = require("./secrets");
 
 const CORTEX_SUMMARY_TTL_MS = 60000;
 
@@ -121,11 +123,21 @@ function createFleetRuntime({ config, broadcast }) {
    * the persistent history (logs/alerts.jsonl) survives rebuilds. The flap
    * tracker keeps its per-node streak state and only swaps thresholds.
    *
+   * Values may be 1Password refs (op://...) when the operator stores refs in
+   * the settings file — they are resolved here (boot-time configs arrive
+   * already resolved by src/config.js; the shared resolver caches refs).
+   *
    * @param {object} alertsConfig - effective fleet.alerts config (with secrets)
    */
   function applyAlertsConfig(alertsConfig) {
-    alerts = createAlerts({ config: alertsConfig, logsDir });
-    nodeAlertTracker.setFlapConfig(alertsConfig && alertsConfig.flap);
+    const { value: resolvedAlerts, failures } = defaultSecrets.resolveDeepSync(alertsConfig || {});
+    for (const failure of failures) {
+      console.warn(
+        `[Fleet] 1Password ref ${failure.ref} (alerts.${failure.path}) failed: ${failure.error} — sink value left empty`,
+      );
+    }
+    alerts = createAlerts({ config: resolvedAlerts, logsDir });
+    nodeAlertTracker.setFlapConfig(resolvedAlerts && resolvedAlerts.flap);
     console.log("[Fleet] Alerts engine rebuilt from updated settings");
   }
 
@@ -270,6 +282,44 @@ function createFleetRuntime({ config, broadcast }) {
     max: config.rateLimit.max,
   });
 
+  // Cost budgets (src/budgets.js): periodic spend-vs-budget evaluation that
+  // fires budgetBreach alerts through the normal alert engine. The usage
+  // aggregate is INJECTED by the orchestrator via setUsageProvider() because
+  // the usage-sources module is instantiated in src/index.js — until wired,
+  // getUsage returns null and the evaluator skips with a one-time log.
+  let usageProvider = null;
+
+  const budgets = createBudgets({
+    config: config.budgets,
+    stateFile: path.join(stateDir, "budgets.json"),
+    getUsage: (params) => (usageProvider ? usageProvider(params) : null),
+    onBreach: (breach) => {
+      fireAlert({
+        type: "budgetBreach",
+        severity: breach.severity === "critical" ? "critical" : "warn",
+        task: `${breach.period}:${breach.scope}`,
+        message:
+          `Budget breach (${breach.severity}): ${breach.scope} spent ` +
+          `$${breach.actualUSD.toFixed(2)} of $${breach.budgetUSD.toFixed(2)} ` +
+          `(${Math.round(breach.ratio * 100)}%) for ${breach.period} period ${breach.periodKey}`,
+      });
+    },
+  });
+
+  /**
+   * Inject the usage aggregate used by the budget evaluator
+   * (see createUsageProvider in src/budgets.js). Pass null to unwire.
+   */
+  function setUsageProvider(fn) {
+    usageProvider = typeof fn === "function" ? fn : null;
+  }
+
+  /** Hot-apply a new fleet.budgets config (settings PATCH path). */
+  function applyBudgetsConfig(budgetsConfig) {
+    budgets.applyConfig(budgetsConfig);
+    console.log("[Fleet] Budget evaluator reconfigured from updated settings");
+  }
+
   // ---------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------
@@ -280,6 +330,7 @@ function createFleetRuntime({ config, broadcast }) {
     mesh.start();
     federation.start();
     watchdog.start();
+    budgets.start();
     if (!boardWatcher) boardWatcher = kanban.watch();
   }
 
@@ -287,6 +338,7 @@ function createFleetRuntime({ config, broadcast }) {
     mesh.stop();
     federation.stop();
     watchdog.stop();
+    budgets.stop();
     if (boardWatcher) {
       boardWatcher.close();
       boardWatcher = null;
@@ -438,6 +490,9 @@ function createFleetRuntime({ config, broadcast }) {
       return alerts;
     },
     applyAlertsConfig,
+    budgets,
+    applyBudgetsConfig,
+    setUsageProvider,
     rateLimiter,
     fireAlert,
     start,

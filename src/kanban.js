@@ -210,6 +210,38 @@ function createKanban(options = {}) {
   }
 
   /**
+   * Patch one existing attempt in place (by index). Attempts are append-only
+   * for agents, so an index captured at addAttempt time stays stable. Used by
+   * the dispatch module to close its attempt when the agent run settles.
+   * @param {string} id - task id
+   * @param {number} index - attempt index within task.attempts
+   * @param {object} patch - subset of {ended_at, result, branch, note}
+   * @returns {object} the updated task
+   */
+  function updateAttempt(id, index, patch = {}) {
+    const board = readBoard();
+    const current = requireTask(board, id);
+    if (!Number.isInteger(index) || index < 0 || index >= current.attempts.length) {
+      throw new Error(`updateAttempt: no attempt at index ${index}`);
+    }
+    const allowed = ["ended_at", "result", "branch", "note"];
+    const clean = {};
+    for (const [key, value] of Object.entries(patch)) {
+      if (!allowed.includes(key)) throw new Error(`updateAttempt: '${key}' cannot be patched`);
+      if (value !== undefined) clean[key] = value;
+    }
+    const attempt = { ...current.attempts[index], ...clean };
+    const updated = {
+      ...current,
+      attempts: current.attempts.map((a, i) => (i === index ? attempt : a)),
+      updated_at: nowIso(),
+    };
+    store.write(withTask(board, updated)); // throws if the patch produced an invalid attempt
+    emit("attempt.updated", { taskId: id, actor: attempt.agent, task: updated, attempt, index });
+    return updated;
+  }
+
+  /**
    * Delete a task from the board.
    * @param {string} id - task id
    * @param {string} actor - who performed the action
@@ -256,6 +288,7 @@ function createKanban(options = {}) {
     moveTask,
     addComment,
     addAttempt,
+    updateAttempt,
     deleteTask,
     setStaleTaskIds,
     watch,

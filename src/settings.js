@@ -41,8 +41,14 @@
  *     mesh: {intervalMs},
  *     watchdog: {thresholdMs},
  *     validationGate: {default: bool},
- *     federation: {intervalMs}
+ *     federation: {intervalMs},
+ *     budgets: {enabled, daily: {totalUSD, perProvider: {<provider>: usd}},
+ *               weekly: {...}, checkIntervalMs}
  *   }
+ *   1Password refs: secret-bearing fields (slack.gatewayUrl, ntfy.topic,
+ *   webhook secret) accept op://vault/item/field references; refs are not
+ *   secrets, so gatewayUrl/topic refs are returned verbatim and a webhook
+ *   whose stored secret is a ref additionally exposes `secretRef`.
  *
  * PATCH SHAPE — any subset of the keys above, EXCEPT webhooks which are
  * addressed by id through explicit operations (ids are generated server-side
@@ -63,7 +69,10 @@
  *       }
  *     },
  *     mesh?: {intervalMs}, federation?: {intervalMs},
- *     watchdog?: {thresholdMs}, validationGate?: {default}
+ *     watchdog?: {thresholdMs}, validationGate?: {default},
+ *     budgets?: {enabled?, checkIntervalMs?,
+ *                daily?: {totalUSD?, perProvider?},   // perProvider = FULL
+ *                weekly?: {totalUSD?, perProvider?}}  // replacement map
  *   }
  *   Webhook `secret` is WRITE-ONLY: accepted in patches, stored in the config
  *   file, but never present in get()/applied responses.
@@ -99,6 +108,7 @@
 
 const fs = require("fs");
 const crypto = require("crypto");
+const { isSecretRef } = require("./secrets");
 
 const INTERVAL_MIN_MS = 5000; // 5s
 const INTERVAL_MAX_MS = 3600000; // 1h
@@ -117,7 +127,15 @@ const ALERT_RULES = [
   "taskFailed",
   "taskStale",
   "lessonPending",
+  "budgetBreach",
 ];
+
+// Budgets validation bounds (fleet.budgets — see src/budgets.js).
+const BUDGET_USD_MAX = 1000000;
+const BUDGET_CHECK_MIN_MS = 60000; // 1 min
+const BUDGET_CHECK_MAX_MS = 86400000; // 24 h
+const MAX_BUDGET_PROVIDERS = 50;
+const BUDGET_PROVIDER_RE = /^[A-Za-z0-9][A-Za-z0-9 ._:-]{0,63}$/;
 
 const FLAP_CONSECUTIVE_MIN = 1;
 const FLAP_CONSECUTIVE_MAX = 20;
@@ -138,6 +156,7 @@ const EDITABLE_DEFAULTS = Object.freeze({
       taskFailed: true,
       taskStale: true,
       lessonPending: true,
+      budgetBreach: true,
     },
     flap: { consecutive: 3, minDurationMs: 60000 },
     mutes: [],
@@ -151,6 +170,12 @@ const EDITABLE_DEFAULTS = Object.freeze({
   watchdog: { thresholdMs: 1800000 },
   validationGate: { default: true },
   federation: { intervalMs: 30000 },
+  budgets: {
+    enabled: false,
+    daily: { totalUSD: 0, perProvider: {} },
+    weekly: { totalUSD: 0, perProvider: {} },
+    checkIntervalMs: 900000,
+  },
 });
 
 // Paths whose changes always need a process restart (bound at boot).
@@ -176,12 +201,15 @@ function requireBool(value, label) {
   return value;
 }
 
-function requireUrl(value, label, { allowEmpty = false } = {}) {
+function requireUrl(value, label, { allowEmpty = false, allowSecretRef = false } = {}) {
   if (typeof value !== "string") throw badRequest(`${label} must be a string`);
   if (value === "") {
     if (allowEmpty) return value;
     throw badRequest(`${label} must not be empty`);
   }
+  // 1Password refs (op://...) are accepted in place of literals for
+  // secret-bearing fields; they are resolved server-side at apply time.
+  if (allowSecretRef && isSecretRef(value)) return value;
   if (value.length > MAX_URL_LENGTH) throw badRequest(`${label} is too long`);
   let parsed;
   try {
@@ -226,6 +254,7 @@ function validateEvents(value, label) {
 function validateNtfyTopic(value, label) {
   if (typeof value !== "string") throw badRequest(`${label} must be a string`);
   if (value === "") return value; // empty topic = sink configured but inert
+  if (isSecretRef(value)) return value; // op:// ref, resolved at apply time
   if (value.length > MAX_TOPIC_LENGTH || !NTFY_TOPIC_RE.test(value)) {
     throw badRequest(`${label} must match [A-Za-z0-9_-] (max ${MAX_TOPIC_LENGTH} chars)`);
   }
@@ -251,7 +280,11 @@ function validatePatch(patch) {
   if (!isPlainObject(patch) || Object.keys(patch).length === 0) {
     throw badRequest("patch must be a non-empty object");
   }
-  requireKnownKeys(patch, ["alerts", "mesh", "federation", "watchdog", "validationGate"], "patch");
+  requireKnownKeys(
+    patch,
+    ["alerts", "mesh", "federation", "watchdog", "validationGate", "budgets"],
+    "patch",
+  );
   const result = {};
 
   if (patch.alerts !== undefined) {
@@ -313,7 +346,87 @@ function validatePatch(patch) {
     };
   }
 
+  if (patch.budgets !== undefined) {
+    result.budgets = validateBudgetsPatch(patch.budgets);
+  }
+
   return result;
+}
+
+/** budgets.<period>.totalUSD: finite number 0..1e6 (0 = no limit). */
+function validateBudgetUSD(value, label) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > BUDGET_USD_MAX) {
+    throw badRequest(`${label} must be a number between 0 and ${BUDGET_USD_MAX} USD`);
+  }
+  return value;
+}
+
+/** budgets.<period>.perProvider: FULL replacement {provider: USD > 0}. */
+function validateBudgetProviders(value, label) {
+  if (!isPlainObject(value)) throw badRequest(`${label} must be an object`);
+  const entries = Object.entries(value);
+  if (entries.length > MAX_BUDGET_PROVIDERS) {
+    throw badRequest(`${label}: too many providers (max ${MAX_BUDGET_PROVIDERS})`);
+  }
+  const out = {};
+  for (const [provider, usd] of entries) {
+    if (!BUDGET_PROVIDER_RE.test(provider)) {
+      throw badRequest(`${label}: invalid provider name "${provider}"`);
+    }
+    const amount = validateBudgetUSD(usd, `${label}.${provider}`);
+    if (amount <= 0) {
+      throw badRequest(`${label}.${provider} must be greater than 0 (omit the entry to remove it)`);
+    }
+    out[provider] = amount;
+  }
+  return out;
+}
+
+/** budgets.daily / budgets.weekly: {totalUSD?, perProvider?} (≥1 key). */
+function validateBudgetPeriodPatch(period, label) {
+  requireKnownKeys(period, ["totalUSD", "perProvider"], label);
+  const out = {};
+  if (period.totalUSD !== undefined) {
+    out.totalUSD = validateBudgetUSD(period.totalUSD, `${label}.totalUSD`);
+  }
+  if (period.perProvider !== undefined) {
+    out.perProvider = validateBudgetProviders(period.perProvider, `${label}.perProvider`);
+  }
+  if (Object.keys(out).length === 0) {
+    throw badRequest(`${label} must set totalUSD and/or perProvider`);
+  }
+  return out;
+}
+
+/** budgets: {enabled?, daily?, weekly?, checkIntervalMs?} (≥1 key). */
+function validateBudgetsPatch(budgets) {
+  requireKnownKeys(budgets, ["enabled", "daily", "weekly", "checkIntervalMs"], "budgets");
+  const out = {};
+  if (budgets.enabled !== undefined) {
+    out.enabled = requireBool(budgets.enabled, "budgets.enabled");
+  }
+  if (budgets.daily !== undefined) {
+    out.daily = validateBudgetPeriodPatch(budgets.daily, "budgets.daily");
+  }
+  if (budgets.weekly !== undefined) {
+    out.weekly = validateBudgetPeriodPatch(budgets.weekly, "budgets.weekly");
+  }
+  if (budgets.checkIntervalMs !== undefined) {
+    if (
+      !Number.isInteger(budgets.checkIntervalMs) ||
+      budgets.checkIntervalMs < BUDGET_CHECK_MIN_MS ||
+      budgets.checkIntervalMs > BUDGET_CHECK_MAX_MS
+    ) {
+      throw badRequest(
+        `budgets.checkIntervalMs must be an integer between ${BUDGET_CHECK_MIN_MS} and ${BUDGET_CHECK_MAX_MS} ms`,
+      );
+    }
+    out.checkIntervalMs = budgets.checkIntervalMs;
+  }
+  if (Object.keys(out).length === 0) {
+    throw badRequest("budgets must set at least one of enabled/daily/weekly/checkIntervalMs");
+  }
+  return out;
 }
 
 /** flap: {consecutive?: int 1..20, minDurationMs?: int 0..1h} (≥1 key). */
@@ -402,6 +515,7 @@ function validateSlackPatch(slack) {
   if (slack.gatewayUrl !== undefined) {
     out.gatewayUrl = requireUrl(slack.gatewayUrl, "alerts.sinks.slack.gatewayUrl", {
       allowEmpty: true,
+      allowSecretRef: true,
     });
   }
   if (slack.channel !== undefined) {
@@ -578,10 +692,47 @@ function buildEffective(fleet) {
     federation: {
       intervalMs: pickInt(src.federation && src.federation.intervalMs, d.federation.intervalMs),
     },
+    budgets: buildEffectiveBudgets(src.budgets, d.budgets),
   };
 }
 
-/** Redact secrets for the HTTP surface: webhook secret → hasSecret boolean. */
+/** Effective fleet.budgets: defaults <- persisted, normalized. */
+function buildEffectiveBudgets(raw, defaults) {
+  const src = isPlainObject(raw) ? raw : {};
+  const period = (rawPeriod, dPeriod) => {
+    const p = isPlainObject(rawPeriod) ? rawPeriod : {};
+    const perProvider = {};
+    if (isPlainObject(p.perProvider)) {
+      for (const [provider, usd] of Object.entries(p.perProvider)) {
+        if (typeof usd === "number" && Number.isFinite(usd) && usd > 0) {
+          perProvider[provider] = usd;
+        }
+      }
+    }
+    return {
+      totalUSD:
+        typeof p.totalUSD === "number" && Number.isFinite(p.totalUSD) && p.totalUSD >= 0
+          ? p.totalUSD
+          : dPeriod.totalUSD,
+      perProvider,
+    };
+  };
+  return {
+    enabled: typeof src.enabled === "boolean" ? src.enabled : defaults.enabled,
+    daily: period(src.daily, defaults.daily),
+    weekly: period(src.weekly, defaults.weekly),
+    checkIntervalMs: Number.isInteger(src.checkIntervalMs)
+      ? src.checkIntervalMs
+      : defaults.checkIntervalMs,
+  };
+}
+
+/**
+ * Redact secrets for the HTTP surface: webhook secret → hasSecret boolean.
+ * When the stored secret is a 1Password ref (op://...), the ref itself is
+ * additionally exposed as `secretRef` — refs are not secrets, and the UI
+ * uses them for the "1Password" badge.
+ */
 function redact(effective) {
   return {
     ...effective,
@@ -592,6 +743,7 @@ function redact(effective) {
         webhooks: effective.alerts.sinks.webhooks.map(({ secret, ...rest }) => ({
           ...rest,
           hasSecret: typeof secret === "string" && secret.length > 0,
+          ...(isSecretRef(secret) ? { secretRef: secret } : {}),
         })),
       },
     },
@@ -623,14 +775,21 @@ function changedPaths(before, after, prefix = "") {
  * @param {function} [options.onChange] - Hot-apply hook: called with the
  *   UNREDACTED effective alerts config whenever any alerts.* setting changes.
  *   Providing it marks alerts changes as hot-applied (not restartRequired).
- * @returns {{get: function, update: function, getAlertsConfig: function}}
+ * @param {function} [options.onBudgetsChange] - Hot-apply hook for budgets.*
+ *   changes, called with the effective fleet.budgets config. Without it,
+ *   budgets changes are honestly reported as restartRequired.
+ * @returns {{get: function, update: function, getAlertsConfig: function,
+ *            getBudgetsConfig: function}}
  */
-function createSettings({ configPath, onChange } = {}) {
+function createSettings({ configPath, onChange, onBudgetsChange } = {}) {
   if (typeof configPath !== "string" || configPath.length === 0) {
     throw new TypeError("configPath is required");
   }
   if (onChange !== undefined && typeof onChange !== "function") {
     throw new TypeError("onChange must be a function when provided");
+  }
+  if (onBudgetsChange !== undefined && typeof onBudgetsChange !== "function") {
+    throw new TypeError("onBudgetsChange must be a function when provided");
   }
 
   /** Read the FULL config file (not just fleet) so unrelated keys survive writes. */
@@ -666,6 +825,12 @@ function createSettings({ configPath, onChange } = {}) {
   function getAlertsConfig() {
     const raw = readConfigFile();
     return buildEffective(raw.fleet).alerts;
+  }
+
+  /** Effective `fleet.budgets` config, shaped for createBudgets(). */
+  function getBudgetsConfig() {
+    const raw = readConfigFile();
+    return buildEffective(raw.fleet).budgets;
   }
 
   /** Apply webhook add/update/remove operations to the normalized list. */
@@ -764,6 +929,25 @@ function createSettings({ configPath, onChange } = {}) {
       next.alerts = alertsNext;
     }
 
+    if (validated.budgets) {
+      const budgetsBefore = isPlainObject(fleetBefore.budgets) ? fleetBefore.budgets : {};
+      const budgetsNext = { ...budgetsBefore };
+      if (validated.budgets.enabled !== undefined) budgetsNext.enabled = validated.budgets.enabled;
+      if (validated.budgets.checkIntervalMs !== undefined) {
+        budgetsNext.checkIntervalMs = validated.budgets.checkIntervalMs;
+      }
+      for (const period of ["daily", "weekly"]) {
+        if (validated.budgets[period]) {
+          // totalUSD merged per-field; perProvider is a FULL replacement.
+          budgetsNext[period] = {
+            ...before.budgets[period],
+            ...validated.budgets[period],
+          };
+        }
+      }
+      next.budgets = budgetsNext;
+    }
+
     const after = buildEffective(next);
     const changed = changedPaths(before, after);
 
@@ -773,10 +957,13 @@ function createSettings({ configPath, onChange } = {}) {
     }
 
     const alertsChanged = changed.some((p) => p === "alerts" || p.startsWith("alerts."));
+    const budgetsChanged = changed.some((p) => p === "budgets" || p.startsWith("budgets."));
     const hotApplyAlerts = typeof onChange === "function";
+    const hotApplyBudgets = typeof onBudgetsChange === "function";
     const restartRequired = changed.filter((p) => {
       if (RESTART_PATHS.has(p)) return true;
       if (p === "alerts" || p.startsWith("alerts.")) return !hotApplyAlerts;
+      if (p === "budgets" || p.startsWith("budgets.")) return !hotApplyBudgets;
       return false;
     });
 
@@ -788,10 +975,18 @@ function createSettings({ configPath, onChange } = {}) {
       }
     }
 
+    if (budgetsChanged && hotApplyBudgets) {
+      try {
+        onBudgetsChange(after.budgets);
+      } catch (err) {
+        console.error("[Settings] onBudgetsChange hook failed:", err.message);
+      }
+    }
+
     return { applied: redact(after), restartRequired };
   }
 
-  return { get, update, getAlertsConfig };
+  return { get, update, getAlertsConfig, getBudgetsConfig };
 }
 
 module.exports = { createSettings };

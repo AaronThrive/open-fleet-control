@@ -43,6 +43,8 @@ const state = {
   moveModeTaskId: null, // card currently in keyboard move mode
   moveOrigin: null, // { status, index } snapshot for Escape-cancel
   drawerReturnTaskId: null, // card to refocus when the drawer closes
+  dispatch: null, // GET /api/fleet/kanban/dispatch status ({available, ...})
+  dispatchModalTaskId: null, // card pending confirmation in the dispatch modal
   refs: {},
 };
 
@@ -182,6 +184,46 @@ function formatTs(ts) {
 }
 
 // ---------------------------------------------------------------------------
+// Dispatch helpers (kanban → agent)
+// ---------------------------------------------------------------------------
+
+/** "agent@node" → {agent, node}; bare "agent" → {agent, node: null}. */
+function parseAssignee(assignee) {
+  const raw = String(assignee || "").trim();
+  if (!raw) return { agent: null, node: null };
+  const at = raw.indexOf("@");
+  if (at === -1) return { agent: raw, node: null };
+  return { agent: raw.slice(0, at) || null, node: raw.slice(at + 1) || null };
+}
+
+/** Open dispatched attempt = note starts with "dispatched" and no ended_at. */
+function hasOpenDispatch(task) {
+  const attempts = Array.isArray(task.attempts) ? task.attempts : [];
+  return attempts.some(
+    (a) => a && typeof a.note === "string" && a.note.startsWith("dispatched") && !a.ended_at,
+  );
+}
+
+/** ⚡ button is offered on inbox/assigned cards that have an assignee. */
+function canDispatch(task) {
+  return Boolean(
+    state.dispatch?.available &&
+    (task.status === "inbox" || task.status === "assigned") &&
+    task.assignee &&
+    !hasOpenDispatch(task),
+  );
+}
+
+async function fetchDispatchStatus() {
+  try {
+    state.dispatch = await api("GET", "/dispatch");
+    if (state.dispatch?.available) renderBoard();
+  } catch (err) {
+    state.dispatch = null; // older server / unconfigured — no dispatch UI
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Board rendering (XSS-safe: all dynamic values go through textContent)
 // ---------------------------------------------------------------------------
 
@@ -302,6 +344,27 @@ function buildCard(task) {
   if (task.node) badges.appendChild(buildBadge("kb-badge-node", task.node));
   if (task.stale) {
     badges.appendChild(buildBadge("kb-badge-stale", t("views.kanban.staleBadge", {}, "STALE")));
+  }
+  if (hasOpenDispatch(task)) {
+    badges.appendChild(
+      buildBadge("kb-badge-dispatched", t("views.kanban.dispatchedBadge", {}, "⚡ dispatched")),
+    );
+  }
+  if (canDispatch(task)) {
+    const dispatchBtn = document.createElement("button");
+    dispatchBtn.type = "button";
+    dispatchBtn.className = "kb-dispatch-btn";
+    dispatchBtn.textContent = t("views.kanban.dispatchBtn", {}, "⚡ Dispatch");
+    dispatchBtn.title = t(
+      "views.kanban.dispatchTo",
+      { agent: task.assignee },
+      "Dispatch to {agent}",
+    );
+    dispatchBtn.addEventListener("click", (e) => {
+      e.stopPropagation(); // do not open the drawer
+      openDispatchConfirm(task.id);
+    });
+    badges.appendChild(dispatchBtn);
   }
 
   if (task.due) {
@@ -997,6 +1060,9 @@ function renderDrawer(task, { preserveEdits }) {
   renderMoveButtons(task);
   renderAttempts(task);
   renderComments(task);
+
+  const dispatchBtn = drawer.querySelector("#kb-dispatch");
+  if (dispatchBtn) dispatchBtn.hidden = !canDispatch(task);
 }
 
 function renderAttempts(task) {
@@ -1172,6 +1238,121 @@ function bindDrawerEvents() {
   });
   drawer.querySelector("#kb-comment-submit").addEventListener("click", submitComment);
   drawer.querySelector("#kb-delete").addEventListener("click", deleteOpenTask);
+  drawer.querySelector("#kb-dispatch")?.addEventListener("click", () => {
+    if (state.openTaskId) openDispatchConfirm(state.openTaskId);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch confirm modal (message preview → confirm → toast)
+// ---------------------------------------------------------------------------
+
+function closeDispatchModal() {
+  state.dispatchModalTaskId = null;
+  const { dispatchModal, dispatchBackdrop } = state.refs;
+  if (dispatchModal) dispatchModal.hidden = true;
+  if (dispatchBackdrop) dispatchBackdrop.hidden = true;
+}
+
+/**
+ * Open the confirm dialog: fetch the composed kick-off message from the
+ * server (POST .../dispatch?preview=1 — read-only) and show it for review.
+ */
+async function openDispatchConfirm(taskId) {
+  const task = getTask(taskId);
+  if (!task) return;
+  const { agent, node } = parseAssignee(task.assignee);
+  if (!agent) {
+    toast(t("views.kanban.dispatchNoAssignee", {}, "Assign an agent before dispatching"));
+    return;
+  }
+
+  const { dispatchModal, dispatchBackdrop } = state.refs;
+  if (!dispatchModal || !dispatchBackdrop) return;
+
+  state.dispatchModalTaskId = taskId;
+  dispatchModal.hidden = false;
+  dispatchBackdrop.hidden = false;
+
+  const target = dispatchModal.querySelector("#kb-dispatch-target");
+  const preview = dispatchModal.querySelector("#kb-dispatch-preview");
+  const confirmBtn = dispatchModal.querySelector("#kb-dispatch-confirm");
+  target.textContent = "";
+  const targetLabel = document.createElement("span");
+  targetLabel.textContent = t(
+    "views.kanban.dispatchTargetPrefix",
+    { title: task.title },
+    'Task "{title}" → agent ',
+  );
+  const targetAgent = document.createElement("strong");
+  targetAgent.textContent = node ? `${agent}@${node}` : agent;
+  target.append(targetLabel, targetAgent);
+  preview.textContent = t("views.kanban.dispatchLoading", {}, "Composing kick-off message...");
+  confirmBtn.disabled = true;
+
+  try {
+    const body = node ? { agent, node } : { agent };
+    const result = await api(
+      "POST",
+      `/tasks/${encodeURIComponent(taskId)}/dispatch?preview=1`,
+      body,
+    );
+    if (state.dispatchModalTaskId !== taskId) return; // modal moved on/closed
+    preview.textContent = result?.message || "";
+    confirmBtn.disabled = false;
+    confirmBtn.focus();
+  } catch (err) {
+    if (state.dispatchModalTaskId !== taskId) return;
+    closeDispatchModal();
+    toast(t("views.kanban.dispatchFailed", { message: err.message }, "Dispatch failed: {message}"));
+  }
+}
+
+async function confirmDispatch() {
+  const taskId = state.dispatchModalTaskId;
+  if (!taskId) return;
+  const task = getTask(taskId);
+  const { agent, node } = parseAssignee(task?.assignee);
+  if (!agent) {
+    closeDispatchModal();
+    return;
+  }
+  const confirmBtn = state.refs.dispatchModal?.querySelector("#kb-dispatch-confirm");
+  if (confirmBtn) confirmBtn.disabled = true;
+  try {
+    const body = node ? { agent, node } : { agent };
+    const result = await api("POST", `/tasks/${encodeURIComponent(taskId)}/dispatch`, body);
+    closeDispatchModal();
+    if (result?.task) upsertTask(result.task);
+    renderBoard();
+    toast(
+      t(
+        "views.kanban.dispatchStarted",
+        { agent },
+        "⚡ Dispatched to {agent} — agent session started",
+      ),
+      "success",
+    );
+  } catch (err) {
+    closeDispatchModal();
+    toast(t("views.kanban.dispatchFailed", { message: err.message }, "Dispatch failed: {message}"));
+    await refreshBoard();
+  }
+}
+
+function bindDispatchModalEvents() {
+  const { dispatchModal, dispatchBackdrop } = state.refs;
+  if (!dispatchModal || !dispatchBackdrop) return;
+  dispatchModal.querySelector("#kb-dispatch-cancel").addEventListener("click", closeDispatchModal);
+  dispatchModal.querySelector("#kb-dispatch-confirm").addEventListener("click", confirmDispatch);
+  dispatchBackdrop.addEventListener("click", closeDispatchModal);
+  dispatchModal.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      closeDispatchModal();
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1191,6 +1372,7 @@ function teardown() {
   state.moveModeTaskId = null;
   state.moveOrigin = null;
   state.drawerReturnTaskId = null;
+  state.dispatchModalTaskId = null;
 }
 
 /**
@@ -1210,6 +1392,8 @@ export function init(containerEl) {
     live: containerEl.querySelector("#kb-live"),
     moveHint: containerEl.querySelector("#kb-move-hint"),
     kbdHint: containerEl.querySelector("#kb-kbd-hint"),
+    dispatchModal: containerEl.querySelector("#kb-dispatch-modal"),
+    dispatchBackdrop: containerEl.querySelector("#kb-dispatch-backdrop"),
   };
   if (!state.refs.board) {
     console.error("[Kanban] Partial markup missing #kanban-board");
@@ -1218,6 +1402,8 @@ export function init(containerEl) {
 
   buildColumnSkeleton(state.refs.board);
   bindDrawerEvents();
+  bindDispatchModalEvents();
+  fetchDispatchStatus();
 
   state.refs.emptyState.querySelector("#kb-empty-cta")?.addEventListener("click", () => {
     state.forceBoard = true;

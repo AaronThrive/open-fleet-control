@@ -26,6 +26,12 @@ const POLL_MS = 15000;
 const TERMINAL_POLL_MS = 45000;
 const SSE_FRESH_MS = 20000;
 const TERMINAL_MAX_ROWS = 30;
+const TRANSCRIPT_POLL_MS = 3000;
+const SCROLL_PIN_SLACK_PX = 30;
+
+const OPENCLAW_KILL_TOOLTIP =
+  "OpenClaw doesn't expose chat-session termination yet " +
+  "(gateway kill is sub-agent-only and auth-gated)";
 
 // Module-scope state (module is cached; only init() re-runs per visit)
 let pollTimer = null;
@@ -39,6 +45,13 @@ let page = 1;
 let pagination = null;
 // null = endpoint never answered (absent on older deployments); object = data.
 let terminalData = null;
+// Live claude processes with cwd (from /api/sessions/terminal/live); null
+// when the endpoint is absent/unreachable.
+let terminalLive = null;
+// Transcript viewer state: null when closed.
+let transcriptTimer = null;
+let transcriptCtx = null;
+let keyListener = null;
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -119,6 +132,24 @@ function buildCard(session, els) {
       session.active ? "● Live" : formatTimeAgo(session.minutesAgo || 0),
     ),
   );
+
+  if (session.sessionId) {
+    const viewBtn = el("button", "session-action-btn", "📜");
+    viewBtn.type = "button";
+    viewBtn.title = t("views.sessions.viewTranscript", {}, "View live transcript");
+    viewBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openTranscript(els, "openclaw", session.sessionId, session.label || session.sessionKey);
+    });
+    header.appendChild(viewBtn);
+  }
+  // OpenClaw session kill: honest disabled control — the gateway only
+  // exposes (auth-gated) sub-agent run kills, not chat-session termination.
+  const killBtn = el("button", "session-action-btn kill", "✕");
+  killBtn.type = "button";
+  killBtn.disabled = true;
+  killBtn.title = t("views.sessions.openclawKillUnavailable", {}, OPENCLAW_KILL_TOOLTIP);
+  header.appendChild(killBtn);
 
   if (typeof window.quickHideSession === "function") {
     const hideBtn = el("button", "hide-btn", "👁️");
@@ -311,6 +342,148 @@ function renderSubagentStrip(els, subagents, sessions) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Transcript viewer (read-only tail, modal)                           */
+/* ------------------------------------------------------------------ */
+
+function transcriptPinned(body) {
+  return body.scrollTop + body.clientHeight >= body.scrollHeight - SCROLL_PIN_SLACK_PX;
+}
+
+function appendTranscriptMessages(els, messages) {
+  const body = els.transcriptBody;
+  const pinned = transcriptPinned(body);
+  for (const message of messages) {
+    const wrap = el("div", `tmsg ${message.role === "user" ? "user" : "assistant"}`);
+    const head = el("div", "tmsg-head");
+    head.appendChild(el("span", "tmsg-role", message.role));
+    if (message.ts) {
+      const ts = new Date(message.ts);
+      head.appendChild(
+        el("span", "", Number.isFinite(ts.getTime()) ? ts.toLocaleString() : String(message.ts)),
+      );
+    }
+    wrap.appendChild(head);
+    if (message.text) wrap.appendChild(el("div", "tmsg-text", message.text));
+    for (const tool of message.tools || []) {
+      wrap.appendChild(el("span", "tmsg-tool", `🔧 ${tool}`));
+    }
+    body.appendChild(wrap);
+  }
+  if (pinned) body.scrollTop = body.scrollHeight;
+}
+
+async function pollTranscript(els) {
+  const ctx = transcriptCtx;
+  if (!ctx) return;
+  let url =
+    `/api/sessions/transcript?source=${encodeURIComponent(ctx.source)}` +
+    `&id=${encodeURIComponent(ctx.id)}`;
+  if (ctx.offset !== null) url += `&offset=${ctx.offset}`;
+  try {
+    const response = await fetch(url);
+    const data = await response.json();
+    if (transcriptCtx !== ctx) return; // closed/reopened mid-flight
+    if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
+    ctx.offset = data.nextOffset;
+    const batch = Array.isArray(data.messages) ? data.messages : [];
+    if (batch.length > 0) {
+      if (ctx.total === 0) els.transcriptBody.replaceChildren(); // clear placeholder
+      ctx.total += batch.length;
+      appendTranscriptMessages(els, batch);
+    } else if (ctx.total === 0) {
+      els.transcriptBody.replaceChildren(
+        el(
+          "div",
+          "sessions-transcript-empty",
+          t("views.sessions.transcriptEmpty", {}, "No messages in this transcript window yet."),
+        ),
+      );
+    }
+    els.transcriptStatus.textContent = t(
+      "views.sessions.transcriptStatus",
+      { count: ctx.total },
+      "{count} messages • tailing",
+    );
+  } catch (error) {
+    if (transcriptCtx !== ctx) return;
+    els.transcriptStatus.textContent = t(
+      "views.sessions.transcriptError",
+      { message: error.message },
+      "error: {message}",
+    );
+  }
+}
+
+function closeTranscript(els) {
+  if (transcriptTimer) {
+    clearInterval(transcriptTimer);
+    transcriptTimer = null;
+  }
+  transcriptCtx = null;
+  if (els) {
+    els.transcriptOverlay.hidden = true;
+    els.transcriptBody.replaceChildren();
+  }
+}
+
+function openTranscript(els, source, id, title) {
+  if (!id) return;
+  closeTranscript(els);
+  transcriptCtx = { source, id, offset: null, total: 0 };
+  els.transcriptTitle.textContent = `${title || id} — ${source}`;
+  els.transcriptStatus.textContent = t("views.sessions.transcriptLoading", {}, "loading…");
+  els.transcriptBody.replaceChildren(
+    el(
+      "div",
+      "sessions-transcript-empty",
+      t("views.sessions.transcriptLoadingBody", {}, "Loading transcript…"),
+    ),
+  );
+  els.transcriptOverlay.hidden = false;
+  pollTranscript(els);
+  transcriptTimer = setInterval(() => {
+    if (!els.grid.isConnected) {
+      teardown();
+      return;
+    }
+    if (document.hidden) return;
+    pollTranscript(els);
+  }, TRANSCRIPT_POLL_MS);
+}
+
+/* ------------------------------------------------------------------ */
+/* Terminal session kill                                               */
+/* ------------------------------------------------------------------ */
+
+async function killTerminalPid(pid, btn, els) {
+  const confirmed = window.confirm(
+    t(
+      "views.sessions.killConfirm",
+      { pid },
+      "Kill claude process {pid}?\n\nSIGTERM now; SIGKILL after 10s if it survives.",
+    ),
+  );
+  if (!confirmed) return;
+  btn.disabled = true;
+  btn.textContent = "…";
+  try {
+    const response = await fetch(`/api/sessions/terminal/${pid}/kill`, { method: "POST" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
+    btn.textContent = "✓";
+    setTimeout(() => {
+      if (els.grid.isConnected) loadTerminal(els);
+    }, 2000);
+  } catch (error) {
+    btn.disabled = false;
+    btn.textContent = "✕ Kill";
+    window.alert(
+      t("views.sessions.killFailed", { message: error.message }, "Kill failed: {message}"),
+    );
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Terminal Sessions (Claude Code)                                     */
 /* ------------------------------------------------------------------ */
 
@@ -322,9 +495,9 @@ function agoFromIso(iso) {
   return ago === "now" ? t("views.sessions.justNow", {}, "just now") : `${ago} ago`;
 }
 
-function buildTerminalRow(session) {
+function buildTerminalRow(session, els, livePid) {
   const row = el("div", "sessions-terminal-row");
-  if (session.live) {
+  if (session.live || livePid) {
     row.appendChild(el("span", "tr-live", t("views.sessions.terminalLive", {}, "● LIVE")));
   }
   if (session.subagent) {
@@ -354,6 +527,31 @@ function buildTerminalRow(session) {
       ),
     ),
   );
+
+  if (session.sessionId) {
+    const viewBtn = el("button", "session-action-btn", "📜");
+    viewBtn.type = "button";
+    viewBtn.title = t("views.sessions.viewTranscript", {}, "View live transcript");
+    viewBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openTranscript(els, "terminal", session.sessionId, session.cwd || session.sessionId);
+    });
+    row.appendChild(viewBtn);
+  }
+  if (livePid) {
+    const killBtn = el("button", "session-action-btn kill", "✕ Kill");
+    killBtn.type = "button";
+    killBtn.title = t(
+      "views.sessions.killTerminal",
+      { pid: livePid },
+      "Kill claude process (pid {pid})",
+    );
+    killBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      killTerminalPid(livePid, killBtn, els);
+    });
+    row.appendChild(killBtn);
+  }
   return row;
 }
 
@@ -404,26 +602,45 @@ function renderTerminal(els) {
     return;
   }
   els.terminalEmpty.hidden = true;
+
+  // Associate live claude processes with rows by working directory: each
+  // live pid is attached to the most recently active session sharing its
+  // cwd (transcripts record cwd; /proc gives the live process cwd).
+  const liveProcs = (terminalLive?.processes || []).filter((proc) => proc && proc.cwd);
+  const usedPids = new Set();
+  const pidForCwd = (cwd) => {
+    if (!cwd) return null;
+    for (const proc of liveProcs) {
+      if (!usedPids.has(proc.pid) && proc.cwd === cwd) {
+        usedPids.add(proc.pid);
+        return proc.pid;
+      }
+    }
+    return null;
+  };
+
   els.terminalList.replaceChildren(
     ...sessions
       .slice()
       .sort((a, b) => new Date(b.lastActiveAt || 0) - new Date(a.lastActiveAt || 0))
       .slice(0, TERMINAL_MAX_ROWS)
-      .map((session) => buildTerminalRow(session)),
+      .map((session) => buildTerminalRow(session, els, pidForCwd(session.cwd))),
   );
 }
 
 async function loadTerminal(els) {
   const seq = ++terminalSeq;
-  let data = null;
-  try {
-    const response = await fetch("/api/usage/claude-code");
-    if (response.ok) data = await response.json();
-  } catch {
-    data = null;
-  }
+  const [data, live] = await Promise.all([
+    fetch("/api/usage/claude-code")
+      .then((response) => (response.ok ? response.json() : null))
+      .catch(() => null),
+    fetch("/api/sessions/terminal/live")
+      .then((response) => (response.ok ? response.json() : null))
+      .catch(() => null),
+  ]);
   if (seq !== terminalSeq || !els.grid.isConnected) return;
   terminalData = data && data.available !== false ? data : null;
+  terminalLive = live && Array.isArray(live.processes) ? live : null;
   try {
     renderTerminal(els);
   } catch (error) {
@@ -576,6 +793,15 @@ function teardown() {
     clearInterval(terminalTimer);
     terminalTimer = null;
   }
+  if (transcriptTimer) {
+    clearInterval(transcriptTimer);
+    transcriptTimer = null;
+  }
+  transcriptCtx = null;
+  if (keyListener) {
+    document.removeEventListener("keydown", keyListener);
+    keyListener = null;
+  }
   if (stateListener) {
     window.removeEventListener("fleet:state", stateListener);
     stateListener = null;
@@ -595,6 +821,7 @@ export function init(container) {
   filters.source = "all";
   pagination = null;
   terminalData = null;
+  terminalLive = null;
 
   const els = {
     grid: container.querySelector("#sessions-view-grid"),
@@ -621,6 +848,11 @@ export function init(container) {
     terminalEmpty: container.querySelector("#sessions-terminal-empty"),
     terminalList: container.querySelector("#sessions-terminal-list"),
     terminalFilterCount: container.querySelector("#sessions-filter-terminal-count"),
+    transcriptOverlay: container.querySelector("#sessions-transcript-overlay"),
+    transcriptTitle: container.querySelector("#sessions-transcript-title"),
+    transcriptStatus: container.querySelector("#sessions-transcript-status"),
+    transcriptBody: container.querySelector("#sessions-transcript-body"),
+    transcriptClose: container.querySelector("#sessions-transcript-close"),
   };
   if (Object.values(els).some((node) => !node)) {
     console.error("[Sessions] Partial markup is missing expected elements; aborting init.");
@@ -647,6 +879,16 @@ export function init(container) {
       });
     });
   });
+
+  // Transcript modal: close button, overlay click (outside the dialog), Esc.
+  els.transcriptClose.addEventListener("click", () => closeTranscript(els));
+  els.transcriptOverlay.addEventListener("click", (event) => {
+    if (event.target === els.transcriptOverlay) closeTranscript(els);
+  });
+  keyListener = (event) => {
+    if (event.key === "Escape" && transcriptCtx) closeTranscript(els);
+  };
+  document.addEventListener("keydown", keyListener);
 
   els.prevBtn.addEventListener("click", () => {
     if (pagination?.hasPrev) {

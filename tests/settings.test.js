@@ -50,6 +50,7 @@ describe("settings module", () => {
         taskFailed: true,
         taskStale: true,
         lessonPending: true,
+        budgetBreach: true,
       });
       assert.deepStrictEqual(result.alerts.flap, { consecutive: 3, minDurationMs: 60000 });
       assert.deepStrictEqual(result.alerts.mutes, []);
@@ -579,9 +580,180 @@ describe("settings module", () => {
         taskFailed: true,
         taskStale: true,
         lessonPending: true,
+        budgetBreach: true,
       });
       assert.deepStrictEqual(cfg.flap, { consecutive: 3, minDurationMs: 60000 }); // engine-ready
       assert.deepStrictEqual(cfg.mutes, []);
+    });
+  });
+
+  describe("budgets (fleet.budgets)", () => {
+    it("get() returns budgets defaults when nothing is persisted", () => {
+      const settings = createSettings({ configPath });
+      assert.deepStrictEqual(settings.get().budgets, {
+        enabled: false,
+        daily: { totalUSD: 0, perProvider: {} },
+        weekly: { totalUSD: 0, perProvider: {} },
+        checkIntervalMs: 900000,
+      });
+    });
+
+    it("accepts a full valid budgets patch and persists it", () => {
+      const settings = createSettings({ configPath });
+      const { applied, restartRequired } = settings.update({
+        budgets: {
+          enabled: true,
+          daily: { totalUSD: 10, perProvider: { kimi: 5, openrouter: 2.5 } },
+          weekly: { totalUSD: 50 },
+          checkIntervalMs: 60000,
+        },
+      });
+
+      assert.deepStrictEqual(applied.budgets, {
+        enabled: true,
+        daily: { totalUSD: 10, perProvider: { kimi: 5, openrouter: 2.5 } },
+        weekly: { totalUSD: 50, perProvider: {} },
+        checkIntervalMs: 60000,
+      });
+      // No onBudgetsChange hook → honestly restartRequired.
+      assert.ok(restartRequired.some((p) => p.startsWith("budgets.")));
+      assert.deepStrictEqual(readConfig().fleet.budgets.daily.perProvider, {
+        kimi: 5,
+        openrouter: 2.5,
+      });
+    });
+
+    it("perProvider is a FULL replacement; totalUSD merges per-field", () => {
+      writeConfig({
+        fleet: {
+          budgets: {
+            enabled: true,
+            daily: { totalUSD: 10, perProvider: { kimi: 5, openrouter: 2 } },
+          },
+        },
+      });
+      const settings = createSettings({ configPath });
+      const { applied } = settings.update({
+        budgets: { daily: { perProvider: { kimi: 7 } } },
+      });
+      assert.deepStrictEqual(applied.budgets.daily, {
+        totalUSD: 10, // untouched
+        perProvider: { kimi: 7 }, // openrouter entry dropped (full replacement)
+      });
+    });
+
+    it("rejects malformed budgets patches", () => {
+      const settings = createSettings({ configPath });
+      const bad = [
+        { budgets: {} },
+        { budgets: { enabled: "yes" } },
+        { budgets: { nope: true } },
+        { budgets: { daily: {} } },
+        { budgets: { daily: { totalUSD: -1 } } },
+        { budgets: { daily: { totalUSD: "10" } } },
+        { budgets: { daily: { totalUSD: Infinity } } },
+        { budgets: { daily: { perProvider: { kimi: 0 } } } },
+        { budgets: { daily: { perProvider: { "bad\nname": 5 } } } },
+        { budgets: { daily: { perProvider: 5 } } },
+        { budgets: { weekly: { totalUSD: 1000001 } } },
+        { budgets: { checkIntervalMs: 59999 } },
+        { budgets: { checkIntervalMs: 86400001 } },
+        { budgets: { checkIntervalMs: 900000.5 } },
+      ];
+      for (const patch of bad) {
+        assert.throws(() => settings.update(patch), { statusCode: 400 }, JSON.stringify(patch));
+      }
+    });
+
+    it("rejects more than 50 perProvider entries", () => {
+      const settings = createSettings({ configPath });
+      const perProvider = {};
+      for (let i = 0; i < 51; i++) perProvider[`prov${i}`] = 1;
+      assert.throws(() => settings.update({ budgets: { daily: { perProvider } } }), {
+        statusCode: 400,
+      });
+    });
+
+    it("hot-applies budgets changes through onBudgetsChange (no restart required)", () => {
+      const calls = [];
+      const settings = createSettings({
+        configPath,
+        onBudgetsChange: (cfg) => calls.push(cfg),
+      });
+      const { restartRequired } = settings.update({
+        budgets: { enabled: true, daily: { totalUSD: 25 } },
+      });
+      assert.deepStrictEqual(restartRequired, []);
+      assert.strictEqual(calls.length, 1);
+      assert.strictEqual(calls[0].enabled, true);
+      assert.strictEqual(calls[0].daily.totalUSD, 25);
+    });
+
+    it("does not invoke onBudgetsChange for non-budgets changes", () => {
+      const calls = [];
+      const settings = createSettings({ configPath, onBudgetsChange: () => calls.push(1) });
+      settings.update({ alerts: { enabled: true } });
+      assert.strictEqual(calls.length, 0);
+    });
+
+    it("getBudgetsConfig() returns the effective engine-ready budgets config", () => {
+      writeConfig({ fleet: { budgets: { enabled: true, weekly: { totalUSD: 99 } } } });
+      const settings = createSettings({ configPath });
+      const cfg = settings.getBudgetsConfig();
+      assert.strictEqual(cfg.enabled, true);
+      assert.strictEqual(cfg.weekly.totalUSD, 99);
+      assert.strictEqual(cfg.checkIntervalMs, 900000); // default filled
+    });
+  });
+
+  describe("1Password refs (op://...)", () => {
+    it("accepts op:// refs for slack.gatewayUrl and ntfy.topic", () => {
+      const settings = createSettings({ configPath });
+      const { applied } = settings.update({
+        alerts: {
+          sinks: {
+            slack: { gatewayUrl: "op://Vault/slack-gateway/url" },
+            ntfy: { topic: "op://Vault/ntfy/topic" },
+          },
+        },
+      });
+      // Refs are not secrets — returned verbatim for the UI badge.
+      assert.strictEqual(applied.alerts.sinks.slack.gatewayUrl, "op://Vault/slack-gateway/url");
+      assert.strictEqual(applied.alerts.sinks.ntfy.topic, "op://Vault/ntfy/topic");
+    });
+
+    it("still rejects non-ref malformed gateway URLs and topics", () => {
+      const settings = createSettings({ configPath });
+      assert.throws(
+        () => settings.update({ alerts: { sinks: { slack: { gatewayUrl: "op:/typo/ref" } } } }),
+        { statusCode: 400 },
+      );
+      assert.throws(
+        () => settings.update({ alerts: { sinks: { ntfy: { topic: "not/a/valid topic" } } } }),
+        { statusCode: 400 },
+      );
+    });
+
+    it("webhook secret stored as an op:// ref exposes secretRef (and never a literal secret)", () => {
+      const settings = createSettings({ configPath });
+      settings.update({
+        alerts: {
+          sinks: {
+            webhooks: {
+              add: [
+                { url: "https://hook.example/op", secret: "op://Vault/hook/secret" },
+                { url: "https://hook.example/literal", secret: "hush-literal" },
+              ],
+            },
+          },
+        },
+      });
+      const [opHook, literalHook] = settings.get().alerts.sinks.webhooks;
+      assert.strictEqual(opHook.hasSecret, true);
+      assert.strictEqual(opHook.secretRef, "op://Vault/hook/secret");
+      assert.strictEqual(literalHook.hasSecret, true);
+      assert.strictEqual(literalHook.secretRef, undefined);
+      assert.ok(!JSON.stringify(settings.get()).includes("hush-literal"));
     });
   });
 });

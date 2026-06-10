@@ -9,11 +9,20 @@
  * tolerated by construction — every failure degrades to an empty roster or
  * zeroed enrichment, never a throw.
  *
+ * Local source selection (config fleet.agents.source):
+ *   "openclaw" (default) — openclaw.json + per-agent session dirs as above.
+ *   "hermes"             — Hermes-system agents via src/hermes-agents.js
+ *                          (config fleet.agents.hermesDir, default ~/.hermes).
+ *   "none"               — empty local roster (pure aggregator instance).
+ *
  * Fleet aggregation: when a mesh module is supplied, every ONLINE registered
  * node is queried best-effort for GET <node-base>/api/agents (the same
  * local-only endpoint this dashboard exposes) and merged with node
- * attribution. Older nodes that 404 the endpoint are silently skipped. The
- * aggregated result is cached for FLEET_CACHE_MS.
+ * attribution. Older nodes that 404 the endpoint are silently skipped. When a
+ * federationStateFn is supplied, every REACHABLE federation remote is queried
+ * the same way (federation remotes live outside the mesh — e.g. another OFC
+ * instance on a different tailnet) and deduped against mesh nodes by
+ * hostname. The aggregated result is cached for FLEET_CACHE_MS.
  *
  * Routes (handler shape mirrors src/docker.js: the handler writes the full
  * JSON response itself):
@@ -24,6 +33,10 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+
+const { createHermesAgents } = require("./hermes-agents");
+
+const AGENT_SOURCES = ["openclaw", "hermes", "none"];
 
 const ACTIVE_THRESHOLD_MS = 10 * 60 * 1000; // active = session touched <10min ago
 const FLEET_CACHE_MS = 60 * 1000;
@@ -133,12 +146,33 @@ function nodeBaseUrl(nodeUrl) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Default fleet.agents config from the singleton CONFIG. Lazy-required so
+ * test suites that inject agentsConfig never load the config singleton.
+ * @returns {object}
+ */
+function defaultAgentsConfig() {
+  try {
+    const { CONFIG } = require("./config");
+    return (CONFIG && CONFIG.fleet && CONFIG.fleet.agents) || {};
+  } catch (err) {
+    return {};
+  }
+}
+
+/**
  * Create the agents roster module with injectable dependencies.
  *
  * @param {object} options
- * @param {string} options.openclawConfigPath - path to openclaw.json
- * @param {string} options.agentsDir - path to the agents directory (~/.openclaw/agents)
+ * @param {string} [options.openclawConfigPath] - path to openclaw.json (required for source "openclaw")
+ * @param {string} [options.agentsDir] - path to the agents directory (~/.openclaw/agents)
  * @param {object} [options.mesh] - mesh module ({getState}) for fleet aggregation
+ * @param {function} [options.federationStateFn] - async () => federation getState()
+ *        shape ({remotes: [{baseUrl, label, status: {reachable}}]}); reachable
+ *        remotes are queried for GET <baseUrl>/api/agents and merged
+ * @param {object} [options.agentsConfig] - fleet.agents config section
+ *        ({source, openclawConfigPath, agentsDir, hermesDir}); defaults to
+ *        CONFIG.fleet.agents so wiring needs no index.js change
+ * @param {object} [options.hermesAgents] - hermes adapter ({listAgents}) override (tests)
  * @param {function} [options.fetchFn] - fetch-compatible transport (injectable)
  * @param {function} [options.nowFn] - clock (default Date.now)
  * @param {string} [options.hostname] - this node's name (default os.hostname())
@@ -148,9 +182,8 @@ function nodeBaseUrl(nodeUrl) {
  */
 function createAgentsRoster(options = {}) {
   const {
-    openclawConfigPath,
-    agentsDir,
     mesh = null,
+    federationStateFn = null,
     fetchFn = (...args) => globalThis.fetch(...args),
     nowFn = Date.now,
     hostname = os.hostname(),
@@ -158,12 +191,40 @@ function createAgentsRoster(options = {}) {
     remoteTimeoutMs = REMOTE_TIMEOUT_MS,
   } = options;
 
-  if (!openclawConfigPath || typeof openclawConfigPath !== "string") {
-    throw new Error("createAgentsRoster requires an openclawConfigPath string");
+  const agentsConfig =
+    options.agentsConfig && typeof options.agentsConfig === "object"
+      ? options.agentsConfig
+      : defaultAgentsConfig();
+  const source = AGENT_SOURCES.includes(agentsConfig.source) ? agentsConfig.source : "openclaw";
+
+  // Config paths (when set) override the wired-in constructor paths so a
+  // FLEET_CONFIG_JSON override works without touching src/index.js.
+  const openclawConfigPath =
+    (typeof agentsConfig.openclawConfigPath === "string" && agentsConfig.openclawConfigPath) ||
+    options.openclawConfigPath;
+  const agentsDir =
+    (typeof agentsConfig.agentsDir === "string" && agentsConfig.agentsDir) || options.agentsDir;
+
+  if (source === "openclaw") {
+    if (!openclawConfigPath || typeof openclawConfigPath !== "string") {
+      throw new Error("createAgentsRoster requires an openclawConfigPath string");
+    }
+    if (!agentsDir || typeof agentsDir !== "string") {
+      throw new Error("createAgentsRoster requires an agentsDir string");
+    }
   }
-  if (!agentsDir || typeof agentsDir !== "string") {
-    throw new Error("createAgentsRoster requires an agentsDir string");
-  }
+
+  const hermesAgents =
+    options.hermesAgents && typeof options.hermesAgents.listAgents === "function"
+      ? options.hermesAgents
+      : source === "hermes"
+        ? createHermesAgents({
+            hermesDir:
+              (typeof agentsConfig.hermesDir === "string" && agentsConfig.hermesDir) ||
+              path.join(os.homedir(), ".hermes"),
+            nowFn,
+          })
+        : null;
 
   // Aggregation cache — replaced wholesale (immutably) on every refresh.
   let fleetCache = null; // { at, roster }
@@ -191,13 +252,19 @@ function createAgentsRoster(options = {}) {
     }
   }
 
-  /**
-   * Local roster: config agents enriched with session activity.
-   * @returns {{hostname: string, agents: Array, counts: {total: number, active: number}, timestamp: number}}
-   */
-  function getLocalRoster() {
-    const now = nowFn();
-    const agents = readConfigAgents().map((agent) => {
+  /** Local agents for the configured source. Always an array. */
+  function readLocalAgents(now) {
+    if (source === "none") return [];
+    if (source === "hermes") {
+      try {
+        const agents = hermesAgents.listAgents();
+        return Array.isArray(agents) ? agents : [];
+      } catch (err) {
+        console.error("[Agents] Hermes adapter failed:", err.message);
+        return [];
+      }
+    }
+    return readConfigAgents().map((agent) => {
       const { sessionCount, lastActiveAt } = scanSessionsDir(
         path.join(agentsDir, agent.id, "sessions"),
       );
@@ -206,8 +273,18 @@ function createAgentsRoster(options = {}) {
         sessionCount,
         lastActiveAt,
         active: lastActiveAt !== null && now - lastActiveAt < ACTIVE_THRESHOLD_MS,
+        source: "openclaw",
       };
     });
+  }
+
+  /**
+   * Local roster: source agents enriched with session activity.
+   * @returns {{hostname: string, agents: Array, counts: {total: number, active: number}, timestamp: number}}
+   */
+  function getLocalRoster() {
+    const now = nowFn();
+    const agents = readLocalAgents(now);
     return {
       hostname,
       agents,
@@ -217,25 +294,27 @@ function createAgentsRoster(options = {}) {
   }
 
   /**
-   * Best-effort GET <node-base>/api/agents for one mesh node.
-   * Returns the remote agents array or null (404 from older nodes, timeouts,
+   * Best-effort GET <base>/api/agents against another OFC instance.
+   * Returns {hostname, agents} or null (404 from older nodes, timeouts,
    * malformed bodies — all tolerated).
    */
-  async function fetchNodeAgents(node) {
-    const base = nodeBaseUrl(node.url);
-    if (!base) return null;
+  async function fetchAgentsEndpoint(base) {
     try {
       const res = await fetchFn(`${base}/api/agents`, { signal: timeoutSignal(remoteTimeoutMs) });
       if (!res || res.ok !== true) return null; // includes 404 from older nodes
       const body = await res.json();
-      return body && Array.isArray(body.agents) ? body.agents : null;
+      if (!body || !Array.isArray(body.agents)) return null;
+      return {
+        hostname: typeof body.hostname === "string" && body.hostname ? body.hostname : null,
+        agents: body.agents,
+      };
     } catch (err) {
       return null;
     }
   }
 
   /** Sanitize one remote agent record and attribute it to its node. */
-  function attributeRemoteAgent(agent, nodeName) {
+  function attributeRemoteAgent(agent, nodeName, via) {
     if (!agent || typeof agent !== "object" || typeof agent.id !== "string" || !agent.id) {
       return null;
     }
@@ -248,7 +327,9 @@ function createAgentsRoster(options = {}) {
       sessionCount: Number.isFinite(agent.sessionCount) ? agent.sessionCount : 0,
       lastActiveAt: Number.isFinite(agent.lastActiveAt) ? agent.lastActiveAt : null,
       active: agent.active === true,
+      source: AGENT_SOURCES.includes(agent.source) ? agent.source : "openclaw",
       node: nodeName,
+      via,
     };
   }
 
@@ -273,18 +354,77 @@ function createAgentsRoster(options = {}) {
     );
 
     const results = await Promise.all(
-      online.map(async (node) => ({ node, agents: await fetchNodeAgents(node) })),
+      online.map(async (node) => {
+        const base = nodeBaseUrl(node.url);
+        return { node, fetched: base ? await fetchAgentsEndpoint(base) : null };
+      }),
     );
 
     const remote = [];
-    for (const { node, agents } of results) {
-      if (!agents) continue;
-      for (const agent of agents) {
-        const attributed = attributeRemoteAgent(agent, node.hostname);
+    for (const { node, fetched } of results) {
+      if (!fetched) continue;
+      for (const agent of fetched.agents) {
+        const attributed = attributeRemoteAgent(agent, node.hostname, "mesh");
         if (attributed) remote.push(attributed);
       }
     }
     return remote;
+  }
+
+  /**
+   * Collect agents from every REACHABLE federation remote. Remotes whose
+   * reported hostname matches a mesh node are skipped so a machine reachable
+   * through both transports is never double-counted. A remote reporting THIS
+   * host's name is NOT skipped (a second OFC instance on the same machine —
+   * e.g. a Hermes-sourced instance — is a different roster); it is grouped
+   * under the remote's label instead so node groups stay distinct. Failures
+   * degrade to an empty contribution — never a throw.
+   *
+   * @param {Set<string>} meshHostnames - hostnames already covered via mesh
+   */
+  async function collectFederationAgents(meshHostnames) {
+    if (typeof federationStateFn !== "function") return [];
+    let state;
+    try {
+      state = await federationStateFn();
+    } catch (err) {
+      console.error("[Agents] Federation state unavailable:", err.message);
+      return [];
+    }
+    const remotes = Array.isArray(state && state.remotes) ? state.remotes : [];
+    const reachable = remotes.filter(
+      (r) =>
+        r &&
+        typeof r.baseUrl === "string" &&
+        nodeBaseUrl(r.baseUrl) !== null &&
+        (r.reachable === true || (r.status && r.status.reachable === true)),
+    );
+
+    const results = await Promise.all(
+      reachable.map(async (remote) => ({
+        remote,
+        fetched: await fetchAgentsEndpoint(nodeBaseUrl(remote.baseUrl)),
+      })),
+    );
+
+    const collected = [];
+    for (const { remote, fetched } of results) {
+      if (!fetched) continue;
+      // Dedupe by hostname: skip remotes that are really a mesh node
+      // reachable through both transports.
+      if (fetched.hostname && meshHostnames.has(fetched.hostname)) continue;
+      // Same-host second instance (or no hostname): group under the label so
+      // the federation group never collides with the local node group.
+      const nodeName =
+        fetched.hostname && fetched.hostname !== hostname
+          ? fetched.hostname
+          : (typeof remote.label === "string" && remote.label) || new URL(remote.baseUrl).hostname;
+      for (const agent of fetched.agents) {
+        const attributed = attributeRemoteAgent(agent, nodeName, "federation");
+        if (attributed) collected.push(attributed);
+      }
+    }
+    return collected;
   }
 
   /** Build the unified roster (local + remote), grouped and counted. */
@@ -316,8 +456,10 @@ function createAgentsRoster(options = {}) {
     const now = nowFn();
     if (fleetCache && now - fleetCache.at < fleetCacheMs) return fleetCache.roster;
 
-    const remoteAgents = await collectRemoteAgents();
-    const roster = buildRoster(getLocalRoster().agents, remoteAgents);
+    const meshAgents = await collectRemoteAgents();
+    const meshHostnames = new Set(meshAgents.map((a) => a.node));
+    const federationAgents = await collectFederationAgents(meshHostnames);
+    const roster = buildRoster(getLocalRoster().agents, [...meshAgents, ...federationAgents]);
     fleetCache = { at: now, roster };
     return roster;
   }

@@ -111,9 +111,16 @@ function parseIntParam(query, name, fallback) {
  * @param {object} options.fleet - runtime from createFleetRuntime()
  * @param {object} [options.settings] - service from createSettings(); when
  *   omitted the /api/fleet/settings routes respond 404
+ * @param {object} [options.dispatch] - module from createDispatch(); when
+ *   omitted the kanban dispatch routes respond 503 (clean "not configured")
+ * @param {function} [options.rosterFn] - () => local roster ({agents:[{id}]})
+ *   or a Promise of one (agents-roster getLocalRoster); when provided, the
+ *   dispatch agent must exist in it. Wiring (src/index.js):
+ *     createFleetRoutes({ fleet, settings, dispatch,
+ *                         rosterFn: () => agentsRoster.getLocalRoster() })
  * @returns {{handle: function, isFleetRoute: function}}
  */
-function createFleetRoutes({ fleet, settings = null }) {
+function createFleetRoutes({ fleet, settings = null, dispatch = null, rosterFn = null }) {
   if (!fleet) throw new Error("createFleetRoutes requires a fleet runtime");
 
   /**
@@ -315,9 +322,74 @@ function createFleetRoutes({ fleet, settings = null }) {
   // Kanban
   // -------------------------------------------------------------------
 
-  async function handleKanban(req, res, method, segments) {
+  /**
+   * Validate the dispatch target agent against the local roster (when a
+   * rosterFn is wired). Throws 400 on unknown agents; tolerates a roster
+   * read failure by failing CLOSED (we never start work for a typo).
+   */
+  async function requireRosterAgent(agent) {
+    if (typeof rosterFn !== "function") return;
+    if (typeof agent !== "string" || agent.trim().length === 0) {
+      throw httpError(400, "Body must include a non-empty 'agent' field");
+    }
+    let roster;
+    try {
+      roster = await rosterFn();
+    } catch (e) {
+      throw httpError(503, `Agent roster unavailable: ${e.message}`);
+    }
+    const agents = Array.isArray(roster && roster.agents) ? roster.agents : [];
+    if (!agents.some((a) => a && a.id === agent.trim())) {
+      throw httpError(400, `Unknown agent '${agent.trim()}' — not in the local roster`);
+    }
+  }
+
+  async function handleKanbanDispatch(req, res, method, taskId, query) {
+    if (method !== "POST") return false;
+    if (!dispatch) {
+      json(res, 503, { error: "Dispatch is not configured on this node" });
+      return true;
+    }
+    const preview = query.get("preview") === "1";
+    if (preview) {
+      // Read-only message preview: no rate-limit token, no audit entry.
+      const body = await readJsonBody(req);
+      await requireRosterAgent(body.agent);
+      json(res, 200, { preview: true, ...dispatch.previewDispatch(taskId, body) });
+      return true;
+    }
+    const user = guardMutation(req, res);
+    if (!user) return true;
+    const body = await readJsonBody(req);
+    await requireRosterAgent(body.agent);
+    const result = dispatch.dispatchTask(taskId, {
+      agent: body.agent,
+      node: body.node,
+      actor: user,
+    });
+    recordAudit(user, "task.update", taskId, { op: "dispatch", agent: result.agent });
+    json(res, 200, {
+      success: true,
+      task: result.task,
+      agent: result.agent,
+      sessionKey: result.sessionKey,
+    });
+    return true;
+  }
+
+  async function handleKanban(req, res, method, segments, query) {
     if (segments.length === 1 && method === "GET") {
       json(res, 200, fleet.kanban.getBoard());
+      return true;
+    }
+    // Dispatch availability for the UI gate — 200 even when unconfigured so
+    // the client can probe without special-casing errors.
+    if (segments[1] === "dispatch" && segments.length === 2 && method === "GET") {
+      json(
+        res,
+        200,
+        dispatch ? dispatch.getStatus() : { available: false, enabled: false, openCount: 0 },
+      );
       return true;
     }
     if (segments[1] !== "tasks") return false;
@@ -383,6 +455,9 @@ function createFleetRoutes({ fleet, settings = null }) {
         recordAudit(user, "task.update", taskId, { attempt: body.agent || null });
         json(res, 200, { success: true, task });
         return true;
+      }
+      if (action === "dispatch") {
+        return handleKanbanDispatch(req, res, method, taskId, query);
       }
     }
     return false;
@@ -693,10 +768,10 @@ function createFleetRoutes({ fleet, settings = null }) {
   }
 
   // -------------------------------------------------------------------
-  // Dispatch
+  // Request routing
   // -------------------------------------------------------------------
 
-  async function dispatch(req, res, pathname, query) {
+  async function routeRequest(req, res, pathname, query) {
     const method = req.method || "GET";
     let segments;
     try {
@@ -724,7 +799,7 @@ function createFleetRoutes({ fleet, settings = null }) {
       case "chat":
         return handleChat(req, res, method, segments, query);
       case "kanban":
-        return handleKanban(req, res, method, segments);
+        return handleKanban(req, res, method, segments, query);
       case "briefs":
         return handleBriefs(req, res, method, segments);
       case "evolution":
@@ -748,7 +823,7 @@ function createFleetRoutes({ fleet, settings = null }) {
    */
   async function handle(req, res, pathname, query) {
     try {
-      const handled = await dispatch(req, res, pathname, query);
+      const handled = await routeRequest(req, res, pathname, query);
       if (!handled) {
         json(res, 404, { error: `Unknown fleet route: ${req.method} ${pathname}` });
       }

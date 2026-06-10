@@ -114,10 +114,58 @@ describe("cortex facade", () => {
     });
   });
 
+  describe("getState() cold start (warming)", () => {
+    it("serves { warming: true } immediately instead of blocking on collection", async () => {
+      let releaseExec;
+      const gate = new Promise((resolve) => {
+        releaseExec = resolve;
+      });
+      const options = brokenCortexOptions(tmpDir);
+      // Make the memory adapter slow: getState must NOT wait for it.
+      options.lancedb.execFn = async () => {
+        await gate;
+        return { error: new Error("ENOENT"), stdout: "", stderr: "" };
+      };
+      const cortex = createCortex(options);
+
+      const startedAt = Date.now();
+      const state = await cortex.getState();
+      assert.ok(Date.now() - startedAt < 1000, "cold getState must not await collection");
+
+      // Warming placeholder has the full empty shape.
+      assert.strictEqual(state.warming, true);
+      assert.strictEqual(state.memory.available, false);
+      assert.strictEqual(state.gbrain.available, false);
+      assert.deepStrictEqual(state.gauges, []);
+      assert.strictEqual(state.gaugeSummary.sources, 0);
+
+      // Once the background collection finishes, the real payload is served
+      // (no warming flag) straight from cache.
+      releaseExec();
+      const collected = await cortex.warmup();
+      assert.strictEqual(collected.warming, undefined);
+      const warm = await cortex.getState();
+      assert.strictEqual(warm, collected);
+    });
+
+    it("coalesces concurrent warm-ups into one collection", async () => {
+      const options = brokenCortexOptions(tmpDir);
+      let collections = 0;
+      options.gbrain.execFn = async () => {
+        collections++;
+        return { error: new Error("ENOENT"), stdout: "", stderr: "" };
+      };
+      const cortex = createCortex(options);
+      const [a, b] = await Promise.all([cortex.warmup(), cortex.warmup()]);
+      assert.strictEqual(a, b);
+      assert.strictEqual(collections, 1);
+    });
+  });
+
   describe("getState() when every subsystem is down", () => {
     it("returns a complete state payload with reasons, never throws", async () => {
       const cortex = createCortex(brokenCortexOptions(tmpDir));
-      const state = await cortex.getState();
+      const state = await cortex.warmup();
 
       assert.ok(typeof state.timestamp === "number");
 
@@ -140,7 +188,7 @@ describe("cortex facade", () => {
   describe("getState() when subsystems are healthy", () => {
     it("includes availability, memory stats, and the gauge summary", async () => {
       const cortex = createCortex(healthyCortexOptions(tmpDir));
-      const state = await cortex.getState();
+      const state = await cortex.warmup();
 
       assert.strictEqual(state.memory.available, true);
       assert.strictEqual(state.memory.cli, true);

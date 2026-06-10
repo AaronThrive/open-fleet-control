@@ -11,6 +11,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const { defaultSecrets } = require("./secrets");
 
 const HOME = os.homedir();
 
@@ -214,6 +215,7 @@ const FLEET_DEFAULTS = {
       taskFailed: true,
       taskStale: true,
       lessonPending: true,
+      budgetBreach: true,
     },
     sinks: {
       slack: { enabled: false, gatewayUrl: "", channel: "" },
@@ -242,6 +244,25 @@ const FLEET_DEFAULTS = {
     openrouterKey: "",
   },
   rateLimit: { windowMs: 60000, max: 120 },
+  // Cost budgets (USD) over LLM API spend — see src/budgets.js. 0 = no limit.
+  budgets: {
+    enabled: false,
+    daily: { totalUSD: 0, perProvider: {} },
+    weekly: { totalUSD: 0, perProvider: {} },
+    checkIntervalMs: 900000,
+  },
+  // Per-instance agents roster source (GET /api/agents — src/agents-roster.js).
+  // source: "openclaw" reads openclaw.json + per-agent session dirs (default,
+  // preserves prior behavior); "hermes" enumerates Hermes-system agents from
+  // hermesDir; "none" serves an empty local roster (pure aggregator).
+  // openclawConfigPath/agentsDir empty = profile-aware ~/.openclaw defaults
+  // wired in src/index.js.
+  agents: {
+    source: "openclaw",
+    openclawConfigPath: "",
+    agentsDir: "",
+    hermesDir: "~/.hermes",
+  },
 };
 
 /**
@@ -287,7 +308,38 @@ function buildFleetConfig(fileFleet) {
     }
   }
 
-  return { ...fleet, ...resolvedDirs, cortex: resolvedCortex, usage: resolvedUsage };
+  // Agents source paths get the same ~/$HOME expansion (empty = wiring-time
+  // defaults in src/index.js).
+  const resolvedAgents = { ...fleet.agents };
+  for (const key of ["openclawConfigPath", "agentsDir", "hermesDir"]) {
+    if (typeof resolvedAgents[key] === "string" && resolvedAgents[key].length > 0) {
+      resolvedAgents[key] = expandPath(resolvedAgents[key]);
+    }
+  }
+
+  const assembled = {
+    ...fleet,
+    ...resolvedDirs,
+    cortex: resolvedCortex,
+    usage: resolvedUsage,
+    agents: resolvedAgents,
+  };
+
+  // 1Password secret refs (op://vault/item/field) in secret-bearing fields
+  // (webhook secret, slack gatewayUrl, ntfy topic, usage.openrouterKey,
+  // federation token) are resolved SYNCHRONOUSLY here — CONFIG is a sync
+  // singleton consumed at require time, so boot-time execFileSync via the
+  // shared resolver is the least invasive integration (see src/secrets.js
+  // "RESOLUTION TIMING"). No-op (no process spawn) when no refs are present.
+  // A failed ref logs its path+ref (never the secret) and resolves to "",
+  // leaving that one integration unavailable while startup continues.
+  const { value: resolved, failures } = defaultSecrets.resolveDeepSync(assembled);
+  for (const failure of failures) {
+    console.warn(
+      `[Config] 1Password ref ${failure.ref} (fleet.${failure.path}) failed: ${failure.error} — continuing without it`,
+    );
+  }
+  return resolved;
 }
 
 /**

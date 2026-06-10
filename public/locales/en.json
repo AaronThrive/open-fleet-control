@@ -234,7 +234,19 @@
       "authorPlaceholder": "Author",
       "commentPlaceholder": "Add a comment...",
       "addComment": "Add Comment",
-      "deleteTask": "Delete Task"
+      "deleteTask": "Delete Task",
+      "dispatchBtn": "⚡ Dispatch",
+      "dispatchConfirm": "⚡ Dispatch",
+      "dispatchFailed": "Dispatch failed: {message}",
+      "dispatchLoading": "Composing kick-off message...",
+      "dispatchModalAria": "Confirm dispatch",
+      "dispatchModalTitle": "⚡ Dispatch task to agent",
+      "dispatchNoAssignee": "Assign an agent before dispatching",
+      "dispatchStarted": "⚡ Dispatched to {agent} — agent session started",
+      "dispatchTargetPrefix": "Task \"{title}\" → agent ",
+      "dispatchTask": "⚡ Dispatch to Agent",
+      "dispatchTo": "Dispatch to {agent}",
+      "dispatchedBadge": "⚡ dispatched"
     },
     "briefs": {
       "title": "Briefs",
@@ -330,7 +342,18 @@
       "graphOfflineTitle": "Knowledge graph offline",
       "graphOfflineReason": "gbrain adapter unavailable",
       "graphOfflineHelp": "The graph is built from the gbrain knowledge-graph CLI. It renders here automatically as soon as gbrain is healthy on this host — no dashboard changes needed.",
-      "loadError": "Failed to load Cortex state: {message}"
+      "loadError": "Failed to load Cortex state: {message}",
+      "cancelBtn": "Cancel",
+      "deleteBtn": "Delete",
+      "deleteConfirm": "Delete this memory permanently? This cannot be undone.",
+      "deleteFailed": "Failed to delete memory: {message}",
+      "deleted": "Memory deleted.",
+      "editBtn": "Edit",
+      "noChanges": "No changes to save.",
+      "saveBtn": "Save",
+      "saving": "Saving…",
+      "updateFailed": "Failed to update memory: {message}",
+      "updated": "Memory updated."
     },
     "evolution": {
       "title": "Evolution",
@@ -454,7 +477,24 @@
       "detailLoading": "Loading session detail...",
       "detailSummary": "Summary",
       "detailMessages": "Recent messages",
-      "detailError": "Detail failed: {message}"
+      "detailError": "Detail failed: {message}",
+      "justNow": "just now",
+      "killConfirm": "Kill claude process {pid}?\\n\\nSIGTERM now; SIGKILL after 10s if it survives.",
+      "killFailed": "Kill failed: {message}",
+      "killTerminal": "Kill claude process (pid {pid})",
+      "openclawKillUnavailable": "👁️",
+      "terminalEmpty": "No Claude Code terminal sessions found.",
+      "terminalLive": "● LIVE",
+      "terminalLiveCount": "● {count} live",
+      "terminalMeta": "started {started} • active {active} • {msgs} msgs • {tokens} tok",
+      "terminalSubagent": "↳ subagent",
+      "terminalUnavailable": "Terminal session data is unavailable on this deployment.",
+      "transcriptEmpty": "No messages in this transcript window yet.",
+      "transcriptError": "error: {message}",
+      "transcriptLoading": "loading…",
+      "transcriptLoadingBody": "Loading transcript…",
+      "transcriptStatus": "{count} messages • tailing",
+      "viewTranscript": "View live transcript"
     },
     "cron": {
       "title": "Cron Jobs",
@@ -467,21 +507,38 @@
       "neverRan": "no runs yet",
       "empty": "No scheduled jobs",
       "loadError": "Could not reach the cron API — is the server up?",
-      "hideJob": "Hide cron job"
+      "hideJob": "Hide cron job",
+      "filterAgent": "Agent:",
+      "filterAll": "All",
+      "filterEmpty": "No cron jobs match the current filters.",
+      "filterSource": "Source:",
+      "hermesEmpty": "No Hermes scheduled tasks found — ~/.hermes/cron/jobs.json has no matching jobs."
     },
     "vitals": {
       "title": "System Vitals",
       "subtitle": "CPU, memory, disk, and temperature for the host running the fleet",
       "host": "Host",
       "tempUnavailable": "Unavailable",
-      "loadError": "Could not reach the vitals API — is the server up?"
+      "loadError": "Could not reach the vitals API — is the server up?",
+      "refresh": "Refresh"
     },
     "llmUsage": {
       "title": "LLM Fuel Gauges",
       "subtitle": "Provider quotas, task routing, and usage across every connected LLM source",
       "gauges": "Fuel Gauges",
       "noTasks": "No coding tasks yet",
-      "loadError": "Could not reach the LLM usage API — is the server up?"
+      "loadError": "Could not reach the LLM usage API — is the server up?",
+      "ccUnavailable": "Claude Code usage unavailable: {reason}",
+      "codexUnavailable": "Codex activity unavailable: {reason}",
+      "extraDisabled": "disabled",
+      "liveCount": "● {count} live",
+      "liveProcs": "● {count} processes",
+      "noReset": "no reset pending",
+      "nrEmpty": "No routed traffic yet — the router has not logged any requests.",
+      "nrUnavailable": "Nine Router usage unavailable: {reason}",
+      "orUnavailable": "OpenRouter unavailable: {reason} — add OPENROUTER_API_KEY to the server environment to enable credit tracking.",
+      "resetsIn": "resets in {time}",
+      "subUnavailable": "Subscription data unavailable: {reason}"
     },
     "tokens": {
       "title": "Tokens & Cost",
@@ -523,7 +580,8 @@
       "summaryActive": "Active",
       "summaryAgents": "Agents",
       "summaryNodes": "Nodes",
-      "title": "Agents"
+      "title": "Agents",
+      "viaFederation": "via federation"
     },
     "docker": {
       "cpu": "CPU",
@@ -598,7 +656,34 @@
       "webhookSecretPlaceholder": "HMAC secret (optional)",
       "webhookUrlRequired": "Webhook URL required.",
       "webhooksEmpty": "No webhooks configured.",
-      "webhooksTitle": "Webhooks"
+      "webhooksTitle": "Webhooks",
+      "budgetIntervalInvalid": "Check interval must be 1–1440 minutes.",
+      "budgetProviderInvalid": "Provider name must be 1–64 safe characters.",
+      "budgetTotalInvalid": "Totals must be 0 (off) or a USD amount.",
+      "budgetUsdInvalid": "Limit must be a positive USD amount.",
+      "budgetsDailyProviders": "Per-provider limits — daily",
+      "budgetsDailyTotal": "Daily total (USD, 0 = no limit)",
+      "budgetsEnabled": "Budget alerts enabled (fires the budgetBreach rule)",
+      "budgetsHint": "Budgets guard real API spend: Nine-Router provider names (e.g. kimi) plus \"openrouter\" and \"claude-code\" (estimated cost — informational for OAuth subscriptions). Warn fires at 80%, critical at 100%, once per day/ISO-week per scope. Provider rows and totals apply on Save budgets.",
+      "budgetsInterval": "Check interval (minutes)",
+      "budgetsNoProviders": "No per-provider limits.",
+      "budgetsTitle": "💸 Cost budgets",
+      "budgetsWeeklyProviders": "Per-provider limits — weekly",
+      "budgetsWeeklyTotal": "Weekly total (USD, 0 = no limit)",
+      "privacyHiddenCrons": "Hidden crons",
+      "privacyHiddenSessions": "Hidden sessions",
+      "privacyHiddenTopics": "Hidden topics",
+      "privacyHideHostname": "Hide hostname (mask node hostnames in the UI)",
+      "privacyHint": "Items are added via the quick-hide (👁️) actions on sessions, crons, and topics. Removing an item here makes it visible again immediately.",
+      "privacyLoadError": "Failed to load privacy settings: {message}",
+      "privacyNoCrons": "No hidden crons.",
+      "privacyNoSessions": "No hidden sessions.",
+      "privacyNoTopics": "No hidden topics.",
+      "privacySaved": "Privacy settings saved.",
+      "privacyTitle": "🔒 Privacy",
+      "privacyUnhidden": "Item is visible again.",
+      "saveBudgets": "Save budgets",
+      "savePrivacy": "Save privacy"
     },
     "alerts": {
       "title": "Alerts",
@@ -686,7 +771,9 @@
     "historyTitle": "Run History: {name}",
     "statusSuccess": "Success",
     "statusFailed": "Failed",
-    "statusRunning": "Running"
+    "statusRunning": "Running",
+    "libraryNotInstalled": "Jobs library not installed",
+    "libraryNotInstalledHint": "Install the jobs library and set paths.jobs to enable this page."
   },
   "gate": {
     "label": "VALIDATION GATE",
@@ -700,6 +787,8 @@
   "overview": {
     "title": "Overview",
     "sessionsLive": "{live} live",
-    "cronEnabled": "{enabled} enabled"
+    "cronEnabled": "{enabled} enabled",
+    "cron": "Cron",
+    "sessions": "Sessions"
   }
 }

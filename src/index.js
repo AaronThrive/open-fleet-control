@@ -98,6 +98,8 @@ const { createSettings } = require("./settings");
 const { createDocker } = require("./docker");
 const { createUsageSources } = require("./usage-sources");
 const { createAgentsRoster } = require("./agents-roster");
+const { createSessionControl } = require("./session-control");
+const { createRateLimiter } = require("./rate-limit");
 
 // ============================================================================
 // CONFIGURATION
@@ -227,6 +229,19 @@ const docker = createDocker({
     }),
   portainerUrl: CONFIG.fleet.docker?.portainerUrl ?? null,
 });
+
+// Session control — kill live terminal (claude/codex) processes and tail
+// session transcripts. Kill pid validation re-checks ps via the usage-source
+// adapters at call time; transcript ids resolve only through the adapters'
+// known session lists (path-traversal safe).
+const sessionControl = createSessionControl({
+  claudeCode: usageSources.sources.claudeCode,
+  codex: usageSources.sources.codex,
+  resolveOpenClawTranscript: (sessionId) => sessions.resolveTranscriptForId(sessionId),
+});
+// Kills are destructive: a deliberately tight bucket per user+ip.
+const killRateLimiter = createRateLimiter({ windowMs: 60000, max: 6 });
+const TERMINAL_KILL_RE = /^\/api\/sessions\/terminal\/(\d+)\/kill$/;
 
 // Agents roster — local openclaw.json agents enriched with session activity,
 // plus best-effort fleet-wide aggregation over online mesh nodes.
@@ -631,6 +646,88 @@ const server = http.createServer((req, res) => {
         2,
       ),
     );
+  } else if (pathname === "/api/sessions/transcript") {
+    if (req.method !== "GET") {
+      res.writeHead(405, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    const offsetRaw = query.get("offset");
+    sessionControl
+      .readTranscriptChunk({
+        source: query.get("source"),
+        id: query.get("id"),
+        offset: offsetRaw === null || offsetRaw === "" ? null : Number(offsetRaw),
+      })
+      .then((result) => {
+        res.writeHead(result.error ? result.code || 500 : 200, {
+          "Content-Type": "application/json",
+        });
+        res.end(JSON.stringify(result, null, 2));
+      })
+      .catch((e) => {
+        console.error("[SessionControl] Transcript failed:", e.message);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Internal error" }));
+      });
+    return;
+  } else if (pathname === "/api/sessions/terminal/live") {
+    sessionControl
+      .getTerminalLive()
+      .then((live) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(live, null, 2));
+      })
+      .catch((e) => {
+        console.error("[SessionControl] Live lookup failed:", e.message);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Internal error" }));
+      });
+    return;
+  } else if (TERMINAL_KILL_RE.test(pathname)) {
+    if (req.method !== "POST") {
+      res.writeHead(405, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    const pid = parseInt(pathname.match(TERMINAL_KILL_RE)[1], 10);
+    const login = req.headers["tailscale-user-login"];
+    const user =
+      typeof login === "string" && login.trim().length > 0
+        ? login.trim().toLowerCase()
+        : "anonymous";
+    const verdict = killRateLimiter.check(`${user}|${req.socket?.remoteAddress || "unknown"}`);
+    if (!verdict.allowed) {
+      res.writeHead(429, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Rate limit exceeded", retryAfterMs: verdict.retryAfterMs }));
+      return;
+    }
+    sessionControl
+      .killTerminalSession(pid)
+      .then((result) => {
+        if (result.success) {
+          try {
+            fleet.audit.record({
+              user,
+              action: "session.kill",
+              target: String(pid),
+              detail: { source: "terminal", signal: result.signal },
+            });
+          } catch (e) {
+            console.error("[SessionControl] Audit record failed:", e.message);
+          }
+        }
+        res.writeHead(result.error ? result.code || 500 : 200, {
+          "Content-Type": "application/json",
+        });
+        res.end(JSON.stringify(result, null, 2));
+      })
+      .catch((e) => {
+        console.error("[SessionControl] Kill failed:", e.message);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Internal error" }));
+      });
+    return;
   } else if (pathname === "/api/cron") {
     const cron = getCronJobsSafe();
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -823,12 +920,13 @@ server.listen(PORT, () => {
     } catch (e) {
       console.log("[Startup] Cache warming error:", e.message);
     }
-    // Warm the cortex state cache in the background so the first
-    // /api/fleet/cortex request is served from cache (the underlying CLI
-    // probes can take a long time on a loaded host).
-    if (CONFIG.fleet.cortex?.enabled && fleet.cortex?.getState) {
+    // Warm the cortex state cache in the background. getState() itself
+    // never blocks on a cold cache anymore (it serves { warming: true }
+    // immediately) — warmup() forces the real collection and resolves when
+    // the cache is actually populated.
+    if (CONFIG.fleet.cortex?.enabled && fleet.cortex?.warmup) {
       fleet.cortex
-        .getState()
+        .warmup()
         .then(() => console.log("[Startup] Cortex state cache warmed."))
         .catch((e) => console.log("[Startup] Cortex warming error:", e.message));
     }

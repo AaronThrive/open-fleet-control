@@ -151,4 +151,57 @@ describe("config module", () => {
       assert.strictEqual(config.auth.mode, "token");
     });
   });
+
+  describe("fleet.agents source config", () => {
+    function freshLoadConfig() {
+      for (const key of Object.keys(require.cache)) {
+        if (key.includes("config.js")) {
+          delete require.cache[key];
+        }
+      }
+      const { loadConfig } = require("../src/config");
+      return loadConfig();
+    }
+
+    it("defaults preserve current behavior (source=openclaw)", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.agents.source, "openclaw");
+      assert.strictEqual(config.fleet.agents.openclawConfigPath, "");
+      assert.strictEqual(config.fleet.agents.agentsDir, "");
+      assert.strictEqual(config.fleet.agents.hermesDir, path.join(os.homedir(), ".hermes"));
+    });
+
+    it("FLEET_CONFIG_JSON can switch the source to hermes", () => {
+      process.env.FLEET_CONFIG_JSON = JSON.stringify({ agents: { source: "hermes" } });
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.agents.source, "hermes");
+      // Untouched keys keep their defaults.
+      assert.strictEqual(config.fleet.agents.hermesDir, path.join(os.homedir(), ".hermes"));
+    });
+
+    it("expands ~ and $HOME in agents paths", () => {
+      process.env.FLEET_CONFIG_JSON = JSON.stringify({
+        agents: {
+          source: "openclaw",
+          openclawConfigPath: "~/custom/openclaw.json",
+          agentsDir: "$HOME/custom/agents",
+          hermesDir: "~/elsewhere/.hermes",
+        },
+      });
+      const config = freshLoadConfig();
+      assert.strictEqual(
+        config.fleet.agents.openclawConfigPath,
+        path.join(os.homedir(), "custom", "openclaw.json"),
+      );
+      assert.strictEqual(
+        config.fleet.agents.agentsDir,
+        path.join(os.homedir(), "custom", "agents"),
+      );
+      assert.strictEqual(
+        config.fleet.agents.hermesDir,
+        path.join(os.homedir(), "elsewhere", ".hermes"),
+      );
+    });
+  });
 });

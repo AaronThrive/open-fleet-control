@@ -7,8 +7,10 @@
  * previous visit (module scope persists).
  *
  * Data source: GET /api/agents/fleet — local agents enriched with session
- * activity plus best-effort agents from every online mesh node (the server
- * caches the aggregation for 60s; the view polls on the same cadence).
+ * activity plus best-effort agents from every online mesh node AND every
+ * reachable federation remote (the server caches the aggregation for 60s;
+ * the view polls on the same cadence). Federation-sourced node groups carry
+ * a "via federation" badge; every card shows its source (openclaw/hermes).
  *
  * All agent data is rendered via textContent / createElement — no innerHTML
  * with remote strings — so hostile agent names/models/workspaces from remote
@@ -222,6 +224,13 @@ function buildNodeGroup(nodeName, agents) {
       t("views.agents.nodeCount", { n: agents.length }, "{n} agents"),
     ),
   );
+  // Federation-sourced nodes (reached via a registered federation remote
+  // rather than the mesh) are flagged so operators know the transport.
+  if (agents.some((agent) => agent.via === "federation")) {
+    header.appendChild(
+      el("span", "agents-node-badge", t("views.agents.viaFederation", {}, "via federation")),
+    );
+  }
   group.appendChild(header);
 
   const grid = el("div", "agents-grid");
@@ -259,8 +268,10 @@ function buildCard(agent) {
   }
   card.appendChild(head);
 
-  // Stats: sessions, last active, subagents cap
+  // Stats: source chip, sessions, last active, subagents cap
   const stats = el("div", "agent-card-stats");
+  const source = agent.source === "hermes" ? "hermes" : "openclaw";
+  stats.appendChild(el("span", `agent-source-chip agent-source-${source}`, source));
   stats.appendChild(
     el(
       "span",

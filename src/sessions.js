@@ -550,6 +550,25 @@ function createSessionsModule(deps) {
     }
   }
 
+  /**
+   * Resolve a session ID to its transcript path — but ONLY for IDs present
+   * in the session store (the adapter's known session list). This is the
+   * path-traversal-safe entry point for the transcript tail API: unknown or
+   * malformed IDs resolve to null and never touch the filesystem layout.
+   * @param {string} sessionId
+   * @returns {Promise<string|null>}
+   */
+  async function resolveTranscriptForId(sessionId) {
+    if (typeof sessionId !== "string" || sessionId.length === 0) return null;
+    // Defense in depth: store IDs are UUID-like; anything with path
+    // separators or dots-as-segments is rejected before any fs access.
+    if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) return null;
+    if (sessionsCache.timestamp === 0) await refreshSessionsCache();
+    const known = sessionsCache.raw.some((s) => s && s.sessionId === sessionId);
+    if (!known) return null;
+    return findTranscriptPath(sessionId);
+  }
+
   // Read session transcript from JSONL file
   function readTranscript(sessionId) {
     const transcriptPath = findTranscriptPath(sessionId);
@@ -797,6 +816,7 @@ function createSessionsModule(deps) {
     startSessionsRefresh,
     stopSessionsRefresh,
     readTranscript,
+    resolveTranscriptForId,
     getSessionDetail,
     parseSessionLabel,
   };

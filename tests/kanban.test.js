@@ -450,6 +450,42 @@ describe("kanban module", () => {
     });
   });
 
+  describe("updateAttempt()", () => {
+    it("patches one attempt in place and fires attempt.updated", () => {
+      const kanban = makeKanban();
+      const task = kanban.createTask({ title: "T" }, "overmind");
+      kanban.addAttempt(task.id, { agent: "drone-1", note: "dispatched" });
+      kanban.addAttempt(task.id, { agent: "drone-2" });
+      const updated = kanban.updateAttempt(task.id, 0, {
+        ended_at: "2026-06-10T12:00:00.000Z",
+        result: "success",
+        note: "dispatched · session abc",
+      });
+      assert.strictEqual(updated.attempts[0].result, "success");
+      assert.strictEqual(updated.attempts[0].ended_at, "2026-06-10T12:00:00.000Z");
+      assert.strictEqual(updated.attempts[0].note, "dispatched · session abc");
+      // Sibling attempt untouched
+      assert.strictEqual(updated.attempts[1].agent, "drone-2");
+      assert.strictEqual(updated.attempts[1].result, null);
+      assert.ok(events.some((e) => e.type === "attempt.updated"));
+    });
+
+    it("rejects out-of-range indexes and immutable/unknown fields", () => {
+      const kanban = makeKanban();
+      const task = kanban.createTask({ title: "T" }, "overmind");
+      kanban.addAttempt(task.id, { agent: "drone-1" });
+      assert.throws(() => kanban.updateAttempt(task.id, 5, { result: "success" }), /no attempt/);
+      assert.throws(() => kanban.updateAttempt(task.id, -1, { result: "success" }), /no attempt/);
+      assert.throws(
+        () => kanban.updateAttempt(task.id, 0, { agent: "other" }),
+        /cannot be patched/,
+      );
+      assert.throws(() => kanban.updateAttempt(task.id, 0, { result: "weird" })); // schema reject
+      // Board unchanged after the failed patches
+      assert.strictEqual(kanban.getBoard().tasks[0].attempts[0].result, null);
+    });
+  });
+
   describe("deleteTask()", () => {
     it("removes the task and fires task.deleted", () => {
       const kanban = makeKanban();

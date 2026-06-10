@@ -57,34 +57,55 @@ function createCortex(options = {}) {
   let stateInFlight = null;
   const STATE_TTL_MS = 120000;
 
+  /** Coalesced background collection: concurrent callers share one run. */
+  function collect() {
+    if (!stateInFlight) {
+      stateInFlight = collectState()
+        .then((value) => {
+          stateCache = { value, timestamp: Date.now() };
+          return value;
+        })
+        .finally(() => {
+          stateInFlight = null;
+        });
+    }
+    return stateInFlight;
+  }
+
+  /** Placeholder payload served while the first collection runs. */
+  function warmingState() {
+    return {
+      warming: true,
+      timestamp: Date.now(),
+      memory: { available: false, cli: false, lancedb: false, reason: null, stats: null },
+      gbrain: { available: false, reason: null },
+      gauges: [],
+      gaugeSummary: summarizeGauges([]),
+    };
+  }
+
   /**
    * Unified state (cached): adapter availability, gauge summary, memory
-   * stats. First call collects; subsequent calls serve the cache and
-   * refresh in the background once it is older than STATE_TTL_MS.
+   * stats. NEVER blocks on collection — a cold cache kicks off a background
+   * warm-up and immediately returns a `{ warming: true }` placeholder with
+   * the empty state shape; a stale cache is served as-is while a coalesced
+   * background refresh runs. Once warm, calls serve the cache instantly.
    */
   async function getState() {
     const age = Date.now() - stateCache.timestamp;
     if (stateCache.value && age < STATE_TTL_MS) return stateCache.value;
 
-    const collect = () => {
-      if (!stateInFlight) {
-        stateInFlight = collectState()
-          .then((value) => {
-            stateCache = { value, timestamp: Date.now() };
-            return value;
-          })
-          .finally(() => {
-            stateInFlight = null;
-          });
-      }
-      return stateInFlight;
-    };
+    // Stale or cold: refresh in the background, never inline.
+    collect().catch(() => {});
+    if (stateCache.value) return stateCache.value;
+    return warmingState();
+  }
 
-    if (stateCache.value) {
-      // Stale: serve immediately, refresh in background
-      collect().catch(() => {});
-      return stateCache.value;
-    }
+  /**
+   * Force a (coalesced) collection and resolve with the collected state.
+   * Used by the startup pre-warm and tests that need the real payload.
+   */
+  function warmup() {
     return collect();
   }
 
@@ -147,6 +168,7 @@ function createCortex(options = {}) {
     gauges,
     // Unified state
     getState,
+    warmup,
     // Memory passthroughs
     searchMemory: (query, opts) => memory.search(query, opts),
     listMemory: (opts) => memory.list(opts),

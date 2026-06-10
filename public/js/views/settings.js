@@ -28,7 +28,14 @@
 
 import { t } from "../utils.js";
 
-const ALERT_RULES = ["nodeOffline", "nodeUnreachable", "taskFailed", "taskStale", "lessonPending"];
+const ALERT_RULES = [
+  "nodeOffline",
+  "nodeUnreachable",
+  "taskFailed",
+  "taskStale",
+  "lessonPending",
+  "budgetBreach",
+];
 const WEBHOOK_EVENT_OPTIONS = ["*", ...ALERT_RULES];
 const SEC = 1000;
 const MIN = 60000;
@@ -38,6 +45,9 @@ const MIN = 60000;
 let refs = null; // DOM references for the active visit
 let restartPaths = new Set(); // accumulated restartRequired paths (until restart)
 let privacySettings = null; // last privacy settings fetched from the server
+// Editable per-provider budget maps ({provider: usd}); rows mutate this local
+// state and "Save budgets" submits it as a FULL replacement.
+let budgetProviders = { daily: {}, weekly: {} };
 
 // --- Entry point ------------------------------------------------------------
 
@@ -62,10 +72,12 @@ export function init(containerEl) {
     rules: root.querySelector("#set-rules"),
     slackEnabled: root.querySelector("#set-slack-enabled"),
     slackUrl: root.querySelector("#set-slack-url"),
+    slackUrlBadge: root.querySelector("#set-slack-url-badge"),
     slackChannel: root.querySelector("#set-slack-channel"),
     ntfyEnabled: root.querySelector("#set-ntfy-enabled"),
     ntfyServer: root.querySelector("#set-ntfy-server"),
     ntfyTopic: root.querySelector("#set-ntfy-topic"),
+    ntfyTopicBadge: root.querySelector("#set-ntfy-topic-badge"),
     ntfyTest: root.querySelector("#set-ntfy-test"),
     alertsSave: root.querySelector("#set-alerts-save"),
     alertsError: root.querySelector("#set-alerts-error"),
@@ -83,6 +95,23 @@ export function init(containerEl) {
     watchdogThreshold: root.querySelector("#set-watchdog-threshold"),
     intervalsSave: root.querySelector("#set-intervals-save"),
     intervalsError: root.querySelector("#set-intervals-error"),
+    // Budgets
+    budgetsEnabled: root.querySelector("#set-budgets-enabled"),
+    budgetsInterval: root.querySelector("#set-budgets-interval"),
+    budgetDailyTotal: root.querySelector("#set-budget-daily-total"),
+    budgetWeeklyTotal: root.querySelector("#set-budget-weekly-total"),
+    budgetDailyList: root.querySelector("#set-budget-daily-list"),
+    budgetDailyEmpty: root.querySelector("#set-budget-daily-empty"),
+    budgetDailyProvider: root.querySelector("#set-budget-daily-provider"),
+    budgetDailyUsd: root.querySelector("#set-budget-daily-usd"),
+    budgetDailyAdd: root.querySelector("#set-budget-daily-add"),
+    budgetWeeklyList: root.querySelector("#set-budget-weekly-list"),
+    budgetWeeklyEmpty: root.querySelector("#set-budget-weekly-empty"),
+    budgetWeeklyProvider: root.querySelector("#set-budget-weekly-provider"),
+    budgetWeeklyUsd: root.querySelector("#set-budget-weekly-usd"),
+    budgetWeeklyAdd: root.querySelector("#set-budget-weekly-add"),
+    budgetsSave: root.querySelector("#set-budgets-save"),
+    budgetsError: root.querySelector("#set-budgets-error"),
     // Gate
     gateDefault: root.querySelector("#set-gate-default"),
     gateSave: root.querySelector("#set-gate-save"),
@@ -109,10 +138,16 @@ export function init(containerEl) {
   refs.ntfyTest?.addEventListener("click", sendTestAlert);
   refs.whAdd?.addEventListener("click", addWebhook);
   refs.privacySave?.addEventListener("click", savePrivacy);
+  refs.budgetsSave?.addEventListener("click", saveBudgets);
+  refs.budgetDailyAdd?.addEventListener("click", () => addBudgetProvider("daily"));
+  refs.budgetWeeklyAdd?.addEventListener("click", () => addBudgetProvider("weekly"));
 
   refs.alertsSave.textContent = t("views.settings.saveAlerts", {}, "Save alerts");
   refs.intervalsSave.textContent = t("views.settings.saveIntervals", {}, "Save intervals");
   refs.gateSave.textContent = t("views.settings.saveGate", {}, "Save gate");
+  if (refs.budgetsSave) {
+    refs.budgetsSave.textContent = t("views.settings.saveBudgets", {}, "Save budgets");
+  }
   refs.ntfyTest.textContent = t("views.settings.ntfyTest", {}, "Send test alert");
   refs.whAdd.textContent = t("views.settings.webhookAdd", {}, "Add webhook");
   if (refs.privacySave) {
@@ -224,12 +259,16 @@ function populate(settings) {
   refs.slackEnabled.checked = slack.enabled === true;
   refs.slackUrl.value = slack.gatewayUrl || "";
   refs.slackChannel.value = slack.channel || "";
+  setOpBadge(refs.slackUrlBadge, slack.gatewayUrl);
 
   refs.ntfyEnabled.checked = ntfy.enabled === true;
   refs.ntfyServer.value = ntfy.server || "https://ntfy.sh";
   refs.ntfyTopic.value = ntfy.topic || "";
+  setOpBadge(refs.ntfyTopicBadge, ntfy.topic);
 
   renderWebhooks(Array.isArray(sinks.webhooks) ? sinks.webhooks : []);
+
+  populateBudgets(settings.budgets || {});
 
   refs.meshInterval.value = String(Math.round((settings.mesh?.intervalMs ?? 15000) / SEC));
   refs.fedInterval.value = String(Math.round((settings.federation?.intervalMs ?? 30000) / SEC));
@@ -268,6 +307,13 @@ function renderWebhooks(webhooks) {
           : t("views.settings.unsigned", {}, "unsigned"),
       ),
     );
+
+    // Secret stored as a 1Password ref → badge with the (non-secret) ref.
+    if (webhook.secretRef) {
+      const opChip = el("span", "set-op-badge", "🔐 1Password");
+      opChip.title = webhook.secretRef;
+      row.appendChild(opChip);
+    }
 
     const secretBtn = el(
       "button",
@@ -376,6 +422,126 @@ function saveGate() {
   patchSettings(
     { validationGate: { default: refs.gateDefault.checked } },
     { button: refs.gateSave, errorEl: refs.gateError },
+  );
+}
+
+// --- Budgets (fleet.budgets — warn at 80%, critical at 100%) ------------------
+
+const BUDGET_PROVIDER_RE = /^[A-Za-z0-9][A-Za-z0-9 ._:-]{0,63}$/;
+const BUDGET_USD_MAX = 1000000;
+
+function populateBudgets(budgets) {
+  const daily = budgets.daily || {};
+  const weekly = budgets.weekly || {};
+  budgetProviders = {
+    daily: { ...(daily.perProvider || {}) },
+    weekly: { ...(weekly.perProvider || {}) },
+  };
+  refs.budgetsEnabled.checked = budgets.enabled === true;
+  refs.budgetsInterval.value = String(Math.round((budgets.checkIntervalMs ?? 900000) / MIN));
+  refs.budgetDailyTotal.value = String(daily.totalUSD ?? 0);
+  refs.budgetWeeklyTotal.value = String(weekly.totalUSD ?? 0);
+  renderBudgetProviders("daily");
+  renderBudgetProviders("weekly");
+}
+
+function budgetPeriodRefs(period) {
+  return period === "daily"
+    ? { list: refs.budgetDailyList, empty: refs.budgetDailyEmpty }
+    : { list: refs.budgetWeeklyList, empty: refs.budgetWeeklyEmpty };
+}
+
+function renderBudgetProviders(period) {
+  const { list, empty } = budgetPeriodRefs(period);
+  if (!list || !empty) return;
+  const entries = Object.entries(budgetProviders[period]);
+  list.replaceChildren();
+  empty.hidden = entries.length > 0;
+
+  for (const [provider, usd] of entries) {
+    const row = el("div", "set-priv-row");
+    const name = el("span", "set-priv-value", provider);
+    name.title = provider;
+    row.appendChild(name);
+    row.appendChild(el("span", "set-budget-usd", `$${Number(usd).toFixed(2)}`));
+
+    const removeBtn = el("button", "set-action-btn danger", t("actions.remove", {}, "Remove"));
+    removeBtn.type = "button";
+    removeBtn.addEventListener("click", () => {
+      const { [provider]: removed, ...rest } = budgetProviders[period];
+      void removed;
+      budgetProviders = { ...budgetProviders, [period]: rest };
+      renderBudgetProviders(period);
+    });
+    row.appendChild(removeBtn);
+    list.appendChild(row);
+  }
+}
+
+function addBudgetProvider(period) {
+  const providerInput = period === "daily" ? refs.budgetDailyProvider : refs.budgetWeeklyProvider;
+  const usdInput = period === "daily" ? refs.budgetDailyUsd : refs.budgetWeeklyUsd;
+  const provider = providerInput.value.trim();
+  const usd = Number(usdInput.value);
+
+  if (!BUDGET_PROVIDER_RE.test(provider)) {
+    showBudgetsError(
+      t("views.settings.budgetProviderInvalid", {}, "Provider name must be 1–64 safe characters."),
+    );
+    return;
+  }
+  if (!Number.isFinite(usd) || usd <= 0 || usd > BUDGET_USD_MAX) {
+    showBudgetsError(
+      t("views.settings.budgetUsdInvalid", {}, "Limit must be a positive USD amount."),
+    );
+    return;
+  }
+  refs.budgetsError.hidden = true;
+  budgetProviders = {
+    ...budgetProviders,
+    [period]: { ...budgetProviders[period], [provider]: usd },
+  };
+  providerInput.value = "";
+  usdInput.value = "";
+  renderBudgetProviders(period);
+}
+
+function showBudgetsError(message) {
+  refs.budgetsError.hidden = false;
+  refs.budgetsError.textContent = message;
+}
+
+function saveBudgets() {
+  const intervalMin = readBoundedNumber(refs.budgetsInterval, 1, 1440);
+  const dailyTotal = Number(refs.budgetDailyTotal.value);
+  const weeklyTotal = Number(refs.budgetWeeklyTotal.value);
+
+  if (intervalMin === null) {
+    showBudgetsError(
+      t("views.settings.budgetIntervalInvalid", {}, "Check interval must be 1–1440 minutes."),
+    );
+    return;
+  }
+  for (const total of [dailyTotal, weeklyTotal]) {
+    if (!Number.isFinite(total) || total < 0 || total > BUDGET_USD_MAX) {
+      showBudgetsError(
+        t("views.settings.budgetTotalInvalid", {}, "Totals must be 0 (off) or a USD amount."),
+      );
+      return;
+    }
+  }
+
+  refs.budgetsError.hidden = true;
+  patchSettings(
+    {
+      budgets: {
+        enabled: refs.budgetsEnabled.checked,
+        checkIntervalMs: intervalMin * MIN,
+        daily: { totalUSD: dailyTotal, perProvider: { ...budgetProviders.daily } },
+        weekly: { totalUSD: weeklyTotal, perProvider: { ...budgetProviders.weekly } },
+      },
+    },
+    { button: refs.budgetsSave, errorEl: refs.budgetsError },
   );
 }
 
@@ -604,6 +770,18 @@ function el(tag, className, text) {
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+/**
+ * Show/hide a "1Password" badge for a field whose stored value is an op://
+ * ref. Refs are not secrets — the input shows the ref verbatim and the badge
+ * title repeats it for hover.
+ */
+function setOpBadge(badgeEl, value) {
+  if (!badgeEl) return;
+  const isRef = typeof value === "string" && value.startsWith("op://");
+  badgeEl.hidden = !isRef;
+  badgeEl.title = isRef ? value : "";
 }
 
 /** Parse an <input type="number"> within [min, max]; null when invalid. */
