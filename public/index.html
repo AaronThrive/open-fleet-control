@@ -6,6 +6,73 @@
     <title data-i18n="app.title">OpenClaw Command Center</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <link rel="stylesheet" href="css/dashboard.css" />
+    <style>
+      /* Header VALIDATION GATE toggle */
+      .gate-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 12px;
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        color: var(--text-muted);
+        cursor: pointer;
+        user-select: none;
+        transition:
+          color 0.2s,
+          border-color 0.2s,
+          box-shadow 0.2s;
+      }
+      .gate-toggle .gate-track {
+        position: relative;
+        width: 28px;
+        height: 14px;
+        border-radius: 7px;
+        background: var(--border);
+        transition: background 0.2s;
+      }
+      .gate-toggle .gate-knob {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--text-muted);
+        transition:
+          left 0.2s,
+          background 0.2s;
+      }
+      .gate-toggle.on {
+        color: var(--green);
+        border-color: var(--green);
+        box-shadow: 0 0 8px rgba(0, 255, 102, 0.45);
+      }
+      .gate-toggle.on .gate-track {
+        background: rgba(0, 255, 102, 0.5);
+      }
+      .gate-toggle.on .gate-knob {
+        left: 16px;
+        background: var(--green);
+      }
+      .gate-toggle.off {
+        color: var(--yellow);
+        border-color: var(--yellow);
+        box-shadow: 0 0 8px rgba(255, 178, 36, 0.35);
+      }
+      .gate-toggle.off .gate-track {
+        background: rgba(255, 178, 36, 0.5);
+      }
+      .gate-toggle.off .gate-knob {
+        background: var(--yellow);
+      }
+      .gate-toggle.unknown {
+        opacity: 0.5;
+      }
+    </style>
     <script src="js/lib/morphdom.min.js"></script>
     <script src="js/i18n.js"></script>
     <!-- Shared Sidebar Loader -->
@@ -58,9 +125,22 @@
             </select>
           </div>
         </div>
-        <div class="status-pill" id="connection-status" title="SSE connection status">
-          <div class="pulse" id="connection-pulse"></div>
-          <span id="gateway-status" data-i18n="app.connecting">Connecting...</span>
+        <div style="display: flex; align-items: center; gap: 12px">
+          <div
+            class="gate-toggle unknown"
+            id="validation-gate-toggle"
+            role="switch"
+            aria-checked="false"
+            tabindex="0"
+            title="Validation gate: loading..."
+          >
+            <span>VALIDATION GATE</span>
+            <span class="gate-track"><span class="gate-knob"></span></span>
+          </div>
+          <div class="status-pill" id="connection-status" title="SSE connection status">
+            <div class="pulse" id="connection-pulse"></div>
+            <span id="gateway-status" data-i18n="app.connecting">Connecting...</span>
+          </div>
         </div>
       </header>
 
@@ -4343,6 +4423,16 @@
             }
           });
 
+          // Re-dispatch evolution events on window so the header gate toggle
+          // and the Evolution view share the single EventSource connection.
+          eventSource.addEventListener("fleet.evolution", function (e) {
+            let detail = null;
+            try {
+              detail = JSON.parse(e.data);
+            } catch (err) {}
+            window.dispatchEvent(new CustomEvent("fleet:evolution", { detail }));
+          });
+
           eventSource.addEventListener("heartbeat", function (e) {
             try {
               const data = JSON.parse(e.data);
@@ -4669,6 +4759,95 @@
       } else {
         setTimeout(init, 0);
       }
+    </script>
+
+    <!-- Header VALIDATION GATE toggle (Evolution lessons approval gate) -->
+    <script>
+      (function () {
+        "use strict";
+
+        const toggle = document.getElementById("validation-gate-toggle");
+        if (!toggle) return;
+
+        let gateState = null; // null = unknown
+        let busy = false;
+
+        function renderGate() {
+          toggle.classList.toggle("on", gateState === true);
+          toggle.classList.toggle("off", gateState === false);
+          toggle.classList.toggle("unknown", gateState === null);
+          toggle.setAttribute("aria-checked", gateState === true ? "true" : "false");
+          toggle.title =
+            gateState === true
+              ? "Validation gate ON — lessons require approval (click to allow autonomous merge)"
+              : gateState === false
+                ? "Validation gate OFF — autonomous merge (click to require approval)"
+                : "Validation gate: loading...";
+        }
+
+        function fetchGate() {
+          fetch("/api/fleet/evolution/gate")
+            .then((r) => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))))
+            .then((d) => {
+              gateState = !!d.gate;
+              renderGate();
+            })
+            .catch((e) => console.error("[Gate] Failed to fetch gate state:", e));
+        }
+
+        async function flipGate() {
+          if (busy || gateState === null) return;
+          busy = true;
+          const previous = gateState;
+          gateState = !gateState; // optimistic
+          renderGate();
+          try {
+            const res = await fetch("/api/fleet/evolution/gate", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ gate: gateState }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || "HTTP " + res.status);
+            if (typeof showToast === "function") {
+              showToast(
+                gateState
+                  ? "Validation gate ON — lessons require approval"
+                  : "Validation gate OFF — autonomous merge",
+              );
+            }
+          } catch (e) {
+            gateState = previous; // revert
+            renderGate();
+            if (typeof showToast === "function") {
+              showToast("Gate update failed: " + e.message, "error");
+            }
+          } finally {
+            busy = false;
+          }
+        }
+
+        toggle.addEventListener("click", flipGate);
+        toggle.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            flipGate();
+          }
+        });
+
+        // Stay in sync with SSE evolution events (re-dispatched on window) —
+        // gate.toggle events carry the new state; anything else, refetch.
+        window.addEventListener("fleet:evolution", (e) => {
+          if (e.detail && e.detail.type === "gate.toggle" && typeof e.detail.gate === "boolean") {
+            gateState = e.detail.gate;
+            renderGate();
+          } else {
+            fetchGate();
+          }
+        });
+
+        fetchGate();
+      })();
     </script>
 
     <!-- Toast notifications container -->

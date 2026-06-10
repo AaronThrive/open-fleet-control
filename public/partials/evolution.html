@@ -1,5 +1,198 @@
 <!-- Evolution View Partial -->
 <div class="section" id="evolution-view-section">
+  <style>
+    /* Evolution panel styles (scoped by #evolution-view-section) */
+    #evolution-view-section .evo-gate-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      font-size: 0.85rem;
+    }
+    #evolution-view-section .evo-gate-banner.on {
+      border-color: rgba(0, 255, 102, 0.5);
+      background: rgba(0, 255, 102, 0.06);
+      color: var(--green);
+      box-shadow: 0 0 10px rgba(0, 255, 102, 0.15) inset;
+    }
+    #evolution-view-section .evo-gate-banner.off {
+      border-color: rgba(255, 178, 36, 0.5);
+      background: rgba(255, 178, 36, 0.06);
+      color: var(--yellow);
+    }
+    #evolution-view-section .evo-gate-banner .evo-gate-text strong {
+      letter-spacing: 0.5px;
+    }
+    #evolution-view-section .evo-gate-toggle-btn {
+      padding: 6px 14px;
+      border-radius: 16px;
+      border: 1px solid currentColor;
+      background: transparent;
+      color: inherit;
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    #evolution-view-section .evo-gate-toggle-btn:hover {
+      opacity: 0.8;
+    }
+    #evolution-view-section .evo-gate-toggle-btn:disabled {
+      opacity: 0.4;
+      cursor: wait;
+    }
+    #evolution-view-section .evo-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    #evolution-view-section .evo-tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      background: var(--card-bg, #161b22);
+      color: var(--text-muted, #8b949e);
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+    #evolution-view-section .evo-tab.active {
+      border-color: var(--accent, #58a6ff);
+      color: var(--text, #c9d1d9);
+      background: rgba(88, 166, 255, 0.1);
+    }
+    #evolution-view-section .evo-badge {
+      min-width: 18px;
+      padding: 1px 6px;
+      border-radius: 9px;
+      background: rgba(255, 178, 36, 0.2);
+      color: var(--yellow);
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-align: center;
+    }
+    #evolution-view-section .evo-lessons {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    #evolution-view-section .evo-card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--card-bg, #161b22);
+      padding: 14px 16px;
+    }
+    #evolution-view-section .evo-card.malformed {
+      border-color: rgba(255, 178, 36, 0.6);
+      background: rgba(255, 178, 36, 0.05);
+    }
+    #evolution-view-section .evo-card-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    #evolution-view-section .evo-card-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+    #evolution-view-section .evo-card-meta {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.75rem;
+      color: var(--text-muted, #8b949e);
+      flex-shrink: 0;
+    }
+    #evolution-view-section .evo-author-chip {
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: rgba(88, 166, 255, 0.12);
+      color: var(--accent, #58a6ff);
+      font-size: 0.7rem;
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #evolution-view-section .evo-card-body {
+      margin: 0;
+      padding: 10px 12px;
+      border-radius: 6px;
+      background: var(--bg, #0d1117);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.78rem;
+      line-height: 1.5;
+      color: var(--text, #c9d1d9);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      max-height: 260px;
+      overflow-y: auto;
+    }
+    #evolution-view-section .evo-card-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    #evolution-view-section .evo-btn {
+      flex: 1;
+      max-width: 200px;
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: 1px solid transparent;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: filter 0.15s;
+    }
+    #evolution-view-section .evo-btn:hover {
+      filter: brightness(1.15);
+    }
+    #evolution-view-section .evo-btn:disabled {
+      opacity: 0.4;
+      cursor: wait;
+    }
+    #evolution-view-section .evo-btn.approve {
+      background: rgba(0, 255, 102, 0.15);
+      border-color: rgba(0, 255, 102, 0.5);
+      color: var(--green);
+    }
+    #evolution-view-section .evo-btn.reject {
+      background: rgba(248, 81, 73, 0.15);
+      border-color: rgba(248, 81, 73, 0.5);
+      color: var(--red);
+    }
+    #evolution-view-section .evo-malformed-label {
+      font-size: 0.75rem;
+      color: var(--yellow);
+      margin-bottom: 8px;
+    }
+    #evolution-view-section .evo-tab-empty {
+      text-align: center;
+      padding: 32px;
+      color: var(--text-muted, #8b949e);
+      font-size: 0.85rem;
+    }
+    #evolution-view-section .evo-error {
+      padding: 12px 16px;
+      border: 1px solid rgba(248, 81, 73, 0.5);
+      border-radius: 8px;
+      background: rgba(248, 81, 73, 0.08);
+      color: var(--red);
+      font-size: 0.85rem;
+      margin-bottom: 16px;
+    }
+  </style>
   <section class="view-panel">
     <div class="view-header">
       <div class="view-title">
@@ -10,6 +203,27 @@
         Self-improvement cycles — lessons learned, mutations applied, fitness over time
       </div>
     </div>
+
+    <!-- Gate state banner (mirrors the header VALIDATION GATE toggle) -->
+    <div class="evo-gate-banner" id="evo-gate-banner" hidden>
+      <span class="evo-gate-text" id="evo-gate-text"></span>
+      <button class="evo-gate-toggle-btn" id="evo-gate-toggle" type="button"></button>
+    </div>
+
+    <div id="evo-error" class="evo-error" hidden></div>
+
+    <!-- Lessons board (hidden while there are no lessons at all) -->
+    <div id="evo-board" hidden>
+      <div class="evo-tabs" role="tablist">
+        <button class="evo-tab active" type="button" role="tab" data-status="pending">
+          Pending <span class="evo-badge" id="evo-pending-badge">0</span>
+        </button>
+        <button class="evo-tab" type="button" role="tab" data-status="approved">Approved</button>
+        <button class="evo-tab" type="button" role="tab" data-status="rejected">Rejected</button>
+      </div>
+      <div class="evo-lessons" id="evo-lessons"></div>
+    </div>
+
     <div class="empty-state" id="evolution-empty-state">
       <div class="empty-state-icon">🧬</div>
       <div class="empty-state-title" data-i18n="views.evolution.emptyTitle">

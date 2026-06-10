@@ -1,4 +1,364 @@
 <!-- Mesh View Partial -->
+<style>
+  /* Mesh panel styles — scoped under #mesh-view-section */
+  #mesh-view-section .mesh-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-top: 16px;
+    flex: 1;
+  }
+  #mesh-view-section .mesh-warning {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    background: rgba(255, 178, 36, 0.1);
+    border: 1px solid rgba(255, 178, 36, 0.4);
+    color: var(--yellow);
+  }
+  #mesh-view-section .mesh-error {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    background: rgba(248, 81, 73, 0.1);
+    border: 1px solid rgba(248, 81, 73, 0.4);
+    color: var(--red);
+  }
+
+  /* Self identity card */
+  #mesh-view-section .mesh-self-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 16px;
+    border-radius: 10px;
+    background: rgba(var(--accent-rgb), 0.05);
+    border: 1px solid rgba(var(--accent-rgb), 0.25);
+  }
+  #mesh-view-section .mesh-self-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-size: 1.2rem;
+    background: rgba(var(--accent-rgb), 0.12);
+    border: 1px solid rgba(var(--accent-rgb), 0.35);
+    flex-shrink: 0;
+  }
+  #mesh-view-section .mesh-self-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  #mesh-view-section .mesh-self-hostname {
+    font-weight: 600;
+    color: var(--text);
+    font-size: 0.95rem;
+  }
+  #mesh-view-section .mesh-self-fqdn {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #mesh-view-section .mesh-self-tag {
+    margin-left: auto;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: rgba(var(--accent-2-rgb), 0.12);
+    border: 1px solid rgba(var(--accent-2-rgb), 0.4);
+    color: var(--accent-2);
+    flex-shrink: 0;
+  }
+
+  /* Costs strip */
+  #mesh-view-section .mesh-costs {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  #mesh-view-section .mesh-cost-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 16px;
+    border-radius: 10px;
+    background: var(--card-hover);
+    border: 1px solid var(--border);
+    min-width: 130px;
+  }
+  #mesh-view-section .mesh-cost-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+  }
+  #mesh-view-section .mesh-cost-value {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Node grid */
+  #mesh-view-section .mesh-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+  }
+  #mesh-view-section .mesh-node-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 16px;
+    border-radius: 10px;
+    background: var(--card-hover);
+    border: 1px solid var(--border);
+    transition: border-color 0.15s ease;
+  }
+  #mesh-view-section .mesh-node-card:hover {
+    border-color: rgba(var(--accent-rgb), 0.4);
+  }
+  #mesh-view-section .mesh-node-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  #mesh-view-section .mesh-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--text-muted);
+  }
+  #mesh-view-section .mesh-status-dot.online {
+    background: var(--green);
+    box-shadow: 0 0 6px rgba(var(--accent-rgb), 0.7);
+  }
+  #mesh-view-section .mesh-status-dot.offline {
+    background: #5b6470;
+  }
+  #mesh-view-section .mesh-status-dot.unreachable {
+    background: var(--yellow);
+    box-shadow: 0 0 6px rgba(255, 178, 36, 0.6);
+  }
+  #mesh-view-section .mesh-node-names {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  #mesh-view-section .mesh-node-hostname {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #mesh-view-section .mesh-node-label {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #mesh-view-section .mesh-platform-badge {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(var(--accent-2-rgb), 0.1);
+    border: 1px solid rgba(var(--accent-2-rgb), 0.3);
+    color: var(--accent-2);
+    white-space: nowrap;
+  }
+  #mesh-view-section .mesh-node-latency {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  #mesh-view-section .mesh-latency-value {
+    font-size: 0.82rem;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    min-width: 56px;
+  }
+  #mesh-view-section .mesh-sparkline {
+    display: block;
+  }
+  #mesh-view-section .mesh-sparkline polyline {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 1.5;
+  }
+  #mesh-view-section .mesh-node-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+  }
+  #mesh-view-section .mesh-version-chip {
+    font-size: 0.68rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(var(--accent-rgb), 0.08);
+    border: 1px solid rgba(var(--accent-rgb), 0.3);
+    color: var(--accent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  #mesh-view-section .mesh-version-chip.skew {
+    background: rgba(255, 178, 36, 0.12);
+    border-color: rgba(255, 178, 36, 0.5);
+    color: var(--yellow);
+  }
+  #mesh-view-section .mesh-last-seen {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #mesh-view-section .mesh-unregister-btn {
+    margin-left: auto;
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-size: 0.7rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  #mesh-view-section .mesh-unregister-btn:hover {
+    border-color: var(--red);
+    color: var(--red);
+  }
+
+  /* Discovery section */
+  #mesh-view-section .mesh-discovery {
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  #mesh-view-section .mesh-discovery-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  #mesh-view-section .mesh-discovery-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  #mesh-view-section .mesh-discovery-hint {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+  }
+  #mesh-view-section .mesh-peer-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  #mesh-view-section .mesh-peer-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 10px 14px;
+    border-radius: 8px;
+    background: var(--card-hover);
+    border: 1px solid var(--border);
+  }
+  #mesh-view-section .mesh-peer-id {
+    display: flex;
+    flex-direction: column;
+    min-width: 160px;
+  }
+  #mesh-view-section .mesh-peer-hostname {
+    font-size: 0.84rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  #mesh-view-section .mesh-peer-fqdn {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  #mesh-view-section .mesh-peer-os {
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(var(--accent-2-rgb), 0.1);
+    border: 1px solid rgba(var(--accent-2-rgb), 0.3);
+    color: var(--accent-2);
+  }
+  #mesh-view-section .mesh-register-form {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    flex-wrap: wrap;
+  }
+  #mesh-view-section .mesh-register-form input,
+  #mesh-view-section .mesh-register-form select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 0.74rem;
+  }
+  #mesh-view-section .mesh-register-form input:focus,
+  #mesh-view-section .mesh-register-form select:focus {
+    outline: none;
+    border-color: rgba(var(--accent-rgb), 0.6);
+  }
+  #mesh-view-section .mesh-port-input {
+    width: 64px;
+  }
+  #mesh-view-section .mesh-label-input {
+    width: 120px;
+  }
+  #mesh-view-section .mesh-register-btn {
+    background: rgba(var(--accent-rgb), 0.12);
+    border: 1px solid rgba(var(--accent-rgb), 0.45);
+    color: var(--accent);
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  #mesh-view-section .mesh-register-btn:hover:not(:disabled) {
+    background: rgba(var(--accent-rgb), 0.25);
+  }
+  #mesh-view-section .mesh-register-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  #mesh-view-section .mesh-muted {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+</style>
 <div class="section" id="mesh-view-section">
   <section class="view-panel">
     <div class="view-header">
@@ -10,16 +370,76 @@
         Fleet node topology, reachability, and health across your tailnet
       </div>
     </div>
-    <div class="empty-state" id="mesh-empty-state">
-      <div class="empty-state-icon">🕸️</div>
-      <div class="empty-state-title" data-i18n="views.mesh.emptyTitle">No nodes registered</div>
-      <p class="empty-state-text" data-i18n="views.mesh.emptyText">
-        The hive has no nodes yet. Once nodes join the mesh, their topology and health will appear
-        here in real time.
-      </p>
-      <button class="btn-primary empty-state-cta" data-i18n="views.mesh.cta">
-        Discover nodes on your tailnet →
-      </button>
+
+    <!-- Loading / error feedback (managed by mesh.js) -->
+    <div class="view-loading" id="mesh-loading">Loading mesh state...</div>
+    <div class="mesh-error" id="mesh-fetch-error" hidden></div>
+
+    <div class="mesh-body" id="mesh-body" hidden>
+      <!-- Tailscale availability warning -->
+      <div class="mesh-warning" id="mesh-ts-warning" hidden>
+        <span>⚠️</span>
+        <span
+          >Tailscale is unavailable on this host — node discovery and health checks are degraded.
+        </span>
+        <span id="mesh-ts-error-detail"></span>
+      </div>
+
+      <!-- Self identity card -->
+      <div class="mesh-self-card" id="mesh-self-card" hidden>
+        <div class="mesh-self-icon">📡</div>
+        <div class="mesh-self-meta">
+          <div class="mesh-self-hostname" id="mesh-self-hostname"></div>
+          <div class="mesh-self-fqdn" id="mesh-self-fqdn"></div>
+        </div>
+        <div class="mesh-self-tag">This dashboard</div>
+      </div>
+
+      <!-- Fleet costs strip -->
+      <div class="mesh-costs" id="mesh-costs" hidden>
+        <div class="mesh-cost-item">
+          <span class="mesh-cost-label">Fleet cost (24h)</span>
+          <span class="mesh-cost-value" id="mesh-cost-24h">—</span>
+        </div>
+        <div class="mesh-cost-item">
+          <span class="mesh-cost-label">Fleet cost (7d)</span>
+          <span class="mesh-cost-value" id="mesh-cost-7d">—</span>
+        </div>
+        <div class="mesh-cost-item">
+          <span class="mesh-cost-label">Nodes reporting</span>
+          <span class="mesh-cost-value" id="mesh-cost-reporting">—</span>
+        </div>
+      </div>
+
+      <!-- Registered node grid -->
+      <div class="mesh-grid" id="mesh-grid" hidden></div>
+
+      <!-- Empty state (zero registered nodes) -->
+      <div class="empty-state" id="mesh-empty-state">
+        <div class="empty-state-icon">🕸️</div>
+        <div class="empty-state-title" data-i18n="views.mesh.emptyTitle">No nodes registered</div>
+        <p class="empty-state-text" data-i18n="views.mesh.emptyText">
+          The hive has no nodes yet. Once nodes join the mesh, their topology and health will appear
+          here in real time.
+        </p>
+        <button class="btn-primary empty-state-cta" id="mesh-empty-cta" data-i18n="views.mesh.cta">
+          Discover nodes on your tailnet →
+        </button>
+      </div>
+
+      <!-- Tailnet discovery -->
+      <div class="mesh-discovery" id="mesh-discovery">
+        <div class="mesh-discovery-head">
+          <div>
+            <div class="mesh-discovery-title">Tailnet discovery</div>
+            <div class="mesh-discovery-hint">
+              Find peers on your tailnet and register them as fleet nodes.
+            </div>
+          </div>
+          <button class="btn-secondary" id="mesh-discover-btn">Discover nodes</button>
+        </div>
+        <div class="mesh-peer-list" id="mesh-peer-list"></div>
+      </div>
     </div>
   </section>
 </div>

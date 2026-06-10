@@ -1,5 +1,326 @@
 <!-- Briefs View Partial -->
 <div class="section" id="briefs-view-section">
+  <style>
+    #briefs-view-section .briefs-layout {
+      display: flex;
+      flex: 1;
+      gap: 16px;
+      margin-top: 16px;
+      min-height: 0;
+    }
+    #briefs-view-section .briefs-layout[hidden] {
+      display: none;
+    }
+    /* Left pane — file list */
+    #briefs-view-section .briefs-list-pane {
+      width: 260px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    #briefs-view-section .briefs-new-btn {
+      width: 100%;
+      font-weight: 600;
+    }
+    #briefs-view-section .briefs-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      overflow-y: auto;
+      max-height: 60vh;
+    }
+    #briefs-view-section .briefs-list-item {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 10px 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: left;
+      font: inherit;
+      color: var(--text);
+      transition:
+        border-color 0.15s ease,
+        background 0.15s ease;
+    }
+    #briefs-view-section .briefs-list-item:hover {
+      border-color: var(--accent-2);
+      background: var(--card-hover);
+    }
+    #briefs-view-section .briefs-list-item.active {
+      border-color: var(--accent);
+      background: rgba(var(--accent-rgb), 0.08);
+    }
+    #briefs-view-section .briefs-item-name {
+      font-family: "SF Mono", "Fira Code", Consolas, monospace;
+      font-size: 0.78rem;
+      color: var(--accent);
+      word-break: break-all;
+    }
+    #briefs-view-section .briefs-list-item.active .briefs-item-name {
+      color: var(--accent);
+    }
+    #briefs-view-section .briefs-item-heading {
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #briefs-view-section .briefs-item-meta {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+    /* Right pane — editor */
+    #briefs-view-section .briefs-editor-pane {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg);
+      overflow: hidden;
+    }
+    #briefs-view-section .briefs-editor-placeholder {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 320px;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+    #briefs-view-section .briefs-editor {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+    }
+    #briefs-view-section .briefs-editor[hidden] {
+      display: none;
+    }
+    #briefs-view-section .briefs-editor-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--card-bg);
+      flex-wrap: wrap;
+    }
+    #briefs-view-section .briefs-editor-name {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: "SF Mono", "Fira Code", Consolas, monospace;
+      font-size: 0.82rem;
+      color: var(--text);
+      min-width: 0;
+      word-break: break-all;
+    }
+    #briefs-view-section .briefs-dirty-dot {
+      color: var(--yellow);
+      font-size: 0.9rem;
+      line-height: 1;
+    }
+    #briefs-view-section .briefs-editor-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #briefs-view-section .briefs-mode-toggle {
+      display: flex;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    #briefs-view-section .briefs-mode-btn {
+      padding: 5px 12px;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #briefs-view-section .briefs-mode-btn.active {
+      background: rgba(var(--accent-2-rgb), 0.15);
+      color: var(--accent-2);
+    }
+    #briefs-view-section .briefs-save-btn {
+      padding: 5px 14px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      border-radius: 6px;
+    }
+    #briefs-view-section .briefs-save-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    #briefs-view-section .briefs-delete-btn {
+      padding: 5px 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      border-radius: 6px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--red);
+      cursor: pointer;
+      transition: border-color 0.15s ease;
+    }
+    #briefs-view-section .briefs-delete-btn:hover {
+      border-color: var(--red);
+    }
+    #briefs-view-section .briefs-textarea {
+      flex: 1;
+      width: 100%;
+      min-height: 380px;
+      padding: 14px 16px;
+      background: var(--bg);
+      color: var(--text);
+      border: none;
+      outline: none;
+      resize: vertical;
+      font-family: "SF Mono", "Fira Code", Consolas, monospace;
+      font-size: 0.82rem;
+      line-height: 1.6;
+    }
+    #briefs-view-section .briefs-textarea:focus {
+      box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.35);
+    }
+    /* Markdown preview */
+    #briefs-view-section .briefs-preview {
+      flex: 1;
+      min-height: 380px;
+      padding: 16px 20px;
+      overflow-y: auto;
+      font-size: 0.85rem;
+      line-height: 1.65;
+      color: var(--text);
+    }
+    #briefs-view-section .briefs-preview h1,
+    #briefs-view-section .briefs-preview h2,
+    #briefs-view-section .briefs-preview h3,
+    #briefs-view-section .briefs-preview h4,
+    #briefs-view-section .briefs-preview h5,
+    #briefs-view-section .briefs-preview h6 {
+      margin: 1.1em 0 0.45em;
+      color: var(--accent);
+      line-height: 1.3;
+    }
+    #briefs-view-section .briefs-preview h1:first-child,
+    #briefs-view-section .briefs-preview h2:first-child {
+      margin-top: 0;
+    }
+    #briefs-view-section .briefs-preview h1 {
+      font-size: 1.3rem;
+    }
+    #briefs-view-section .briefs-preview h2 {
+      font-size: 1.1rem;
+    }
+    #briefs-view-section .briefs-preview h3 {
+      font-size: 0.95rem;
+    }
+    #briefs-view-section .briefs-preview p {
+      margin: 0.55em 0;
+    }
+    #briefs-view-section .briefs-preview a {
+      color: var(--accent-2);
+    }
+    #briefs-view-section .briefs-preview code {
+      font-family: "SF Mono", "Fira Code", Consolas, monospace;
+      font-size: 0.78rem;
+      background: rgba(var(--accent-2-rgb), 0.1);
+      color: var(--accent-2);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    #briefs-view-section .briefs-preview pre {
+      margin: 0.8em 0;
+      padding: 12px 14px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow-x: auto;
+    }
+    #briefs-view-section .briefs-preview pre code {
+      background: none;
+      color: var(--text);
+      padding: 0;
+    }
+    #briefs-view-section .briefs-preview ul,
+    #briefs-view-section .briefs-preview ol {
+      margin: 0.55em 0;
+      padding-left: 1.6em;
+    }
+    #briefs-view-section .briefs-preview li {
+      margin: 0.25em 0;
+    }
+    #briefs-view-section .briefs-preview blockquote {
+      margin: 0.8em 0;
+      padding: 4px 14px;
+      border-left: 3px solid var(--accent);
+      background: rgba(var(--accent-rgb), 0.05);
+      color: var(--text-muted);
+    }
+    #briefs-view-section .briefs-preview blockquote p {
+      margin: 0.35em 0;
+    }
+    #briefs-view-section .briefs-preview hr {
+      margin: 1.2em 0;
+      border: none;
+      border-top: 1px solid var(--border);
+    }
+    /* Toasts */
+    #briefs-view-section .briefs-toasts {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 1000;
+    }
+    #briefs-view-section .briefs-toast {
+      padding: 10px 16px;
+      border-radius: 8px;
+      background: var(--card-bg);
+      border: 1px solid var(--accent);
+      color: var(--text);
+      font-size: 0.8rem;
+      max-width: 360px;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
+      animation: briefs-toast-in 0.18s ease;
+    }
+    #briefs-view-section .briefs-toast.error {
+      border-color: var(--red);
+      color: var(--red);
+    }
+    @keyframes briefs-toast-in {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    @media (max-width: 760px) {
+      #briefs-view-section .briefs-layout {
+        flex-direction: column;
+      }
+      #briefs-view-section .briefs-list-pane {
+        width: 100%;
+      }
+    }
+  </style>
   <section class="view-panel">
     <div class="view-header">
       <div class="view-title">
@@ -16,9 +337,58 @@
       <p class="empty-state-text" data-i18n="views.briefs.emptyText">
         The fleet has not filed any briefs yet. Generated digests of fleet activity will land here.
       </p>
-      <button class="btn-primary empty-state-cta" data-i18n="views.briefs.cta">
-        Generate a daily brief →
+      <button
+        class="btn-primary empty-state-cta"
+        id="briefs-empty-cta"
+        data-i18n="views.briefs.cta"
+      >
+        Create your first brief →
       </button>
     </div>
+    <div class="briefs-layout" id="briefs-layout" hidden>
+      <aside class="briefs-list-pane">
+        <button class="btn-primary briefs-new-btn" id="briefs-new-btn" type="button">
+          + New brief
+        </button>
+        <div class="briefs-list" id="briefs-list"></div>
+      </aside>
+      <div class="briefs-editor-pane">
+        <div class="briefs-editor-placeholder" id="briefs-editor-placeholder">
+          Select a brief to view or edit
+        </div>
+        <div class="briefs-editor" id="briefs-editor" hidden>
+          <div class="briefs-editor-toolbar">
+            <div class="briefs-editor-name">
+              <span id="briefs-editor-filename"></span>
+              <span class="briefs-dirty-dot" id="briefs-dirty-dot" hidden title="Unsaved changes"
+                >●</span
+              >
+            </div>
+            <div class="briefs-editor-actions">
+              <div class="briefs-mode-toggle" role="tablist">
+                <button class="briefs-mode-btn active" id="briefs-mode-edit" type="button">
+                  Edit
+                </button>
+                <button class="briefs-mode-btn" id="briefs-mode-preview" type="button">
+                  Preview
+                </button>
+              </div>
+              <button class="btn-primary briefs-save-btn" id="briefs-save-btn" type="button">
+                Save
+              </button>
+              <button class="briefs-delete-btn" id="briefs-delete-btn" type="button">Delete</button>
+            </div>
+          </div>
+          <textarea
+            class="briefs-textarea"
+            id="briefs-textarea"
+            spellcheck="false"
+            placeholder="Write markdown here..."
+          ></textarea>
+          <div class="briefs-preview" id="briefs-preview" hidden></div>
+        </div>
+      </div>
+    </div>
+    <div class="briefs-toasts" id="briefs-toasts"></div>
   </section>
 </div>
