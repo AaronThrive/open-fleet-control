@@ -53,6 +53,11 @@ let sseRetries = 0;
 // SortableJS loader singleton (UMD file → script tag → window.Sortable).
 let sortableLoadPromise = null;
 
+// Assignee suggestions for the drawer combo — fetched lazily from the fleet
+// agents roster on first drawer open, cached for the lifetime of one init().
+let assigneeFetchPromise = null;
+const ASSIGNEE_DATALIST_ID = "kb-assignee-datalist";
+
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
@@ -832,8 +837,45 @@ function openDrawer(taskId) {
   state.drawerReturnTaskId = taskId;
   state.refs.drawer.hidden = false;
   state.refs.backdrop.hidden = false;
+  setupAssigneeCombo();
   renderDrawer(task, { preserveEdits: false });
   state.refs.drawer.querySelector("#kb-drawer-close")?.focus();
+}
+
+/**
+ * Upgrade the plain assignee text input into a combo: an attached <datalist>
+ * offers every fleet agent ("id" and "id@node" forms) while free text still
+ * works. Suggestions come from GET /api/agents/fleet, fetched lazily on the
+ * first drawer open and cached per init(); any failure simply leaves the
+ * input as plain text (XSS-safe: option values set via the value property).
+ */
+function setupAssigneeCombo() {
+  const input = state.refs.drawer?.querySelector("#kb-f-assignee");
+  if (!input) return;
+
+  let datalist = state.refs.drawer.querySelector(`#${ASSIGNEE_DATALIST_ID}`);
+  if (!datalist) {
+    datalist = document.createElement("datalist");
+    datalist.id = ASSIGNEE_DATALIST_ID;
+    state.refs.drawer.appendChild(datalist);
+  }
+  input.setAttribute("list", ASSIGNEE_DATALIST_ID);
+
+  if (!assigneeFetchPromise) {
+    assigneeFetchPromise = fetch("/api/agents/fleet")
+      .then((response) => (response.ok ? response.json() : null))
+      .catch(() => null);
+  }
+  assigneeFetchPromise.then((data) => {
+    if (!isActive() || !datalist.isConnected) return;
+    const assignees = Array.isArray(data?.assignees) ? data.assignees : [];
+    datalist.textContent = "";
+    for (const assignee of assignees) {
+      const option = document.createElement("option");
+      option.value = String(assignee);
+      datalist.appendChild(option);
+    }
+  });
 }
 
 function closeDrawer() {
@@ -1157,6 +1199,7 @@ function teardown() {
  */
 export function init(containerEl) {
   teardown();
+  assigneeFetchPromise = null; // refetch fleet assignees once per visit
   state.container = containerEl;
   state.refs = {
     board: containerEl.querySelector("#kanban-board"),

@@ -72,6 +72,92 @@
       white-space: pre-wrap;
       word-break: break-word;
     }
+    /* ---- Terminal Sessions (Claude Code) section ---- */
+    #sessions-view-section .sessions-terminal {
+      margin-top: 18px;
+      padding: 14px;
+      background: var(--card-bg);
+      border: 1px solid rgba(137, 87, 229, 0.45);
+      border-radius: 8px;
+    }
+    #sessions-view-section .sessions-terminal-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      font-size: 0.85rem;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+    #sessions-view-section .sessions-terminal-live {
+      font-size: 0.68rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: rgba(63, 185, 80, 0.12);
+      border: 1px solid rgba(63, 185, 80, 0.45);
+      color: var(--green, #3fb950);
+    }
+    #sessions-view-section .sessions-terminal-ttys {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    #sessions-view-section .sessions-terminal-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 7px 4px;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.78rem;
+    }
+    #sessions-view-section .sessions-terminal-row:last-child {
+      border-bottom: none;
+    }
+    #sessions-view-section .sessions-terminal-row .tr-cwd {
+      flex: 1 1 220px;
+      min-width: 160px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #sessions-view-section .sessions-terminal-row .tr-meta {
+      color: var(--text-muted);
+      font-size: 0.72rem;
+      white-space: nowrap;
+    }
+    #sessions-view-section .sessions-terminal-row .tr-live {
+      font-size: 0.66rem;
+      font-weight: 700;
+      padding: 1px 7px;
+      border-radius: 9px;
+      background: rgba(63, 185, 80, 0.12);
+      border: 1px solid rgba(63, 185, 80, 0.45);
+      color: var(--green, #3fb950);
+      white-space: nowrap;
+    }
+    #sessions-view-section .sessions-terminal-row .tr-subagent {
+      font-size: 0.66rem;
+      font-weight: 600;
+      padding: 1px 7px;
+      border-radius: 9px;
+      background: rgba(137, 87, 229, 0.12);
+      border: 1px solid rgba(137, 87, 229, 0.45);
+      color: var(--purple, #a371f7);
+      white-space: nowrap;
+    }
+    #sessions-view-section .sessions-terminal-empty,
+    #sessions-view-section .sessions-terminal-note {
+      font-size: 0.74rem;
+      color: var(--text-muted);
+      padding: 6px 0;
+    }
+    #sessions-view-section .sessions-terminal-note {
+      font-style: italic;
+      margin-top: 6px;
+    }
   </style>
   <section class="view-panel">
     <div class="view-header">
@@ -133,6 +219,14 @@
         <button class="filter-btn" data-filter="subagent" type="button">Subagent</button>
         <button class="filter-btn" data-filter="cron" type="button">⏰ Cron</button>
       </div>
+      <div class="filter-group" data-filter-group="source">
+        <span class="filter-label">Source:</span>
+        <button class="filter-btn active" data-filter="all" type="button">All</button>
+        <button class="filter-btn" data-filter="openclaw" type="button">🦞 OpenClaw</button>
+        <button class="filter-btn" data-filter="terminal" type="button">
+          💻 Terminal <span class="filter-count" id="sessions-filter-terminal-count">0</span>
+        </button>
+      </div>
     </div>
 
     <div class="sessions-error" id="sessions-view-error" hidden></div>
@@ -169,6 +263,24 @@
       <div class="pagination-pages" id="sessions-view-pages"></div>
       <button class="pagination-btn" id="sessions-view-next" type="button">Next →</button>
       <div class="pagination-info" id="sessions-view-info"></div>
+    </div>
+
+    <!-- Terminal Sessions (Claude Code) — distinct source listed alongside
+         OpenClaw sessions; hidden until /api/usage/claude-code responds. -->
+    <div class="sessions-terminal" id="sessions-terminal-section" hidden>
+      <div class="sessions-terminal-header">
+        <span>💻</span>
+        <span>Terminal Sessions (Claude Code)</span>
+        <span class="section-count" id="sessions-terminal-count">0</span>
+        <span class="sessions-terminal-live" id="sessions-terminal-live" hidden></span>
+        <span class="sessions-terminal-ttys" id="sessions-terminal-ttys"></span>
+      </div>
+      <div class="sessions-terminal-empty" id="sessions-terminal-empty" hidden></div>
+      <div id="sessions-terminal-list"></div>
+      <div class="sessions-terminal-note">
+        Sourced from local Claude Code transcripts (~/.claude) — sub-agent transcripts are flagged
+        ↳.
+      </div>
     </div>
 
     <!-- Inline fallback detail (used only when the global detail panel is absent) -->

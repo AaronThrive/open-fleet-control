@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.7.0 — 2026-06-10
+
+- Rebrand: OpenFleetControl, built by Aaron May; English-only (zh-CN removed)
+- Independent pages: Sessions (+ subagents strip + terminal sessions), Cron, Vitals, LLM Usage, Tokens; compact overview home
+- Usage sources: Claude Code terminal sessions, Codex activity, Nine Router (SQLite), Claude Max subscription (headroom), OpenRouter credits
+- Read-only Docker containers panel with Portainer deep-links
+- Settings page: alert rules/sinks/webhooks editable + hot-applied; ntfy sink
+- Unified fleet Agents roster (/api/agents[/fleet]) + kanban assignee dropdown
+- Memory editor: update/delete via memory-pro CLI (id-preserving), live-verified
+- Per-node vitals on mesh cards; per-model cost breakdown in cost modal
+- Hermes OFC instance + two-way federation; Windows node onboarding kit
+- Fixes: tailscale adapter circuit breaker + logging, cerebro init, session detail alias route
+
 ## Unreleased
 
 ### Changed

@@ -91,6 +91,7 @@ const { createFleetRoutes, isFleetRoute } = require("./fleet-routes");
 const { createSettings } = require("./settings");
 const { createDocker } = require("./docker");
 const { createUsageSources } = require("./usage-sources");
+const { createAgentsRoster } = require("./agents-roster");
 
 // ============================================================================
 // CONFIGURATION
@@ -201,6 +202,14 @@ const docker = createDocker({
       ts: Date.now(),
     }),
   portainerUrl: CONFIG.fleet.docker?.portainerUrl ?? null,
+});
+
+// Agents roster — local openclaw.json agents enriched with session activity,
+// plus best-effort fleet-wide aggregation over online mesh nodes.
+const agentsRoster = createAgentsRoster({
+  openclawConfigPath: path.join(getOpenClawDir(), "openclaw.json"),
+  agentsDir: path.join(getOpenClawDir(), "agents"),
+  mesh: fleet.mesh,
 });
 
 // ============================================================================
@@ -670,6 +679,20 @@ const server = http.createServer((req, res) => {
     }
     dockerHandler(req, res).catch((e) => {
       console.error("[Docker] Route failed:", e.message);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Internal error" }));
+    });
+    return;
+  } else if (pathname === "/api/agents" || pathname === "/api/agents/fleet") {
+    // Agents roster handlers write the full JSON response themselves.
+    const agentsHandler = agentsRoster.routes[`${req.method} ${pathname}`];
+    if (!agentsHandler) {
+      res.writeHead(405, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    agentsHandler(req, res).catch((e) => {
+      console.error("[Agents] Route failed:", e.message);
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Internal error" }));
     });

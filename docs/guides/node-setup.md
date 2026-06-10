@@ -160,6 +160,16 @@ Steps:
 
 Use this when the OpenClaw gateway runs inside WSL2 on a Windows machine.
 
+> **Full Windows onboarding kit:** the dedicated
+> [Windows Fleet Node Guide](windows-node.md) covers everything below plus
+> the Windows Hub app "Set up locally" flow (v2026.6.1+), WSL **mirrored
+> networking** mode (the modern alternative to the `netsh` fallback),
+> always-on power settings, an expanded troubleshooting table, and helper
+> scripts ([`scripts/windows/`](../../scripts/windows/README.md):
+> `install-node.ps1` automates the serve + verification steps,
+> `register-node.ps1` registers the node in the dashboard). Prefer that
+> guide for new Windows nodes; the steps below remain as a quick reference.
+
 ### C1. Join Windows to the tailnet
 
 1. Download the Tailscale Windows client from

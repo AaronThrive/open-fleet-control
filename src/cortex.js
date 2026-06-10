@@ -113,6 +113,8 @@ function createCortex(options = {}) {
     listMemory: (opts) => memory.list(opts),
     getMemory: (id) => memory.get(id),
     storeMemory: (text, opts) => memory.store(text, opts),
+    updateMemory: (id, changes) => memory.update(id, changes),
+    deleteMemory: (id) => memory.remove(id),
     memoryStats: () => memory.stats(),
     // Graph passthroughs
     getGraph: (opts) => gbrain.getGraph(opts),

@@ -200,6 +200,8 @@ describe("cortex facade", () => {
       assert.ok((await cortex.listMemory()).error);
       assert.ok((await cortex.getMemory("id")).error);
       assert.ok((await cortex.storeMemory("text")).error);
+      assert.ok((await cortex.updateMemory("id", { text: "x" })).error);
+      assert.ok((await cortex.deleteMemory("id")).error);
       assert.ok((await cortex.getGraph()).error);
       assert.ok((await cortex.getPage("p")).error);
     });

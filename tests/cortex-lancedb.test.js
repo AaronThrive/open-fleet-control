@@ -55,6 +55,39 @@ function fakeLanceLoader(rows, captured = {}) {
   });
 }
 
+/**
+ * Lance loader whose toArray() returns the next rows array from a sequence
+ * (last entry repeats). Lets tests model "row exists, then it's gone".
+ */
+function sequencedLanceLoader(sequence, captured = {}) {
+  let call = 0;
+  return () => ({
+    connect: async () => ({
+      openTable: async () => ({
+        countRows: async () => (sequence[sequence.length - 1] || []).length,
+        query: () => {
+          const builder = {
+            where(clause) {
+              captured.where = clause;
+              return builder;
+            },
+            limit(n) {
+              captured.limit = n;
+              return builder;
+            },
+            toArray: async () => {
+              const rows = sequence[Math.min(call, sequence.length - 1)];
+              call += 1;
+              return rows;
+            },
+          };
+          return builder;
+        },
+      }),
+    }),
+  });
+}
+
 // Plugin log noise that the real openclaw CLI interleaves with output
 const LOG_NOISE = "[90m05:48:36[39m [35m[plugins][39m [36m[headroom] Plugin registered[39m\n";
 
@@ -364,6 +397,230 @@ describe("cortex-lancedb module", () => {
       const memory = createLanceMemory({ execFn, lanceModuleLoader: failingLoader });
       const result = await memory.store("");
       assert.ok(result.error);
+      assert.strictEqual(execFn.calls.length, 0);
+    });
+  });
+
+  describe("update()", () => {
+    const currentRow = {
+      id: "row-1",
+      text: "old text",
+      vector: [1, 2, 3],
+      category: "fact",
+      scope: "agent:main",
+      importance: 0.5,
+      timestamp: 42,
+      metadata: '{"tier":"hot"}',
+    };
+
+    function updateHarness({ rows = [currentRow], responder } = {}) {
+      const importedPayloads = [];
+      const execFn = mockExecFn((call) => {
+        if (call.args[1] === "import") {
+          importedPayloads.push(JSON.parse(fs.readFileSync(call.args[2], "utf8")));
+        }
+        return responder ? responder(call) : { error: null, stdout: LOG_NOISE, stderr: "" };
+      });
+      const memory = createLanceMemory({
+        dbPath: os.tmpdir(),
+        execFn,
+        lanceModuleLoader: fakeLanceLoader(rows),
+      });
+      return { memory, execFn, importedPayloads };
+    }
+
+    it("deletes then re-imports the merged record, preserving id and timestamp", async () => {
+      const { memory, execFn, importedPayloads } = updateHarness();
+      const result = await memory.update("row-1", { text: "new text", importance: 0.9 });
+
+      assert.ok(!result.error, result.error);
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(result.id, "row-1");
+      assert.strictEqual(result.item.text, "new text");
+
+      // CLI sequence: delete (with the row's scope), then import
+      assert.deepStrictEqual(execFn.calls[0].args, [
+        "memory-pro",
+        "delete",
+        "row-1",
+        "--scope",
+        "agent:main",
+      ]);
+      assert.strictEqual(execFn.calls[1].args[1], "import");
+      assert.deepStrictEqual(execFn.calls[1].args.slice(3), ["--scope", "agent:main"]);
+      assert.strictEqual(execFn.calls.length, 2);
+
+      // Re-imported record: id + timestamp preserved, unchanged fields kept,
+      // metadata merged with an edit marker
+      const record = importedPayloads[0].memories[0];
+      assert.strictEqual(record.id, "row-1");
+      assert.strictEqual(record.timestamp, 42);
+      assert.strictEqual(record.text, "new text");
+      assert.strictEqual(record.category, "fact");
+      assert.strictEqual(record.scope, "agent:main");
+      assert.strictEqual(record.importance, 0.9);
+      const metadata = JSON.parse(record.metadata);
+      assert.strictEqual(metadata.tier, "hot");
+      assert.strictEqual(metadata.updatedBy, "open-fleet-control-cortex");
+      assert.strictEqual(importedPayloads[0].version, EXPORT_FORMAT_VERSION);
+    });
+
+    it("moves between scopes: deletes from the old scope, imports into the new", async () => {
+      const { memory, execFn, importedPayloads } = updateHarness();
+      const result = await memory.update("row-1", { scope: "global" });
+
+      assert.strictEqual(result.ok, true);
+      assert.deepStrictEqual(execFn.calls[0].args.slice(2), ["row-1", "--scope", "agent:main"]);
+      assert.deepStrictEqual(execFn.calls[1].args.slice(3), ["--scope", "global"]);
+      assert.strictEqual(importedPayloads[0].memories[0].scope, "global");
+    });
+
+    it("rejects empty change-sets and invalid values without touching the CLI", async () => {
+      const { memory, execFn } = updateHarness();
+      assert.ok((await memory.update("row-1", {})).error.includes("at least one editable field"));
+      assert.ok((await memory.update("row-1", { text: "  " })).error.includes("non-empty string"));
+      assert.ok(
+        (await memory.update("row-1", { importance: 5 })).error.includes("between 0 and 1"),
+      );
+      assert.ok((await memory.update("row-1", { category: "" })).error.includes("category"));
+      assert.ok((await memory.update("", { text: "x" })).error.includes("memory id"));
+      assert.strictEqual(execFn.calls.length, 0);
+    });
+
+    it("returns a not-found error for unknown ids without touching the CLI", async () => {
+      const { memory, execFn } = updateHarness({ rows: [] });
+      const result = await memory.update("nope", { text: "x" });
+      assert.ok(result.error.includes("memory not found"));
+      assert.strictEqual(execFn.calls.length, 0);
+    });
+
+    it("leaves the memory untouched when the delete step fails", async () => {
+      const { memory, execFn } = updateHarness({
+        responder: ({ args }) =>
+          args[1] === "delete"
+            ? { error: new Error("delete exploded"), stdout: "", stderr: "" }
+            : { error: null, stdout: "", stderr: "" },
+      });
+      const result = await memory.update("row-1", { text: "new" });
+      assert.ok(result.error.includes("update failed (delete step)"));
+      assert.strictEqual(execFn.calls.length, 1);
+    });
+
+    it("rolls the original record back when the re-import fails", async () => {
+      let importCount = 0;
+      const { memory, execFn, importedPayloads } = updateHarness({
+        responder: ({ args }) => {
+          if (args[1] === "import") {
+            importCount += 1;
+            if (importCount === 1) {
+              return { error: new Error("import exploded"), stdout: "", stderr: "" };
+            }
+          }
+          return { error: null, stdout: "", stderr: "" };
+        },
+      });
+      const result = await memory.update("row-1", { text: "new" });
+      assert.ok(result.error.includes("update failed (import step)"));
+      assert.ok(result.error.includes("original memory restored"));
+      // delete + failed import + rollback import
+      assert.strictEqual(execFn.calls.length, 3);
+      const restored = importedPayloads[1].memories[0];
+      assert.strictEqual(restored.id, "row-1");
+      assert.strictEqual(restored.text, "old text");
+      assert.strictEqual(restored.metadata, '{"tier":"hot"}');
+    });
+
+    it("reports ROLLBACK FAILED when the restore import also fails", async () => {
+      const { memory } = updateHarness({
+        responder: ({ args }) =>
+          args[1] === "import"
+            ? { error: new Error("import always fails"), stdout: "", stderr: "" }
+            : { error: null, stdout: "", stderr: "" },
+      });
+      const result = await memory.update("row-1", { text: "new" });
+      assert.ok(result.error.includes("ROLLBACK FAILED"));
+    });
+  });
+
+  describe("remove()", () => {
+    const row = {
+      id: "row-1",
+      text: "stored memory",
+      category: "fact",
+      scope: "global",
+      importance: 0.5,
+      timestamp: 42,
+      metadata: null,
+    };
+
+    it("deletes with the row's scope and verifies the row is gone", async () => {
+      const execFn = mockExecFn(() => ({ error: null, stdout: LOG_NOISE, stderr: "" }));
+      const memory = createLanceMemory({
+        dbPath: os.tmpdir(),
+        execFn,
+        lanceModuleLoader: sequencedLanceLoader([[row], []]),
+      });
+      const result = await memory.remove("row-1");
+      assert.ok(!result.error, result.error);
+      assert.deepStrictEqual(result, { ok: true, id: "row-1" });
+      assert.deepStrictEqual(execFn.calls[0].args, [
+        "memory-pro",
+        "delete",
+        "row-1",
+        "--scope",
+        "global",
+      ]);
+      assert.strictEqual(execFn.calls.length, 1);
+    });
+
+    it("reports an error when the row is still present after the CLI delete", async () => {
+      const execFn = mockExecFn(() => ({ error: null, stdout: "", stderr: "" }));
+      const memory = createLanceMemory({
+        dbPath: os.tmpdir(),
+        execFn,
+        lanceModuleLoader: sequencedLanceLoader([[row], [row]]),
+      });
+      const result = await memory.remove("row-1");
+      assert.ok(result.error.includes("did not take effect"));
+    });
+
+    it("returns a not-found error for unknown ids without calling the CLI", async () => {
+      const execFn = mockExecFn(() => ({ error: null, stdout: "", stderr: "" }));
+      const memory = createLanceMemory({
+        dbPath: os.tmpdir(),
+        execFn,
+        lanceModuleLoader: fakeLanceLoader([]),
+      });
+      const result = await memory.remove("nope");
+      assert.ok(result.error.includes("memory not found"));
+      assert.strictEqual(execFn.calls.length, 0);
+    });
+
+    it("builds an injection-safe args array and runs blind when the dataset is unreadable", async () => {
+      const execFn = mockExecFn(() => ({ error: null, stdout: "", stderr: "" }));
+      const memory = createLanceMemory({ execFn, lanceModuleLoader: failingLoader });
+      const hostileId = 'x"; rm -rf / #';
+      const result = await memory.remove(hostileId);
+      assert.strictEqual(result.ok, true);
+      assert.ok(Array.isArray(execFn.calls[0].args));
+      assert.deepStrictEqual(execFn.calls[0].args, ["memory-pro", "delete", hostileId]);
+    });
+
+    it("propagates CLI failures as { error }", async () => {
+      const execFn = mockExecFn(() => ({
+        error: new Error("delete exploded"),
+        stdout: "",
+        stderr: "",
+      }));
+      const memory = createLanceMemory({ execFn, lanceModuleLoader: failingLoader });
+      const result = await memory.remove("row-1");
+      assert.ok(result.error.includes("memory-pro delete failed"));
+    });
+
+    it("rejects empty ids without calling the CLI", async () => {
+      const execFn = mockExecFn(() => ({ error: null, stdout: "", stderr: "" }));
+      const memory = createLanceMemory({ execFn, lanceModuleLoader: failingLoader });
+      assert.ok((await memory.remove("")).error.includes("memory id"));
       assert.strictEqual(execFn.calls.length, 0);
     });
   });

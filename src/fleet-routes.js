@@ -487,6 +487,17 @@ function createFleetRoutes({ fleet, settings = null }) {
   // Cortex
   // -------------------------------------------------------------------
 
+  /**
+   * Map a cortex adapter { error } message to an HTTP status: unknown ids
+   * are 404, validation messages are 400, everything else (CLI/dataset
+   * unavailable or failing) is 503.
+   */
+  function memoryErrorStatus(message) {
+    if (/not found/i.test(message)) return 404;
+    if (/must be|must include|requires at least one/i.test(message)) return 400;
+    return 503;
+  }
+
   async function handleCortex(req, res, method, segments, query) {
     if (segments.length === 1 && method === "GET") {
       json(res, 200, await fleet.cortex.getState());
@@ -519,7 +530,61 @@ function createFleetRoutes({ fleet, settings = null }) {
           json(res, 503, { error: result.error });
           return true;
         }
-        recordAudit(user, "memory.write", null, { bytes: Buffer.byteLength(body.text, "utf8") });
+        recordAudit(user, "memory.write", result.id || null, {
+          op: "store",
+          bytes: Buffer.byteLength(body.text, "utf8"),
+        });
+        json(res, 200, { success: true, result });
+        return true;
+      }
+      return false;
+    }
+    if (segments[1] === "memory" && segments.length === 3) {
+      const memoryId = segments[2];
+      if (method === "GET") {
+        const result = await fleet.cortex.getMemory(memoryId);
+        if (result && result.error) {
+          json(res, memoryErrorStatus(result.error), { error: result.error });
+          return true;
+        }
+        json(res, 200, result);
+        return true;
+      }
+      if (method === "PATCH") {
+        const user = guardMutation(req, res);
+        if (!user) return true;
+        const body = await readJsonBody(req);
+        const changes = {};
+        for (const field of ["text", "category", "scope", "importance"]) {
+          if (body[field] !== undefined) changes[field] = body[field];
+        }
+        if (Object.keys(changes).length === 0) {
+          throw httpError(
+            400,
+            "Body must include at least one of: text, category, scope, importance",
+          );
+        }
+        const result = await fleet.cortex.updateMemory(memoryId, changes);
+        if (result && result.error) {
+          json(res, memoryErrorStatus(result.error), { error: result.error });
+          return true;
+        }
+        recordAudit(user, "memory.write", memoryId, {
+          op: "update",
+          fields: Object.keys(changes),
+        });
+        json(res, 200, { success: true, result });
+        return true;
+      }
+      if (method === "DELETE") {
+        const user = guardMutation(req, res);
+        if (!user) return true;
+        const result = await fleet.cortex.deleteMemory(memoryId);
+        if (result && result.error) {
+          json(res, memoryErrorStatus(result.error), { error: result.error });
+          return true;
+        }
+        recordAudit(user, "memory.write", memoryId, { op: "delete" });
         json(res, 200, { success: true, result });
         return true;
       }

@@ -1,0 +1,290 @@
+<!-- Agents View Partial (unified fleet-wide agents roster, READ-ONLY) -->
+<style>
+  /* Agents panel styles — scoped under #agents-view-section */
+  /* Explicit display rules below would defeat the `hidden` attribute */
+  #agents-view-section [hidden] {
+    display: none !important;
+  }
+  #agents-view-section .agents-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-top: 16px;
+    flex: 1;
+  }
+  #agents-view-section .agents-error {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    background: rgba(248, 81, 73, 0.1);
+    border: 1px solid rgba(248, 81, 73, 0.4);
+    color: var(--red);
+  }
+
+  /* Summary strip */
+  #agents-view-section .agents-summary {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  #agents-view-section .agents-summary-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 16px;
+    border-radius: 10px;
+    background: var(--card-hover);
+    border: 1px solid var(--border);
+    min-width: 130px;
+  }
+  #agents-view-section .agents-summary-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+  }
+  #agents-view-section .agents-summary-value {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Filter bar */
+  #agents-view-section .agents-filters {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  #agents-view-section .agents-node-select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 0.78rem;
+  }
+  #agents-view-section .agents-node-select:focus {
+    outline: none;
+    border-color: rgba(var(--accent-rgb), 0.6);
+  }
+  #agents-view-section .agents-active-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+  }
+  #agents-view-section .agents-active-toggle input {
+    accent-color: var(--green);
+    cursor: pointer;
+  }
+
+  /* Node groups */
+  #agents-view-section .agents-node-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  #agents-view-section .agents-node-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  #agents-view-section .agents-node-header .agents-node-icon {
+    font-size: 0.9rem;
+  }
+  #agents-view-section .agents-node-count {
+    font-size: 0.7rem;
+    font-weight: 400;
+    color: var(--text-muted);
+  }
+
+  /* Agent cards */
+  #agents-view-section .agents-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+  }
+  #agents-view-section .agent-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 16px;
+    border-radius: 10px;
+    background: var(--card-hover);
+    border: 1px solid var(--border);
+    transition: border-color 0.15s ease;
+  }
+  #agents-view-section .agent-card:hover {
+    border-color: rgba(var(--accent-rgb), 0.4);
+  }
+  #agents-view-section .agent-card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  #agents-view-section .agent-active-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: #5b6470;
+  }
+  #agents-view-section .agent-active-dot.active {
+    background: var(--green);
+    box-shadow: 0 0 6px rgba(0, 255, 102, 0.7);
+  }
+  #agents-view-section .agent-card-names {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  #agents-view-section .agent-card-name {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #agents-view-section .agent-card-id {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #agents-view-section .agent-model-chip {
+    margin-left: auto;
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 45%;
+    font-size: 0.68rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(var(--accent-2-rgb), 0.1);
+    border: 1px solid rgba(var(--accent-2-rgb), 0.3);
+    color: var(--accent-2);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  /* Stat rows */
+  #agents-view-section .agent-card-stats {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    font-size: 0.7rem;
+  }
+  #agents-view-section .agent-stat {
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  #agents-view-section .agent-stat.agent-stat-active {
+    background: rgba(0, 255, 102, 0.1);
+    border-color: rgba(0, 255, 102, 0.45);
+    color: var(--green);
+  }
+  #agents-view-section .agent-card-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    overflow: hidden;
+  }
+  #agents-view-section .agent-workspace {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl; /* truncate from the left — the workspace tail matters */
+    text-align: left;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  #agents-view-section .agents-muted {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+</style>
+<div class="section" id="agents-view-section">
+  <section class="view-panel">
+    <div class="view-header">
+      <div class="view-title">
+        <span class="view-icon">🦾</span>
+        <span data-i18n="views.agents.title">Agents</span>
+      </div>
+      <div class="view-subtitle" data-i18n="views.agents.subtitle">
+        Unified roster of OpenClaw agents across every fleet node — model, activity, and sessions
+      </div>
+    </div>
+
+    <!-- Loading / error feedback (managed by views/agents.js) -->
+    <div class="view-loading" id="agents-loading" data-i18n="views.agents.loading">
+      Loading agents...
+    </div>
+    <div class="agents-error" id="agents-fetch-error" hidden></div>
+
+    <div class="agents-body" id="agents-body" hidden>
+      <!-- Summary strip -->
+      <div class="agents-summary" id="agents-summary">
+        <div class="agents-summary-item">
+          <span class="agents-summary-label" data-i18n="views.agents.summaryAgents">Agents</span>
+          <span class="agents-summary-value" id="agents-summary-total">—</span>
+        </div>
+        <div class="agents-summary-item">
+          <span class="agents-summary-label" data-i18n="views.agents.summaryActive">Active</span>
+          <span class="agents-summary-value" id="agents-summary-active">—</span>
+        </div>
+        <div class="agents-summary-item">
+          <span class="agents-summary-label" data-i18n="views.agents.summaryNodes">Nodes</span>
+          <span class="agents-summary-value" id="agents-summary-nodes">—</span>
+        </div>
+      </div>
+
+      <!-- Filter bar -->
+      <div class="agents-filters" id="agents-filters">
+        <select
+          class="agents-node-select"
+          id="agents-node-filter"
+          aria-label="Filter by node"
+        ></select>
+        <label class="agents-active-toggle">
+          <input type="checkbox" id="agents-active-only" />
+          <span data-i18n="views.agents.activeOnly">Active only</span>
+        </label>
+      </div>
+
+      <!-- Node groups (built by views/agents.js) -->
+      <div id="agents-groups"></div>
+
+      <!-- No match for the current filter -->
+      <div class="agents-muted" id="agents-no-match" hidden data-i18n="views.agents.noMatch">
+        No agents match the current filter.
+      </div>
+
+      <!-- Empty state (no agents configured anywhere) -->
+      <div class="empty-state" id="agents-empty-state" hidden>
+        <div class="empty-state-icon">🦾</div>
+        <div class="empty-state-title" data-i18n="views.agents.emptyTitle">No agents</div>
+        <p class="empty-state-text" data-i18n="views.agents.emptyText">
+          No agents are configured in openclaw.json on this host or any online fleet node yet.
+        </p>
+      </div>
+    </div>
+  </section>
+</div>
