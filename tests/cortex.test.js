@@ -53,7 +53,13 @@ function healthyCortexOptions(tmpDir) {
   );
   fs.writeFileSync(
     leanCtxPath,
-    JSON.stringify({ total_input_tokens: 200, total_output_tokens: 150, total_commands: 1 }),
+    JSON.stringify({
+      total_input_tokens: 200,
+      total_output_tokens: 150,
+      total_commands: 1,
+      // Genuine raw-vs-compressed pair lives in cep (real stats.json schema)
+      cep: { sessions: 1, total_tokens_original: 200, total_tokens_compressed: 150 },
+    }),
   );
   return {
     lancedb: {
