@@ -81,6 +81,7 @@ function createCortex(options = {}) {
       gbrain: { available: false, reason: null },
       gauges: [],
       gaugeSummary: summarizeGauges([]),
+      contextEngine: { engine: null, source: null, reason: "warming" },
     };
   }
 
@@ -121,6 +122,7 @@ function createCortex(options = {}) {
       gbrain: { available: false, reason: null },
       gauges: [],
       gaugeSummary: summarizeGauges([]),
+      contextEngine: { engine: null, source: null, reason: null },
     };
 
     try {
@@ -157,6 +159,12 @@ function createCortex(options = {}) {
       state.gauges = [];
     }
     state.gaugeSummary = summarizeGauges(state.gauges);
+
+    try {
+      state.contextEngine = gauges.getContextEngine();
+    } catch (e) {
+      state.contextEngine = { engine: null, source: null, reason: e.message };
+    }
 
     return state;
   }

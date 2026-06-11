@@ -56,6 +56,147 @@
       font-size: 0.68rem;
     }
 
+    /* Active context engine strip --------------------------------------- */
+    #cortex-view-section .cx-engine-strip {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 8px 14px;
+      margin-bottom: 14px;
+      border: 1px solid var(--cx-border);
+      border-left: 3px solid var(--cx-accent-2);
+      border-radius: 10px;
+      background: var(--cx-card);
+      font-size: 0.74rem;
+      color: var(--cx-muted);
+    }
+    #cortex-view-section .cx-engine-strip b {
+      color: var(--cx-accent);
+      font-weight: 700;
+    }
+
+    /* Engine card badges + purpose-built bodies -------------------------- */
+    #cortex-view-section .cx-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.62rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      flex: none;
+    }
+    #cortex-view-section .cx-badge.live {
+      border: 1px solid rgba(0, 255, 102, 0.45);
+      color: var(--cx-accent);
+      background: rgba(0, 255, 102, 0.08);
+    }
+    #cortex-view-section .cx-badge.hist {
+      border: 1px solid rgba(227, 179, 65, 0.5);
+      color: #e3b341;
+      background: rgba(227, 179, 65, 0.08);
+    }
+    #cortex-view-section .cx-badge.stale {
+      border: 1px solid rgba(248, 81, 73, 0.5);
+      color: #f8a3a0;
+      background: rgba(248, 81, 73, 0.08);
+    }
+    #cortex-view-section .cx-util-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.72rem;
+      color: var(--cx-muted);
+      margin-bottom: 7px;
+    }
+    #cortex-view-section .cx-util-name {
+      width: 72px;
+      flex: none;
+    }
+    #cortex-view-section .cx-util-bar {
+      position: relative;
+      flex: 1;
+      height: 10px;
+      border-radius: 5px;
+      background: rgba(255, 255, 255, 0.07);
+      overflow: hidden;
+    }
+    #cortex-view-section .cx-util-fill {
+      position: absolute;
+      inset: 0 auto 0 0;
+      border-radius: 5px;
+      background: linear-gradient(90deg, var(--cx-accent-2), var(--cx-accent));
+      transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+      min-width: 2px;
+    }
+    #cortex-view-section .cx-util-fill.warn {
+      background: linear-gradient(90deg, #e3b341, #f0a832);
+    }
+    #cortex-view-section .cx-util-fill.hot {
+      background: linear-gradient(90deg, #f85149, #ff7b72);
+    }
+    #cortex-view-section .cx-util-pct {
+      width: 44px;
+      flex: none;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      color: var(--text, #fff);
+      font-weight: 600;
+    }
+    #cortex-view-section .cx-kv {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4px 12px;
+      font-size: 0.72rem;
+      color: var(--cx-muted);
+      margin: 9px 0 0;
+      font-variant-numeric: tabular-nums;
+    }
+    #cortex-view-section .cx-kv b {
+      color: var(--text, #fff);
+      font-weight: 600;
+    }
+    #cortex-view-section .cx-stat-big {
+      font-size: 1.45rem;
+      font-weight: 700;
+      line-height: 1;
+      color: var(--cx-accent);
+      text-shadow: 0 0 14px rgba(0, 255, 102, 0.35);
+      font-variant-numeric: tabular-nums;
+    }
+    #cortex-view-section .cx-stat-big small {
+      font-size: 0.68rem;
+      font-weight: 600;
+      color: var(--cx-muted);
+      margin-left: 5px;
+      letter-spacing: 0.04em;
+    }
+    #cortex-view-section .cx-eng-line {
+      font-size: 0.72rem;
+      color: var(--cx-muted);
+      line-height: 1.45;
+      margin-top: 8px;
+      word-break: break-word;
+    }
+    #cortex-view-section .cx-eng-line.accent {
+      color: var(--cx-accent);
+    }
+    #cortex-view-section .cx-eng-line.warn {
+      color: #e3b341;
+    }
+    #cortex-view-section .cx-top-cmds {
+      margin-top: 8px;
+      font-size: 0.72rem;
+      color: var(--cx-muted);
+      font-variant-numeric: tabular-nums;
+    }
+    #cortex-view-section .cx-top-cmds .cmd {
+      color: var(--cx-accent-2);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
     /* Fuel gauges row -------------------------------------------------- */
     #cortex-view-section .cx-gauges {
       display: grid;
@@ -495,6 +636,27 @@
     }
 
     /* Knowledge graph -------------------------------------------------------- */
+    #cortex-view-section .cx-graph-provenance {
+      font-size: 0.72rem;
+      color: var(--cx-muted);
+      margin-bottom: 9px;
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      word-break: break-word;
+    }
+    #cortex-view-section .cx-graph-provenance code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.68rem;
+      color: var(--cx-accent-2);
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--cx-border);
+      border-radius: 5px;
+      padding: 1px 6px;
+    }
+    #cortex-view-section .cx-prov-hint {
+      color: #e3b341;
+    }
     #cortex-view-section .cx-graph-wrap {
       position: relative;
     }
@@ -630,7 +792,10 @@
       </span>
     </div>
 
-    <!-- Fuel gauges row -->
+    <!-- Active context engine strip -->
+    <div class="cx-engine-strip" id="cx-engine-strip" style="display: none"></div>
+
+    <!-- Per-engine gauge cards -->
     <div class="cx-gauges" id="cx-gauges">
       <div class="cx-loading" data-i18n="views.cortex.loadingGauges">
         Loading compression gauges…
@@ -720,6 +885,7 @@
           <span data-i18n="views.cortex.graphCardTitle">Knowledge graph</span>
           <span class="hint" id="cx-graph-count"></span>
         </div>
+        <div class="cx-graph-provenance" id="cx-graph-provenance"></div>
         <div class="cx-graph-wrap" id="cx-graph-wrap">
           <svg class="cx-graph-svg" id="cx-graph-svg" xmlns="http://www.w3.org/2000/svg"></svg>
           <div class="cx-graph-controls">

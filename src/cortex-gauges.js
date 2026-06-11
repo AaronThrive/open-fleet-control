@@ -47,6 +47,22 @@ function readJsonFile(filePath) {
   return JSON.parse(content);
 }
 
+/** Days of lcm inactivity after which the gauge is flagged "historical". */
+const LCM_STALE_DAYS = 7;
+
+/**
+ * Parse a sqlite datetime ("YYYY-MM-DD HH:MM:SS", implicitly UTC) into
+ * epoch ms; also accepts ISO strings. Returns null when unparseable.
+ */
+function parseSqliteUtc(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const normalized = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(value)
+    ? `${value.replace(" ", "T")}Z`
+    : value;
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) ? ms : null;
+}
+
 /**
  * Create the gauges module.
  *
@@ -64,6 +80,7 @@ function createGauges(options = {}) {
     headroom: path.join(home, ".headroom", "subscription_state.json"),
     leanCtx: path.join(home, ".lean-ctx", "stats.json"),
     lcmDb: path.join(home, ".openclaw", "lcm.db"),
+    openclawConfig: path.join(home, ".openclaw", "openclaw.json"),
   };
   const overrides = {};
   for (const [key, value] of Object.entries(options.paths || {})) {
@@ -71,6 +88,7 @@ function createGauges(options = {}) {
   }
   const paths = { ...defaults, ...overrides };
   const sqliteLoader = options.sqliteLoader || defaultSqliteLoader;
+  const now = options.now || Date.now;
 
   function headroomGauge() {
     const label = "Headroom (subscription window)";
@@ -81,15 +99,24 @@ function createGauges(options = {}) {
       const data = readJsonFile(paths.headroom);
       // After a restart or failed poll, headroom writes the state file with
       // `latest: null` and `window_tokens: null`. Reporting that as an
-      // available gauge full of zeros is misleading — call it out instead.
+      // available gauge full of zeros is misleading — mark it stale with
+      // enough context for the UI to say "daemon hasn't polled since <ts>".
       const window = data.window_tokens || null;
       const latest = data.latest || null;
       if (!window && !latest) {
-        return unavailableGauge(
+        const gauge = unavailableGauge(
           "headroom",
           label,
           `headroom state has no poll data yet (latest/window_tokens are null in ${paths.headroom})`,
         );
+        gauge.detail.stale = true;
+        gauge.detail.lastError = data.last_error ?? null;
+        try {
+          gauge.detail.fileModifiedAt = fs.statSync(paths.headroom).mtime.toISOString();
+        } catch (e) {
+          gauge.detail.fileModifiedAt = null;
+        }
+        return gauge;
       }
       const w = window || {};
       const rawTokens =
@@ -113,7 +140,9 @@ function createGauges(options = {}) {
           cacheReads: w.cache_reads ?? 0,
           cacheWritesTotal: w.cache_writes_total ?? 0,
           fiveHourUtilizationPct: latest?.five_hour?.utilization_pct ?? null,
+          fiveHourResetsAt: latest?.five_hour?.resets_at ?? null,
           sevenDayUtilizationPct: latest?.seven_day?.utilization_pct ?? null,
+          sevenDayResetsAt: latest?.seven_day?.resets_at ?? null,
           extraUsageUsd: extraEnabled ? (extra.used_credits_usd ?? null) : null,
           extraUsageLimitUsd: extraEnabled ? (extra.monthly_limit_usd ?? null) : null,
           polledAt: latest?.polled_at ?? null,
@@ -227,6 +256,23 @@ function createGauges(options = {}) {
           const effectiveTokens = Number(row.effective) || 0;
           const rawTokens = rawColumn ? Number(row.raw) || 0 : effectiveTokens;
           const detail = { summaries: Number(row.n) || 0, rawColumn: rawColumn || "none" };
+
+          // Activity detection: lossless-claw may be installed but idle (its
+          // contextEngine slot taken by another engine). The newest summary
+          // timestamp tells the UI whether these numbers are live or history.
+          detail.lastActivity = null;
+          detail.stale = null;
+          detail.staleDays = null;
+          if (columns.includes("created_at")) {
+            const activity = db.prepare("SELECT MAX(created_at) AS last FROM summaries").get();
+            detail.lastActivity = activity?.last ?? null;
+            const lastMs = parseSqliteUtc(detail.lastActivity);
+            if (lastMs !== null) {
+              const days = Math.floor((now() - lastMs) / 86400000);
+              detail.staleDays = days;
+              detail.stale = days >= LCM_STALE_DAYS;
+            }
+          }
           if (tables.includes("messages")) {
             try {
               const messages = db.prepare("SELECT COUNT(*) AS n FROM messages").get();
@@ -293,7 +339,39 @@ function createGauges(options = {}) {
     return [headroomGauge(), leanCtxGauge(), lcmGauge()];
   }
 
-  return { getGauges };
+  /**
+   * Which engine owns the OpenClaw contextEngine slot. The three gauge
+   * sources are SEPARATE tools — only the slot holder shapes live context;
+   * the others are complementary or idle. Reads plugins.slots.contextEngine
+   * from the openclaw config (default ~/.openclaw/openclaw.json).
+   *
+   * @returns {{ engine: string|null, source: string|null, reason: string|null }}
+   */
+  function getContextEngine() {
+    try {
+      if (!fs.existsSync(paths.openclawConfig)) {
+        return {
+          engine: null,
+          source: null,
+          reason: `openclaw config not found: ${paths.openclawConfig}`,
+        };
+      }
+      const data = readJsonFile(paths.openclawConfig);
+      const engine = data?.plugins?.slots?.contextEngine;
+      if (typeof engine !== "string" || !engine.trim()) {
+        return {
+          engine: null,
+          source: null,
+          reason: `no contextEngine slot configured in ${paths.openclawConfig}`,
+        };
+      }
+      return { engine, source: "plugins.slots.contextEngine", reason: null };
+    } catch (e) {
+      return { engine: null, source: null, reason: e.message };
+    }
+  }
+
+  return { getGauges, getContextEngine };
 }
 
 module.exports = { createGauges, computeSavingsPct };

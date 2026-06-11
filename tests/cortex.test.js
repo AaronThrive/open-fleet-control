@@ -39,6 +39,7 @@ function brokenCortexOptions(tmpDir) {
         headroom: path.join(tmpDir, "missing-headroom.json"),
         leanCtx: path.join(tmpDir, "missing-lean-ctx.json"),
         lcmDb: path.join(tmpDir, "missing-lcm.db"),
+        openclawConfig: path.join(tmpDir, "missing-openclaw.json"),
       },
     },
   };
@@ -47,6 +48,11 @@ function brokenCortexOptions(tmpDir) {
 function healthyCortexOptions(tmpDir) {
   const headroomPath = path.join(tmpDir, "headroom.json");
   const leanCtxPath = path.join(tmpDir, "lean-ctx.json");
+  const openclawConfigPath = path.join(tmpDir, "openclaw.json");
+  fs.writeFileSync(
+    openclawConfigPath,
+    JSON.stringify({ plugins: { slots: { contextEngine: "headroom" } } }),
+  );
   fs.writeFileSync(
     headroomPath,
     JSON.stringify({ window_tokens: { total_raw: 1000, weighted_token_equivalent: 600 } }),
@@ -82,6 +88,7 @@ function healthyCortexOptions(tmpDir) {
         headroom: headroomPath,
         leanCtx: leanCtxPath,
         lcmDb: path.join(tmpDir, "missing-lcm.db"),
+        openclawConfig: openclawConfigPath,
       },
     },
   };
@@ -144,6 +151,7 @@ describe("cortex facade", () => {
       assert.strictEqual(state.gbrain.available, false);
       assert.deepStrictEqual(state.gauges, []);
       assert.strictEqual(state.gaugeSummary.sources, 0);
+      assert.strictEqual(state.contextEngine.engine, null);
 
       // Once the background collection finishes, the real payload is served
       // (no warming flag) straight from cache.
@@ -188,6 +196,10 @@ describe("cortex facade", () => {
       assert.strictEqual(state.gaugeSummary.available, 0);
       assert.strictEqual(state.gaugeSummary.sources, 3);
       assert.strictEqual(state.gaugeSummary.overallSavingsPct, null);
+
+      // No openclaw config on this host: engine unknown, with a reason.
+      assert.strictEqual(state.contextEngine.engine, null);
+      assert.ok(state.contextEngine.reason.includes("not found"));
     });
   });
 
@@ -214,6 +226,10 @@ describe("cortex facade", () => {
       assert.strictEqual(state.gaugeSummary.totalRawTokens, 1200);
       assert.strictEqual(state.gaugeSummary.totalEffectiveTokens, 750);
       assert.strictEqual(state.gaugeSummary.overallSavingsPct, 37.5);
+
+      // Active context engine resolved from plugins.slots.contextEngine.
+      assert.strictEqual(state.contextEngine.engine, "headroom");
+      assert.strictEqual(state.contextEngine.source, "plugins.slots.contextEngine");
     });
   });
 
