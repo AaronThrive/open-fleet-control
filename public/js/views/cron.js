@@ -102,10 +102,6 @@ function el(tag, className, text) {
   return node;
 }
 
-function isCronHidden(job) {
-  return typeof window.isCronHidden === "function" ? window.isCronHidden(job) : false;
-}
-
 /** Toast using the dashboard's global .toast styles. */
 function showToast(message, kind) {
   let host = document.querySelector(".toast-container");
@@ -197,17 +193,6 @@ function buildRowActions(els, row) {
       performAction(els, row.job, "run");
     });
     actions.appendChild(runBtn);
-  }
-
-  if (typeof window.quickHideCron === "function") {
-    const hideBtn = el("button", "cron-action-btn hide", "👁️");
-    hideBtn.type = "button";
-    hideBtn.title = t("views.cron.hideJob", {}, "Hide cron job");
-    hideBtn.addEventListener("click", () => {
-      window.quickHideCron(row.job.id || row.name || "", row.job.name || "");
-      renderRows(els);
-    });
-    actions.appendChild(hideBtn);
   }
 
   return actions.childElementCount > 0 ? actions : null;
@@ -372,17 +357,15 @@ function syncAgentFilter(els, jobs) {
 
 /** Re-apply the filter groups to currentJobs and push rows into the list. */
 function renderRows(els) {
-  const visible = currentJobs.filter((job) => !isCronHidden(job));
-  const filtered = filterCronJobs(visible, filters);
+  const filtered = filterCronJobs(currentJobs, filters);
   if (list) list.update(filtered.map(toCronRow));
-  updateFilterEmptyNote(els, filtered.length, visible.length);
+  updateFilterEmptyNote(els, filtered.length, currentJobs.length);
 }
 
 function render(els, jobs) {
   currentJobs = Array.isArray(jobs) ? jobs : [];
-  const visible = currentJobs.filter((job) => !isCronHidden(job));
-  els.headerCount.textContent = visible.length;
-  syncAgentFilter(els, visible);
+  els.headerCount.textContent = currentJobs.length;
+  syncAgentFilter(els, currentJobs);
   renderRows(els);
 }
 

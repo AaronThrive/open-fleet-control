@@ -124,6 +124,10 @@ function parseIntParam(query, name, fallback) {
  *   status summary for GET /api/fleet/secrets (refs + ok/failed counts,
  *   never values). Defaults to the shared process-wide resolver's
  *   getStatus(); injectable for tests.
+ * @param {function} [options.exitFn] - (code) => void used by the admin
+ *   restart route. Defaults to process.exit; tests MUST inject a fake.
+ * @param {number} [options.restartDelayMs] - delay before exitFn fires so
+ *   the restart response can flush (default 300ms).
  * @returns {{handle: function, isFleetRoute: function}}
  */
 function createFleetRoutes({
@@ -132,6 +136,8 @@ function createFleetRoutes({
   dispatch = null,
   rosterFn = null,
   secretsStatusFn = () => defaultSecrets.getStatus(),
+  exitFn = (code) => process.exit(code),
+  restartDelayMs = 300,
 }) {
   if (!fleet) throw new Error("createFleetRoutes requires a fleet runtime");
 
@@ -866,6 +872,40 @@ function createFleetRoutes({
   }
 
   // -------------------------------------------------------------------
+  // Admin (service lifecycle)
+  // -------------------------------------------------------------------
+
+  /**
+   * POST /api/fleet/admin/restart — restart the dashboard service.
+   *
+   * Responds { success: true, restartingInMs } immediately, then calls
+   * exitFn(1) (default process.exit(1)) after restartDelayMs so the
+   * response can flush first.
+   *
+   * DEPLOYMENT DEPENDENCY: this route relies on the systemd user unit
+   * (open-fleet-control) running with Restart=on-failure and RestartSec=5 —
+   * exit code 1 counts as a failure, so systemd respawns the service ~5s
+   * later and the "restart" completes cleanly. In a non-systemd context
+   * (plain `node lib/server.js`) the process just dies and stays down,
+   * which is why the UI shows a confirm dialog before calling this route
+   * and then polls /api/health until the service answers again.
+   */
+  async function handleAdmin(req, res, method, segments) {
+    if (segments[1] === "restart" && segments.length === 2 && method === "POST") {
+      const user = guardMutation(req, res);
+      if (!user) return true;
+      recordAudit(user, "service.restart", null, { restartingInMs: restartDelayMs });
+      json(res, 200, { success: true, restartingInMs: restartDelayMs });
+      const timer = setTimeout(() => exitFn(1), restartDelayMs);
+      // Never let the pending exit timer keep an otherwise-finished process
+      // (e.g. a test runner) alive.
+      if (typeof timer.unref === "function") timer.unref();
+      return true;
+    }
+    return false;
+  }
+
+  // -------------------------------------------------------------------
   // Request routing
   // -------------------------------------------------------------------
 
@@ -919,6 +959,8 @@ function createFleetRoutes({
         return handleAlerts(res, method, segments, query);
       case "settings":
         return handleSettings(req, res, method, segments);
+      case "admin":
+        return handleAdmin(req, res, method, segments);
       case "secrets":
         // Read-only 1Password resolution status: refs + ok/failed counts.
         // Never includes resolved values (see src/secrets.js getStatus()).

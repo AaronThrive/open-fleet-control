@@ -13,8 +13,8 @@
  *   alerts.config, memory.write, session.kill,
  *   cron.update, cron.run,
  *   settings.update, chat.publish, topic.status, operator.save,
- *   privacy.update, action.execute, alert.test, cache.clear,
- *   job.run, job.update
+ *   action.execute, alert.test, cache.clear,
+ *   job.run, job.update, service.restart
  *
  * Rotation: when audit.jsonl reaches 50MB it is renamed to
  * `audit.<date>.jsonl` (ISO timestamp, filesystem-safe) and a fresh file is
@@ -52,12 +52,12 @@ const AUDIT_ACTIONS = [
   "chat.publish",
   "topic.status",
   "operator.save",
-  "privacy.update",
   "action.execute",
   "alert.test",
   "cache.clear",
   "job.run",
   "job.update",
+  "service.restart",
 ];
 
 const ACTIVE_LOG = "audit.jsonl";

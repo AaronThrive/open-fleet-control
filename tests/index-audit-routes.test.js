@@ -4,7 +4,6 @@
  *   POST /api/cerebro/topic/:id/status → topic.status
  *   GET  /api/action?action=...        → action.execute
  *   POST /api/operators                → operator.save
- *   POST /api/privacy                  → privacy.update
  *
  * Boots the real bundled server (lib/server.js) with HOME + cerebro dir
  * pointed at a temp tree so no real OpenClaw data is touched, then asserts
@@ -190,20 +189,6 @@ describe("index.js route audit coverage", () => {
     assert.ok(!JSON.stringify(entry.detail).includes("Alice"));
   });
 
-  it("audits privacy settings saves as privacy.update (field names only)", async () => {
-    const res = await request(server.port, "POST", "/api/privacy", {
-      hideHostname: true,
-      hiddenTopics: ["secret-topic"],
-    });
-    assert.strictEqual(res.status, 200, res.raw);
-    assert.strictEqual(res.body.success, true);
-
-    const entry = readAuditEntries(server.logsDir).find((e) => e.action === "privacy.update");
-    assert.ok(entry, "audit.jsonl should contain a privacy.update entry");
-    assert.strictEqual(entry.user, USER);
-    assert.deepStrictEqual(entry.detail, { fields: ["hideHostname", "hiddenTopics"] });
-    assert.ok(!JSON.stringify(entry.detail).includes("secret-topic"));
-  });
 });
 
 describe("index.js route audit best-effort (audit write fails)", () => {
@@ -233,10 +218,6 @@ describe("index.js route audit best-effort (audit write fails)", () => {
       status: "parked",
     });
     assert.strictEqual(topic.status, 200, topic.raw);
-
-    const privacy = await request(server.port, "POST", "/api/privacy", { hideHostname: false });
-    assert.strictEqual(privacy.status, 200, privacy.raw);
-    assert.strictEqual(privacy.body.success, true);
 
     const action = await request(server.port, "GET", "/api/action?action=gateway-restart");
     assert.strictEqual(action.status, 200);

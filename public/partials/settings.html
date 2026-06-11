@@ -17,34 +17,62 @@
     color: var(--red);
   }
 
-  /* Amber restart-required banner */
+  /* Calm info banner: saved settings that apply after a service restart */
   #settings-view-section .set-restart-banner {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: 10px;
+    flex-wrap: wrap;
     margin-top: 16px;
     padding: 10px 14px;
     border-radius: 8px;
     font-size: 0.8rem;
-    background: rgba(255, 178, 36, 0.1);
-    border: 1px solid rgba(255, 178, 36, 0.5);
-    color: var(--yellow);
-  }
-  #settings-view-section .set-restart-banner code {
-    display: inline-block;
-    margin-top: 4px;
-    padding: 2px 8px;
-    border-radius: 6px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.74rem;
+    background: rgba(var(--accent-rgb), 0.08);
+    border: 1px solid rgba(var(--accent-rgb), 0.4);
     color: var(--text);
-    user-select: all;
+  }
+  #settings-view-section .set-restart-banner .set-restart-body {
+    flex: 1;
+    min-width: 200px;
   }
   #settings-view-section .set-restart-paths {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     word-break: break-word;
+  }
+
+  /* Full-screen "Restarting…" overlay shown while polling /api/health */
+  #settings-view-section .set-restart-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.65);
+  }
+  #settings-view-section .set-restart-overlay-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 28px 40px;
+    border-radius: 12px;
+    background: var(--card-hover);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 0.95rem;
+  }
+  #settings-view-section .set-restart-spinner {
+    font-size: 1.6rem;
+    animation: set-restart-spin 1.2s linear infinite;
+  }
+  @keyframes set-restart-spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   /* Section cards */
@@ -269,7 +297,7 @@
     color: var(--text-muted);
   }
 
-  /* Privacy hidden-item lists */
+  /* Compact value/remove row lists (budget per-provider limits) */
   #settings-view-section .set-priv-list {
     display: flex;
     flex-direction: column;
@@ -332,15 +360,23 @@
     </div>
     <div class="set-error" id="set-fetch-error" hidden></div>
 
-    <!-- Amber restart-required banner -->
+    <!-- Calm info banner: saved settings that take effect after a restart.
+         Text is set via t() in settings.js (inline English fallback) — no
+         data-i18n here so the runtime copy is the single source of truth. -->
     <div class="set-restart-banner" id="set-restart-banner" hidden>
-      <span>⚠️</span>
-      <div>
-        <div>
-          <span data-i18n="views.settings.restartBanner">Saved — restart required for:</span>
-          <span class="set-restart-paths" id="set-restart-paths"></span>
-        </div>
-        <code>systemctl --user restart open-fleet-control</code>
+      <span>✅</span>
+      <div class="set-restart-body">
+        <span id="set-restart-msg">Saved. These take effect after a restart:</span>
+        <span class="set-restart-paths" id="set-restart-paths"></span>
+      </div>
+      <button type="button" class="set-action-btn" id="set-restart-btn">🔄 Restart service</button>
+    </div>
+
+    <!-- Restarting overlay (shown by settings.js while polling /api/health) -->
+    <div class="set-restart-overlay" id="set-restart-overlay" hidden>
+      <div class="set-restart-overlay-box">
+        <span class="set-restart-spinner" aria-hidden="true">🔄</span>
+        <span id="set-restart-overlay-msg">Restarting…</span>
       </div>
     </div>
 
@@ -798,64 +834,6 @@
         <div class="set-inline-error" id="set-gate-error" hidden></div>
       </div>
 
-      <!-- ============================ Privacy =========================== -->
-      <div class="set-card">
-        <div class="set-card-head">
-          <button
-            type="button"
-            class="set-collapse-toggle"
-            data-collapse-toggle
-            aria-expanded="true"
-          >
-            <span class="set-collapse-chevron" aria-hidden="true">▼</span>
-            <span class="set-card-title" data-i18n="views.settings.privacyTitle">🔒 Privacy</span>
-          </button>
-          <button type="button" class="set-save-btn" id="set-privacy-save">Save privacy</button>
-        </div>
-
-        <div class="set-row">
-          <label class="set-toggle">
-            <input type="checkbox" id="set-priv-hide-hostname" />
-            <span data-i18n="views.settings.privacyHideHostname"
-              >Hide hostname (mask node hostnames in the UI)</span
-            >
-          </label>
-        </div>
-
-        <div class="set-subtitle" data-i18n="views.settings.privacyHiddenTopics">Hidden topics</div>
-        <div class="set-priv-list" id="set-priv-topics"></div>
-        <div
-          class="set-muted"
-          id="set-priv-topics-empty"
-          data-i18n="views.settings.privacyNoTopics"
-        >
-          No hidden topics.
-        </div>
-
-        <div class="set-subtitle" data-i18n="views.settings.privacyHiddenSessions">
-          Hidden sessions
-        </div>
-        <div class="set-priv-list" id="set-priv-sessions"></div>
-        <div
-          class="set-muted"
-          id="set-priv-sessions-empty"
-          data-i18n="views.settings.privacyNoSessions"
-        >
-          No hidden sessions.
-        </div>
-
-        <div class="set-subtitle" data-i18n="views.settings.privacyHiddenCrons">Hidden crons</div>
-        <div class="set-priv-list" id="set-priv-crons"></div>
-        <div class="set-muted" id="set-priv-crons-empty" data-i18n="views.settings.privacyNoCrons">
-          No hidden crons.
-        </div>
-
-        <div class="set-hint" data-i18n="views.settings.privacyHint">
-          Items are added via the quick-hide (👁️) actions on sessions, crons, and topics. Removing
-          an item here makes it visible again immediately.
-        </div>
-        <div class="set-inline-error" id="set-privacy-error" hidden></div>
-      </div>
     </div>
   </section>
 </div>

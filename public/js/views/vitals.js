@@ -39,10 +39,6 @@ function formatMemBytes(bytes) {
   return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(gb * 1024).toFixed(0)} MB`;
 }
 
-function isHostnameHidden() {
-  return typeof window.isHostnameHidden === "function" ? window.isHostnameHidden() : false;
-}
-
 function formatAge(ms) {
   if (!Number.isFinite(ms) || ms < 0) return "";
   if (ms < 5000) return "just now";
@@ -80,11 +76,6 @@ function render(els, vitals) {
 
   renderCollectedAge(els, vitals);
   setText(els, "hostname", vitals.hostname || "-");
-  if (els.hostname) {
-    // Respect the dashboard-wide hostname privacy setting
-    els.hostname.style.filter = isHostnameHidden() ? "blur(8px)" : "";
-    els.hostname.style.userSelect = isHostnameHidden() ? "none" : "";
-  }
   setText(els, "uptime", vitals.uptime || "-");
 
   // CPU

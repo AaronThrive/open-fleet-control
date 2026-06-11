@@ -62,15 +62,6 @@ describe("cerebro view pure helpers", () => {
       assert.strictEqual(rows[1].age, "—");
     });
 
-    it("drops privacy-hidden topics via the isHidden callback", async () => {
-      const { buildTopicRows } = await cerebroHelpers();
-      const rows = buildTopicRows(CEREBRO, (name) => name === "hidden-one");
-      assert.deepStrictEqual(
-        rows.map((r) => r.name),
-        ["alpha", "beta"],
-      );
-    });
-
     it("returns an empty list for missing/uninitialized payloads", async () => {
       const { buildTopicRows } = await cerebroHelpers();
       assert.deepStrictEqual(buildTopicRows(null), []);
