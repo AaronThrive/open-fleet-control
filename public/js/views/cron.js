@@ -1,5 +1,5 @@
 /**
- * Cron Jobs view module.
+ * Cron Jobs view module — dense detail-list ("neat file list") rendering.
  *
  * Loaded by views.js via dynamic import; `init(containerEl)` runs on every
  * visit of #view-cron and must be idempotent.
@@ -12,9 +12,14 @@
  * Real-time: listens for the `fleet:state` window event (fed by the page's
  * single /api/events EventSource) with a polling fallback.
  *
+ * Rendering: the shared detail-list component (sortable columns, text filter,
+ * expandable detail panel). The legacy filter button groups (status /
+ * schedule / source / agent) are preserved and applied to the row set before
+ * each list.update().
+ *
  * Write actions (openclaw-source jobs only): enable/disable toggle and
  * run-now (confirm dialog) via POST /api/cron/:id/{enable|disable|run}.
- * Updates are optimistic-but-verified — the card flips immediately and a
+ * Updates are optimistic-but-verified — the row flips immediately and a
  * re-fetch after the response is the source of truth. Hermes-source jobs
  * stay read-only.
  *
@@ -22,6 +27,7 @@
  */
 
 import { t } from "../utils.js";
+import { createDetailList } from "../components/detail-list.js";
 
 const POLL_MS = 30000;
 const SSE_FRESH_MS = 20000;
@@ -31,10 +37,62 @@ let stateListener = null;
 let requestSeq = 0;
 let lastSseAt = 0;
 let currentJobs = [];
+let list = null;
 const filters = { status: "all", schedule: "all", source: "all", agent: "all" };
 
 /* ------------------------------------------------------------------ */
-/* Helpers                                                             */
+/* Pure helpers (exported for node:test)                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Rough schedule classification from the cron expression for the
+ * frequent/daily/weekly filter.
+ */
+export function classifySchedule(job) {
+  const expr = String(job.schedule || "").trim();
+  const parts = expr.split(/\s+/);
+  if (parts.length < 5) return "other"; // "once", "—", etc.
+  const [minute, hour, , , dayOfWeek] = parts.slice(-5);
+  if (dayOfWeek !== "*" && dayOfWeek !== "?") return "weekly";
+  if (minute.includes("*") || minute.includes(",") || hour.includes("*") || hour.includes("/")) {
+    return "frequent";
+  }
+  return "daily";
+}
+
+/** Apply the filter-button groups (status/schedule/source/agent) to the jobs. */
+export function filterCronJobs(jobs, active) {
+  return jobs.filter((job) => {
+    const enabled = job.enabled !== false;
+    if (active.status === "enabled" && !enabled) return false;
+    if (active.status === "disabled" && enabled) return false;
+    if (active.schedule !== "all" && classifySchedule(job) !== active.schedule) return false;
+    const source = job.source === "hermes" ? "hermes" : "openclaw";
+    if (active.source !== "all" && source !== active.source) return false;
+    if (active.agent !== "all" && (job.agent || "") !== active.agent) return false;
+    return true;
+  });
+}
+
+/** Flatten a cron job onto the column keys the detail list sorts/filters by. */
+export function toCronRow(job) {
+  return {
+    id: job.id || job.name || "?",
+    name: job.name || job.id || "?",
+    scheduleHuman: job.scheduleHuman || job.schedule || "—",
+    schedule: job.schedule || "—",
+    nextRun: job.nextRun || "—",
+    lastStatus: job.lastStatus ? String(job.lastStatus) : "",
+    agent: job.agent || "",
+    node: job.node || "",
+    source: job.source === "hermes" ? "hermes" : "openclaw",
+    enabled: job.enabled !== false,
+    job,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* DOM helpers                                                         */
 /* ------------------------------------------------------------------ */
 
 function el(tag, className, text) {
@@ -58,22 +116,6 @@ function showToast(message, kind) {
   const toast = el("div", `toast ${kind === "error" ? "error" : "success"}`, message);
   host.appendChild(toast);
   setTimeout(() => toast.remove(), 5000);
-}
-
-/**
- * Rough schedule classification from the cron expression for the
- * frequent/daily/weekly filter.
- */
-function classifySchedule(job) {
-  const expr = String(job.schedule || "").trim();
-  const parts = expr.split(/\s+/);
-  if (parts.length < 5) return "other"; // "once", "—", etc.
-  const [minute, hour, , , dayOfWeek] = parts.slice(-5);
-  if (dayOfWeek !== "*" && dayOfWeek !== "?") return "weekly";
-  if (minute.includes("*") || minute.includes(",") || hour.includes("*") || hour.includes("/")) {
-    return "frequent";
-  }
-  return "daily";
 }
 
 /* ------------------------------------------------------------------ */
@@ -114,154 +156,173 @@ async function performAction(els, job, action) {
     );
   } finally {
     // Verified update: re-fetch regardless of outcome (reverts bad optimism).
-    if (els.grid.isConnected) load(els);
+    if (els.listHost.isConnected) load(els);
   }
 }
 
-/** Build the per-job action buttons (openclaw-source jobs only). */
-function buildActions(els, job, card) {
+/** Per-row actions cell: enable/disable + ▶ run-now (openclaw only) + hide. */
+function buildRowActions(els, row) {
   const actions = el("div", "cron-actions");
 
-  const toggleBtn = el(
-    "button",
-    "cron-action-btn toggle",
-    job.enabled !== false
-      ? t("views.cron.actionDisable", {}, "⏸ Disable")
-      : t("views.cron.actionEnable", {}, "✓ Enable"),
-  );
-  toggleBtn.type = "button";
-  toggleBtn.addEventListener("click", (event) => {
-    event.stopPropagation();
-    const action = job.enabled !== false ? "disable" : "enable";
-    actions.querySelectorAll("button").forEach((btn) => (btn.disabled = true));
-    // Optimistic: flip the card state immediately; load() verifies/reverts.
-    card.classList.toggle("disabled", action === "disable");
-    card.dataset.enabled = action === "enable" ? "true" : "false";
-    performAction(els, job, action);
-  });
-  actions.appendChild(toggleBtn);
-
-  const runBtn = el("button", "cron-action-btn run", t("views.cron.actionRun", {}, "▶ Run now"));
-  runBtn.type = "button";
-  runBtn.addEventListener("click", (event) => {
-    event.stopPropagation();
-    const name = job.name || job.id;
-    const ok = window.confirm(
-      t("views.cron.runConfirm", { name }, 'Run "{name}" now? The job executes immediately.'),
+  if (row.source === "openclaw" && row.job.id) {
+    const toggleBtn = el(
+      "button",
+      "cron-action-btn toggle",
+      row.enabled
+        ? t("views.cron.actionDisable", {}, "⏸ Disable")
+        : t("views.cron.actionEnable", {}, "✓ Enable"),
     );
-    if (!ok) return;
-    actions.querySelectorAll("button").forEach((btn) => (btn.disabled = true));
-    performAction(els, job, "run");
-  });
-  actions.appendChild(runBtn);
+    toggleBtn.type = "button";
+    toggleBtn.addEventListener("click", () => {
+      const action = row.enabled ? "disable" : "enable";
+      actions.querySelectorAll("button").forEach((btn) => (btn.disabled = true));
+      // Optimistic: flip the row state immediately; load() verifies/reverts.
+      currentJobs = currentJobs.map((job) =>
+        job === row.job ? { ...job, enabled: action === "enable" } : job,
+      );
+      renderRows(els);
+      performAction(els, row.job, action);
+    });
+    actions.appendChild(toggleBtn);
 
-  return actions;
+    const runBtn = el("button", "cron-action-btn run", t("views.cron.actionRun", {}, "▶ Run now"));
+    runBtn.type = "button";
+    runBtn.addEventListener("click", () => {
+      const name = row.name;
+      const ok = window.confirm(
+        t("views.cron.runConfirm", { name }, 'Run "{name}" now? The job executes immediately.'),
+      );
+      if (!ok) return;
+      actions.querySelectorAll("button").forEach((btn) => (btn.disabled = true));
+      performAction(els, row.job, "run");
+    });
+    actions.appendChild(runBtn);
+  }
+
+  if (typeof window.quickHideCron === "function") {
+    const hideBtn = el("button", "cron-action-btn hide", "👁️");
+    hideBtn.type = "button";
+    hideBtn.title = t("views.cron.hideJob", {}, "Hide cron job");
+    hideBtn.addEventListener("click", () => {
+      window.quickHideCron(row.job.id || row.name || "", row.job.name || "");
+      renderRows(els);
+    });
+    actions.appendChild(hideBtn);
+  }
+
+  return actions.childElementCount > 0 ? actions : null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Detail-list configuration                                           */
+/* ------------------------------------------------------------------ */
+
+function statusBadge(row) {
+  const status = row.lastStatus;
+  const cls = status === "ok" || status === "success" ? "ok" : status ? "error" : "unknown";
+  return el(
+    "span",
+    `cron-last-status ${cls}`,
+    status ? status : t("views.cron.neverRan", {}, "no runs yet"),
+  );
+}
+
+function sourceBadge(row) {
+  return el("span", "cron-badge source", row.source === "hermes" ? "Hermes" : "OpenClaw");
+}
+
+function enabledBadge(row) {
+  return el(
+    "span",
+    `cron-status ${row.enabled ? "enabled" : "disabled"}`,
+    row.enabled
+      ? t("views.cron.enabled", {}, "✓ Enabled")
+      : t("views.cron.disabled", {}, "○ Disabled"),
+  );
+}
+
+/** Expanded panel: raw cron expression, job id, source, last status detail. */
+function buildDetail(row) {
+  const panel = el("div", "cron-detail");
+  const add = (label, value, mono) => {
+    const item = el("div", "cron-detail-item");
+    item.appendChild(el("span", "cron-detail-label", label));
+    item.appendChild(el("span", `cron-detail-value${mono ? " mono" : ""}`, value));
+    panel.appendChild(item);
+  };
+  add(t("views.cron.detailExpression", {}, "Cron expression"), row.schedule, true);
+  add(t("views.cron.detailJobId", {}, "Job id"), row.job.id || "—", true);
+  add(t("views.cron.detailSource", {}, "Source"), row.source === "hermes" ? "Hermes" : "OpenClaw");
+  add(
+    t("views.cron.detailLastStatus", {}, "Last status"),
+    row.lastStatus || t("views.cron.neverRan", {}, "no runs yet"),
+  );
+  if (row.node) add(t("views.cron.detailNode", {}, "Node"), row.node);
+  if (row.agent) add(t("views.cron.detailAgent", {}, "Agent"), row.agent);
+  return panel;
+}
+
+function buildList(els) {
+  if (list) {
+    list.destroy();
+    list = null;
+  }
+  els.listHost.replaceChildren();
+  list = createDetailList(els.listHost, {
+    columns: [
+      { key: "name", label: t("views.cron.colName", {}, "Name"), sortable: true },
+      { key: "scheduleHuman", label: t("views.cron.colSchedule", {}, "Schedule"), sortable: true },
+      { key: "nextRun", label: t("views.cron.colNextRun", {}, "Next run"), sortable: true },
+      {
+        key: "lastStatus",
+        label: t("views.cron.colLastStatus", {}, "Last status"),
+        sortable: true,
+        render: statusBadge,
+      },
+      { key: "agent", label: t("views.cron.colAgent", {}, "Agent"), sortable: true },
+      { key: "node", label: t("views.cron.colNode", {}, "Node"), sortable: true },
+      {
+        key: "source",
+        label: t("views.cron.colSource", {}, "Source"),
+        sortable: true,
+        render: sourceBadge,
+      },
+      {
+        key: "enabled",
+        label: t("views.cron.colEnabled", {}, "Enabled"),
+        sortable: true,
+        render: enabledBadge,
+      },
+    ],
+    getRowId: (row) => row.id,
+    renderDetail: buildDetail,
+    renderActions: (row) => buildRowActions(els, row),
+    // The empty/filtered states are explained by #cron-view-filter-empty.
+    emptyText: "",
+    filterKeys: ["name", "scheduleHuman", "schedule", "nextRun", "agent", "node", "source"],
+    filterPlaceholder: t("views.cron.filterPlaceholder", {}, "Filter jobs…"),
+    defaultSort: { key: "name", dir: "asc" },
+  });
 }
 
 /* ------------------------------------------------------------------ */
 /* Rendering                                                           */
 /* ------------------------------------------------------------------ */
 
-function buildCard(els, job) {
-  const card = el("div", `cron-card ${job.enabled === false ? "disabled" : ""}`);
-  const source = job.source === "hermes" ? "hermes" : "openclaw";
-  card.dataset.enabled = job.enabled !== false ? "true" : "false";
-  card.dataset.schedule = classifySchedule(job);
-  card.dataset.source = source;
-  card.dataset.agent = job.agent || "";
-
-  card.appendChild(el("div", "cron-icon", "⏰"));
-
-  const info = el("div", "cron-info");
-  info.appendChild(el("div", "cron-name", job.name || job.id || "?"));
-  info.appendChild(el("div", "cron-schedule", job.schedule || "—"));
-  if (job.scheduleHuman) {
-    info.appendChild(el("div", "cron-schedule-human", job.scheduleHuman));
-  }
-
-  const badges = el("div", "cron-badges");
-  if (job.agent) badges.appendChild(el("span", "cron-badge agent", job.agent));
-  if (job.node) badges.appendChild(el("span", "cron-badge node", job.node));
-  badges.appendChild(el("span", "cron-badge source", source === "hermes" ? "Hermes" : "OpenClaw"));
-  info.appendChild(badges);
-  card.appendChild(info);
-
-  const meta = el("div", "cron-meta");
-  meta.appendChild(
-    el(
-      "span",
-      `cron-status ${job.enabled !== false ? "enabled" : "disabled"}`,
-      job.enabled !== false
-        ? t("views.cron.enabled", {}, "✓ Enabled")
-        : t("views.cron.disabled", {}, "○ Disabled"),
-    ),
-  );
-
-  const lastStatus = job.lastStatus ? String(job.lastStatus) : "";
-  const statusClass =
-    lastStatus === "ok" || lastStatus === "success" ? "ok" : lastStatus ? "error" : "unknown";
-  meta.appendChild(
-    el(
-      "span",
-      `cron-last-status ${statusClass}`,
-      lastStatus
-        ? t("views.cron.lastStatus", { status: lastStatus }, "last: {status}")
-        : t("views.cron.neverRan", {}, "no runs yet"),
-    ),
-  );
-  meta.appendChild(el("div", "cron-next", `⏭ ${job.nextRun || "—"}`));
-
-  if (typeof window.quickHideCron === "function") {
-    const hideBtn = el("button", "hide-btn", "👁️");
-    hideBtn.type = "button";
-    hideBtn.title = t("views.cron.hideJob", {}, "Hide cron job");
-    hideBtn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      window.quickHideCron(job.id || job.name || "", job.name || "");
-      card.remove();
-    });
-    meta.appendChild(hideBtn);
-  }
-  card.appendChild(meta);
-
-  // Write actions are openclaw-source only; Hermes jobs are read-only.
-  if (source === "openclaw" && job.id) {
-    card.appendChild(buildActions(els, job, card));
-  }
-  return card;
-}
-
-function applyFilters(els) {
-  let shown = 0;
-  els.grid.querySelectorAll(".cron-card").forEach((card) => {
-    const enabled = card.dataset.enabled === "true";
-    const showStatus =
-      filters.status === "all" ||
-      (filters.status === "enabled" && enabled) ||
-      (filters.status === "disabled" && !enabled);
-    const showSchedule = filters.schedule === "all" || card.dataset.schedule === filters.schedule;
-    const showSource = filters.source === "all" || card.dataset.source === filters.source;
-    const showAgent = filters.agent === "all" || card.dataset.agent === filters.agent;
-    const show = showStatus && showSchedule && showSource && showAgent;
-    if (show) shown += 1;
-    card.classList.toggle("hidden-by-filter", !show);
-  });
-  updateFilterEmptyNote(els, shown);
-}
-
 /**
- * When the active filters hide every card, explain why instead of showing a
- * silently blank grid. The Hermes source slot stays selectable even when no
+ * When the active filters hide every row, explain why instead of showing a
+ * silently blank list. The Hermes source slot stays selectable even when no
  * Hermes scheduled tasks exist yet — it renders empty with a note.
  */
-function updateFilterEmptyNote(els, shownCount) {
+function updateFilterEmptyNote(els, shownCount, totalCount) {
   if (!els.filterEmpty) return;
-  const hasCards = els.grid.querySelector(".cron-card") !== null;
-  if (!hasCards || shownCount > 0) {
+  if (shownCount > 0) {
     els.filterEmpty.hidden = true;
     return;
   }
-  if (filters.source === "hermes") {
+  if (totalCount === 0) {
+    els.filterEmpty.textContent = t("views.cron.empty", {}, "No scheduled jobs");
+  } else if (filters.source === "hermes") {
     els.filterEmpty.textContent = t(
       "views.cron.hermesEmpty",
       {},
@@ -300,7 +361,7 @@ function syncAgentFilter(els, jobs) {
       group
         .querySelectorAll(".filter-btn")
         .forEach((other) => other.classList.toggle("active", other === btn));
-      applyFilters(els);
+      renderRows(els);
     });
     return btn;
   };
@@ -309,24 +370,20 @@ function syncAgentFilter(els, jobs) {
   agents.forEach((agent) => group.appendChild(makeButton(agent, agent)));
 }
 
+/** Re-apply the filter groups to currentJobs and push rows into the list. */
+function renderRows(els) {
+  const visible = currentJobs.filter((job) => !isCronHidden(job));
+  const filtered = filterCronJobs(visible, filters);
+  if (list) list.update(filtered.map(toCronRow));
+  updateFilterEmptyNote(els, filtered.length, visible.length);
+}
+
 function render(els, jobs) {
   currentJobs = Array.isArray(jobs) ? jobs : [];
   const visible = currentJobs.filter((job) => !isCronHidden(job));
   els.headerCount.textContent = visible.length;
   syncAgentFilter(els, visible);
-
-  if (visible.length === 0) {
-    const empty = el("div", "empty-state");
-    empty.appendChild(el("div", "empty-state-icon", "⏰"));
-    empty.appendChild(
-      el("div", "empty-state-text", t("views.cron.empty", {}, "No scheduled jobs")),
-    );
-    els.grid.replaceChildren(empty);
-    updateFilterEmptyNote(els, 0);
-    return;
-  }
-  els.grid.replaceChildren(...visible.map((job) => buildCard(els, job)));
-  applyFilters(els);
+  renderRows(els);
 }
 
 /* ------------------------------------------------------------------ */
@@ -338,12 +395,12 @@ async function load(els) {
   try {
     const response = await fetch("/api/cron");
     const payload = await response.json();
-    if (seq !== requestSeq || !els.grid.isConnected) return;
+    if (seq !== requestSeq || !els.listHost.isConnected) return;
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     els.error.hidden = true;
     render(els, payload.cron || []);
   } catch (error) {
-    if (seq !== requestSeq || !els.grid.isConnected) return;
+    if (seq !== requestSeq || !els.listHost.isConnected) return;
     els.error.hidden = false;
     els.error.textContent = t(
       "views.cron.loadError",
@@ -366,6 +423,10 @@ function teardown() {
     window.removeEventListener("fleet:state", stateListener);
     stateListener = null;
   }
+  if (list) {
+    list.destroy();
+    list = null;
+  }
 }
 
 /**
@@ -380,7 +441,7 @@ export function init(container) {
   filters.agent = "all";
 
   const els = {
-    grid: container.querySelector("#cron-view-grid"),
+    listHost: container.querySelector("#cron-view-list"),
     headerCount: container.querySelector("#cron-view-count"),
     error: container.querySelector("#cron-view-error"),
     filtersBar: container.querySelector("#cron-view-filters"),
@@ -392,6 +453,8 @@ export function init(container) {
   // Optional element (added with the dual-source layout); absence is fine.
   els.filterEmpty = container.querySelector("#cron-view-filter-empty");
 
+  buildList(els);
+
   els.filtersBar.querySelectorAll(".filter-group").forEach((group) => {
     const groupName = group.dataset.filterGroup;
     // The agent group is rebuilt dynamically from data in syncAgentFilter().
@@ -402,13 +465,13 @@ export function init(container) {
         group
           .querySelectorAll(".filter-btn")
           .forEach((other) => other.classList.toggle("active", other === btn));
-        applyFilters(els);
+        renderRows(els);
       });
     });
   });
 
   stateListener = (event) => {
-    if (!els.grid.isConnected) {
+    if (!els.listHost.isConnected) {
       teardown();
       return;
     }
@@ -421,7 +484,7 @@ export function init(container) {
   window.addEventListener("fleet:state", stateListener);
 
   pollTimer = setInterval(() => {
-    if (!els.grid.isConnected) {
+    if (!els.listHost.isConnected) {
       teardown();
       return;
     }
