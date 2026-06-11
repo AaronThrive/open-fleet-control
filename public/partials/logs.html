@@ -193,6 +193,15 @@
       white-space: pre-wrap;
       word-break: break-word;
     }
+    #logs-view-section .logs-pagination {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 10px;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
     @media (max-width: 900px) {
       #logs-view-section .logs-table-head {
         display: none;
@@ -219,42 +228,28 @@
     <div class="logs-filter-bar" id="logs-filter-bar">
       <div class="logs-filter-field">
         <label for="logs-filter-user" data-i18n="views.logs.filterUser">User</label>
-        <input type="text" id="logs-filter-user" placeholder="user@tailnet" autocomplete="off" />
+        <input
+          type="text"
+          id="logs-filter-user"
+          placeholder="user@tailnet"
+          autocomplete="off"
+          list="logs-actor-options"
+        />
+        <!-- Actor suggestions populated by logs.js from the entries present -->
+        <datalist id="logs-actor-options"></datalist>
       </div>
       <div class="logs-filter-field">
         <label for="logs-filter-action" data-i18n="views.logs.filterAction">Action</label>
+        <!-- Options after "All actions" are populated dynamically by logs.js
+             from the actions present in the trail (not hardcoded). -->
         <select id="logs-filter-action">
           <option value="" data-i18n="views.logs.allActions">All actions</option>
-          <optgroup label="Tasks">
-            <option value="task.create">task.create</option>
-            <option value="task.move">task.move</option>
-            <option value="task.update">task.update</option>
-            <option value="task.delete">task.delete</option>
-            <option value="task.comment">task.comment</option>
-          </optgroup>
-          <optgroup label="Briefs">
-            <option value="brief.write">brief.write</option>
-            <option value="brief.delete">brief.delete</option>
-          </optgroup>
-          <optgroup label="Lessons">
-            <option value="lesson.add">lesson.add</option>
-            <option value="lesson.approve">lesson.approve</option>
-            <option value="lesson.reject">lesson.reject</option>
-          </optgroup>
-          <optgroup label="Gates">
-            <option value="gate.toggle">gate.toggle</option>
-          </optgroup>
-          <optgroup label="Nodes">
-            <option value="node.register">node.register</option>
-            <option value="node.unregister">node.unregister</option>
-          </optgroup>
-          <optgroup label="Alerts">
-            <option value="alerts.config">alerts.config</option>
-          </optgroup>
-          <optgroup label="Memory">
-            <option value="memory.write">memory.write</option>
-          </optgroup>
         </select>
+      </div>
+      <div class="logs-filter-field">
+        <!-- Label text set by logs.js via t() (key not in en.json yet) -->
+        <label for="logs-filter-search" id="logs-filter-search-label">Search</label>
+        <input type="text" id="logs-filter-search" placeholder="free text…" autocomplete="off" />
       </div>
       <div class="logs-filter-field">
         <label for="logs-filter-since" data-i18n="views.logs.filterSince">Since</label>
@@ -308,6 +303,13 @@
         <span></span>
       </div>
       <div id="logs-rows"></div>
+    </div>
+
+    <!-- Pagination over the filtered result set (labels set by logs.js) -->
+    <div class="logs-pagination" id="logs-pagination" hidden>
+      <button class="btn-secondary" id="logs-page-prev" type="button">← Prev</button>
+      <span id="logs-page-info">Page 1 / 1</span>
+      <button class="btn-secondary" id="logs-page-next" type="button">Next →</button>
     </div>
 
     <div class="empty-state" id="logs-empty-state">

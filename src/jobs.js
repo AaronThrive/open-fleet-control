@@ -15,6 +15,37 @@ const JOBS_STATE_DIR = path.join(CONFIG.paths.state, "jobs");
 let apiInstance = null;
 let forceApiUnavailable = false; // For testing
 let cronFallbackFn = null; // () => cron jobs; injected by index.js (see setCronFallback)
+let auditRecordFn = null; // (entry) => void; injected by index.js (see setAuditRecorder)
+
+const IDENTITY_HEADER = "tailscale-user-login";
+
+/** Identity from the Tailscale Serve header (fallback "anonymous"). */
+function getUser(req) {
+  const login = req && req.headers ? req.headers[IDENTITY_HEADER] : undefined;
+  return typeof login === "string" && login.trim().length > 0
+    ? login.trim().toLowerCase()
+    : "anonymous";
+}
+
+/** Best-effort audit record — an audit failure never fails the request. */
+function recordAudit(req, action, target, detail) {
+  if (typeof auditRecordFn !== "function") return;
+  try {
+    auditRecordFn({ user: getUser(req), action, target, detail });
+  } catch (e) {
+    console.error("[Jobs] Audit record failed:", e.message);
+  }
+}
+
+/**
+ * Inject the audit recorder (the fleet runtime's audit.record). Mutating
+ * jobs routes (run/pause/resume/skip/kill + cache clear) record entries
+ * through it; when absent, auditing is silently skipped.
+ * @param {(entry: object) => void} fn
+ */
+function setAuditRecorder(fn) {
+  auditRecordFn = fn;
+}
 
 /**
  * Initialize the jobs API (lazy-loaded due to ESM)
@@ -40,11 +71,13 @@ async function getAPI() {
  * Reset API state for testing purposes
  * @param {Object} options - Reset options
  * @param {boolean} options.forceUnavailable - If true, getAPI() will return null
+ * @param {Object} options.api - Inject a fake jobs API instance
  */
 function _resetForTesting(options = {}) {
-  apiInstance = null;
+  apiInstance = options.api || null;
   forceApiUnavailable = options.forceUnavailable || false;
   cronFallbackFn = null;
+  auditRecordFn = null;
 }
 
 /**
@@ -219,6 +252,7 @@ async function handleJobsRequest(req, res, pathname, query, method) {
     // Clear cache: POST /api/jobs/cache/clear (before single job route)
     if (pathname === "/api/jobs/cache/clear" && method === "POST") {
       api.clearCache();
+      recordAudit(req, "cache.clear", "jobs", null);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ success: true, message: "Cache cleared" }));
       return;
@@ -291,6 +325,7 @@ async function handleJobsRequest(req, res, pathname, query, method) {
     if (runMatch && method === "POST") {
       const jobId = decodeURIComponent(runMatch[1]);
       const result = await api.runJob(jobId);
+      recordAudit(req, "job.run", jobId, { success: !!result.success });
 
       res.writeHead(result.success ? 200 : 400, { "Content-Type": "application/json" });
       res.end(JSON.stringify(result, null, 2));
@@ -321,6 +356,7 @@ async function handleJobsRequest(req, res, pathname, query, method) {
         by: req.authUser?.login || "dashboard",
         reason,
       });
+      recordAudit(req, "job.update", jobId, { op: "pause" });
 
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(result, null, 2));
@@ -332,6 +368,7 @@ async function handleJobsRequest(req, res, pathname, query, method) {
     if (resumeMatch && method === "POST") {
       const jobId = decodeURIComponent(resumeMatch[1]);
       const result = await api.resumeJob(jobId);
+      recordAudit(req, "job.update", jobId, { op: "resume" });
 
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(result, null, 2));
@@ -343,6 +380,7 @@ async function handleJobsRequest(req, res, pathname, query, method) {
     if (skipMatch && method === "POST") {
       const jobId = decodeURIComponent(skipMatch[1]);
       const result = await api.skipJob(jobId);
+      recordAudit(req, "job.update", jobId, { op: "skip" });
 
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(result, null, 2));
@@ -354,6 +392,7 @@ async function handleJobsRequest(req, res, pathname, query, method) {
     if (killMatch && method === "POST") {
       const jobId = decodeURIComponent(killMatch[1]);
       const result = await api.killJob(jobId);
+      recordAudit(req, "job.update", jobId, { op: "kill" });
 
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(result, null, 2));
@@ -377,4 +416,10 @@ function isJobsRoute(pathname) {
   return pathname.startsWith("/api/jobs");
 }
 
-module.exports = { handleJobsRequest, isJobsRoute, setCronFallback, _resetForTesting };
+module.exports = {
+  handleJobsRequest,
+  isJobsRoute,
+  setCronFallback,
+  setAuditRecorder,
+  _resetForTesting,
+};

@@ -71,6 +71,24 @@ describe("audit module", () => {
       assert.strictEqual(audit.query({ action: "session.kill" }).length, 1);
     });
 
+    it("includes the v2.1 audit-everything actions in the enum", () => {
+      const added = [
+        "settings.update",
+        "chat.publish",
+        "topic.status",
+        "operator.save",
+        "privacy.update",
+        "action.execute",
+        "alert.test",
+        "cache.clear",
+        "job.run",
+        "job.update",
+      ];
+      for (const action of added) {
+        assert.ok(AUDIT_ACTIONS.includes(action), `${action} should be a documented action`);
+      }
+    });
+
     it("rejects non-string user and target", () => {
       assert.throws(() => audit.record({ action: "task.create", user: 42 }), /user/);
       assert.throws(() => audit.record({ action: "task.create", target: {} }), /target/);
