@@ -53,6 +53,109 @@
       font-size: 0.8rem;
       margin-bottom: 8px;
     }
+    /* ---- Detail-list cells (status / tokens / activity badges) ---- */
+    #sessions-view-section .sess-status {
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 10px;
+      white-space: nowrap;
+    }
+    #sessions-view-section .sess-status.live {
+      color: var(--green, #3fb950);
+      background: rgba(63, 185, 80, 0.12);
+      border: 1px solid rgba(63, 185, 80, 0.45);
+    }
+    #sessions-view-section .sess-status.recent {
+      color: var(--yellow, #d29922);
+      background: rgba(210, 153, 34, 0.12);
+      border: 1px solid rgba(210, 153, 34, 0.45);
+    }
+    #sessions-view-section .sess-status.idle {
+      color: var(--text-muted);
+      background: var(--bg);
+      border: 1px solid var(--border);
+    }
+    #sessions-view-section .sess-tokens {
+      font-variant-numeric: tabular-nums;
+    }
+    #sessions-view-section .sess-tokens.med {
+      color: var(--yellow, #d29922);
+    }
+    #sessions-view-section .sess-tokens.high {
+      color: var(--red, #f85149);
+    }
+    #sessions-view-section .sess-activity-live {
+      color: var(--green, #3fb950);
+    }
+    #sessions-view-section .sess-actions {
+      display: inline-flex;
+      gap: 6px;
+    }
+    /* ---- Expanded per-row detail panel ---- */
+    #sessions-view-section .sess-detail {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    #sessions-view-section .sess-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 8px 18px;
+    }
+    #sessions-view-section .sess-detail-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    #sessions-view-section .sess-detail-label {
+      font-size: 0.64rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    #sessions-view-section .sess-detail-value {
+      font-size: 0.78rem;
+      color: var(--text);
+      overflow-wrap: anywhere;
+    }
+    #sessions-view-section .sess-detail-value.mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--purple, #a371f7);
+    }
+    #sessions-view-section .sess-detail-deep {
+      font-size: 0.74rem;
+      color: var(--text-muted);
+      border-top: 1px dashed var(--border);
+      padding-top: 8px;
+    }
+    #sessions-view-section .sess-detail-summary {
+      font-size: 0.74rem;
+      color: var(--text-muted);
+      margin-top: 6px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    #sessions-view-section .sess-detail-raw summary {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      cursor: pointer;
+      user-select: none;
+    }
+    #sessions-view-section .sess-detail-raw pre {
+      margin: 6px 0 0;
+      padding: 8px;
+      font-size: 0.7rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 320px;
+      overflow-y: auto;
+    }
     #sessions-view-section .sessions-inline-detail {
       margin-top: 14px;
       padding: 14px;
@@ -425,32 +528,8 @@
 
     <div class="sessions-error" id="sessions-view-error" hidden></div>
 
-    <div class="card-grid" id="sessions-view-grid">
-      <div class="skeleton-card">
-        <div class="skeleton-header">
-          <div class="skeleton-circle"></div>
-          <div style="flex: 1">
-            <div class="skeleton-bar title"></div>
-            <div class="skeleton-bar subtitle"></div>
-          </div>
-          <div class="skeleton-badge"></div>
-        </div>
-        <div class="skeleton-bar text"></div>
-        <div class="skeleton-bar text short"></div>
-      </div>
-      <div class="skeleton-card">
-        <div class="skeleton-header">
-          <div class="skeleton-circle"></div>
-          <div style="flex: 1">
-            <div class="skeleton-bar title"></div>
-            <div class="skeleton-bar subtitle"></div>
-          </div>
-          <div class="skeleton-badge"></div>
-        </div>
-        <div class="skeleton-bar text"></div>
-        <div class="skeleton-bar text short"></div>
-      </div>
-    </div>
+    <!-- Detail list host (built by views/sessions.js via the shared component) -->
+    <div id="sessions-view-list"></div>
 
     <div class="pagination" id="sessions-view-pagination" style="display: none">
       <button class="pagination-btn" id="sessions-view-prev" type="button">← Prev</button>
