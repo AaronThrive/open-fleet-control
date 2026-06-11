@@ -115,6 +115,8 @@ function parseIntParam(query, name, fallback) {
  *   omitted the /api/fleet/settings routes respond 404
  * @param {object} [options.dispatch] - module from createDispatch(); when
  *   omitted the kanban dispatch routes respond 503 (clean "not configured")
+ * @param {object} [options.bulk] - module from createBulk(); when omitted
+ *   POST /api/fleet/bulk responds 503 (clean "not configured")
  * @param {function} [options.rosterFn] - () => local roster ({agents:[{id}]})
  *   or a Promise of one (agents-roster getLocalRoster); when provided, the
  *   dispatch agent must exist in it. Wiring (src/index.js):
@@ -134,6 +136,7 @@ function createFleetRoutes({
   fleet,
   settings = null,
   dispatch = null,
+  bulk = null,
   rosterFn = null,
   secretsStatusFn = () => defaultSecrets.getStatus(),
   exitFn = (code) => process.exit(code),
@@ -872,6 +875,50 @@ function createFleetRoutes({
   }
 
   // -------------------------------------------------------------------
+  // Bulk operations (src/bulk.js)
+  // -------------------------------------------------------------------
+
+  /**
+   * POST /api/fleet/bulk { action, targets, params } — fan one operation
+   * across N fleet targets. One rate-limit token and ONE audit entry per
+   * call (action.execute, detail.kind="bulk" carries the targets list —
+   * AUDIT_ACTIONS is a closed enum we deliberately do not extend); the
+   * response carries per-target { target, ok, detail } results and partial
+   * failures never abort the rest (src/bulk.js contract).
+   */
+  async function handleBulk(req, res, method, segments) {
+    if (segments.length !== 1 || method !== "POST") return false;
+    if (!bulk) {
+      json(res, 503, { error: "Bulk operations are not configured on this node" });
+      return true;
+    }
+    const user = guardMutation(req, res);
+    if (!user) return true;
+    const body = await readJsonBody(req);
+    const report = await bulk.execute({
+      action: body.action,
+      targets: body.targets,
+      params: body.params,
+      actor: user,
+    });
+    recordAudit(user, "action.execute", report.action, {
+      kind: "bulk",
+      targets: report.targets,
+      okCount: report.okCount,
+      failCount: report.failCount,
+    });
+    json(res, 200, {
+      success: true,
+      action: report.action,
+      targets: report.targets,
+      okCount: report.okCount,
+      failCount: report.failCount,
+      results: report.results,
+    });
+    return true;
+  }
+
+  // -------------------------------------------------------------------
   // Admin (service lifecycle)
   // -------------------------------------------------------------------
 
@@ -959,6 +1006,8 @@ function createFleetRoutes({
         return handleAlerts(res, method, segments, query);
       case "settings":
         return handleSettings(req, res, method, segments);
+      case "bulk":
+        return handleBulk(req, res, method, segments);
       case "admin":
         return handleAdmin(req, res, method, segments);
       case "secrets":

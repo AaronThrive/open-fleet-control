@@ -91,6 +91,7 @@ const {
 } = require("./tokens");
 const { getLlmUsage, getRoutingStats, startLlmUsageRefresh } = require("./llm-usage");
 const { executeAction } = require("./actions");
+const { createBulk } = require("./bulk");
 const { migrateDataDir } = require("./data");
 const { createStateModule } = require("./state");
 const { createFleetRuntime } = require("./fleet");
@@ -252,10 +253,31 @@ const dispatch = createDispatch({
   fireAlert: (event) => fleet.fireAlert(event),
 });
 
+// Quick-action runner deps (src/actions.js): async CLI runner + the cached
+// sessions backend for stale counting. Shared by /api/action and bulk ops.
+const actionDeps = {
+  runOpenClawAsync,
+  extractJSON,
+  PORT,
+  getRawSessions: () => sessions.getRawSessionsCached(),
+};
+
+// Fleet bulk operations (src/bulk.js): POST /api/fleet/bulk fans quick
+// actions / dispatches / chat publishes across N targets with per-target
+// results. Local node work reuses the quick-action runner above.
+const bulk = createBulk({
+  mesh: fleet.mesh,
+  chat: fleet.chat,
+  dispatch,
+  rosterFn: () => agentsRoster.getLocalRoster(),
+  runAction: (name, opts) => executeAction(name, actionDeps, opts),
+});
+
 const fleetRoutes = createFleetRoutes({
   fleet,
   settings,
   dispatch,
+  bulk,
   // Lazy closure: agentsRoster is constructed further down; routes only call
   // this at request time, long after module evaluation completed.
   rosterFn: () => agentsRoster.getLocalRoster(),
@@ -553,12 +575,22 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ error: "Missing action parameter" }));
       return;
     }
-    const result = executeAction(action, { runOpenClaw, extractJSON, PORT });
-    // Unknown/rejected actions are logged too (success:false) — attempted
-    // actions are part of the trail.
-    recordAudit(getRequestUser(req), "action.execute", action, { success: result.success });
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(result, null, 2));
+    // executeAction is async (CLI runs through the 20s async runner so slow
+    // maintenance like `sessions cleanup --enforce` cannot time out silently).
+    executeAction(action, actionDeps)
+      .then((result) => {
+        // Unknown/rejected actions are logged too (success:false) — attempted
+        // actions are part of the trail.
+        recordAudit(getRequestUser(req), "action.execute", action, { success: result.success });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(result, null, 2));
+      })
+      .catch((e) => {
+        console.error("[Action] Execute failed:", e.message);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: false, action, error: "Internal error" }));
+      });
+    return;
   } else if (pathname === "/api/events") {
     // SSE endpoint
     res.writeHead(200, {
