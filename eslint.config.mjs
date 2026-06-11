@@ -71,4 +71,27 @@ export default [
       "no-misleading-character-class": "warn",
     },
   },
+  // Zero-build browser ESM views (public/) — browser globals, module source
+  {
+    files: ["public/**/*.js"],
+    languageOptions: {
+      sourceType: "module",
+      globals: {
+        window: "readonly",
+        document: "readonly",
+        navigator: "readonly",
+        localStorage: "readonly",
+        sessionStorage: "readonly",
+        fetch: "readonly",
+        EventSource: "readonly",
+        CSS: "readonly",
+        Element: "readonly",
+        HTMLElement: "readonly",
+        CustomEvent: "readonly",
+        AbortController: "readonly",
+        requestAnimationFrame: "readonly",
+        cancelAnimationFrame: "readonly",
+      },
+    },
+  },
 ];

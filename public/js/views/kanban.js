@@ -26,6 +26,8 @@ const COLUMNS = [
 const SORTABLE_SRC = "/vendor/sortable.min.js";
 const POLL_INTERVAL_MS = 30000;
 const SSE_MAX_RECONNECT_DELAY = 30000;
+const RUNNING_TICK_MS = 1000; // live elapsed-time refresh on running ⚡ badges
+const ATTEMPT_NOTE_MAX = 400; // drawer result snippet truncation
 
 // ---------------------------------------------------------------------------
 // Module state (reset/rebuilt on every init)
@@ -37,6 +39,7 @@ const state = {
   openTaskId: null,
   sortables: [],
   pollTimer: null,
+  runningTimer: null, // ticks elapsed time on running ⚡ badges
   dragging: false,
   pendingRefresh: false,
   forceBoard: false, // empty-state CTA pressed: show columns even with 0 tasks
@@ -197,11 +200,44 @@ function parseAssignee(assignee) {
 }
 
 /** Open dispatched attempt = note starts with "dispatched" and no ended_at. */
-function hasOpenDispatch(task) {
+function openDispatchAttempt(task) {
   const attempts = Array.isArray(task.attempts) ? task.attempts : [];
-  return attempts.some(
-    (a) => a && typeof a.note === "string" && a.note.startsWith("dispatched") && !a.ended_at,
+  return (
+    attempts.find(
+      (a) => a && typeof a.note === "string" && a.note.startsWith("dispatched") && !a.ended_at,
+    ) || null
   );
+}
+
+function hasOpenDispatch(task) {
+  return openDispatchAttempt(task) !== null;
+}
+
+/** "5s" / "3m 12s" / "1h 04m" since the attempt started (clamped at 0). */
+function formatElapsed(startedAt) {
+  const startedMs = Date.parse(startedAt);
+  if (Number.isNaN(startedMs)) return "";
+  const totalSec = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+  if (totalSec < 60) return `${totalSec}s`;
+  const min = Math.floor(totalSec / 60);
+  if (min < 60) return `${min}m ${String(totalSec % 60).padStart(2, "0")}s`;
+  return `${Math.floor(min / 60)}h ${String(min % 60).padStart(2, "0")}m`;
+}
+
+function runningBadgeText(startedAt) {
+  return t(
+    "views.kanban.runningBadge",
+    { elapsed: formatElapsed(startedAt) },
+    "running ⚡ {elapsed}",
+  );
+}
+
+/** Refresh elapsed time on every visible running badge (no full re-render). */
+function tickRunningBadges() {
+  if (!isActive()) return;
+  state.container.querySelectorAll("[data-dispatch-start]").forEach((badge) => {
+    badge.textContent = runningBadgeText(badge.dataset.dispatchStart);
+  });
 }
 
 /** ⚡ button is offered on inbox/assigned cards that have an assignee. */
@@ -345,10 +381,11 @@ function buildCard(task) {
   if (task.stale) {
     badges.appendChild(buildBadge("kb-badge-stale", t("views.kanban.staleBadge", {}, "STALE")));
   }
-  if (hasOpenDispatch(task)) {
-    badges.appendChild(
-      buildBadge("kb-badge-dispatched", t("views.kanban.dispatchedBadge", {}, "⚡ dispatched")),
-    );
+  const openAttempt = openDispatchAttempt(task);
+  if (openAttempt) {
+    const running = buildBadge("kb-badge-dispatched", runningBadgeText(openAttempt.started_at));
+    running.dataset.dispatchStart = openAttempt.started_at;
+    badges.appendChild(running);
   }
   if (canDispatch(task)) {
     const dispatchBtn = document.createElement("button");
@@ -1110,7 +1147,12 @@ function renderAttempts(task) {
 
     if (attempt.note) {
       const note = document.createElement("div");
-      note.textContent = attempt.note;
+      note.className = "kb-attempt-note";
+      // textContent keeps this XSS-safe; long agent output is truncated.
+      note.textContent =
+        attempt.note.length > ATTEMPT_NOTE_MAX
+          ? `${attempt.note.slice(0, ATTEMPT_NOTE_MAX)}…`
+          : attempt.note;
       el.appendChild(note);
     }
     host.appendChild(el);
@@ -1365,6 +1407,10 @@ function teardown() {
     clearInterval(state.pollTimer);
     state.pollTimer = null;
   }
+  if (state.runningTimer) {
+    clearInterval(state.runningTimer);
+    state.runningTimer = null;
+  }
   state.dragging = false;
   state.pendingRefresh = false;
   state.openTaskId = null;
@@ -1414,6 +1460,7 @@ export function init(containerEl) {
 
   ensureEventSource();
   state.pollTimer = setInterval(() => scheduleRefresh(), POLL_INTERVAL_MS);
+  state.runningTimer = setInterval(() => tickRunningBadges(), RUNNING_TICK_MS);
 
   refreshBoard();
   createSortables().catch((err) => {

@@ -216,6 +216,9 @@ const FLEET_DEFAULTS = {
       taskStale: true,
       lessonPending: true,
       budgetBreach: true,
+      // Dispatch follow-through completion ping (src/dispatch.js watcher).
+      // Deliberately OFF by default — opt in via settings or the config file.
+      dispatchComplete: false,
     },
     sinks: {
       slack: { enabled: false, gatewayUrl: "", channel: "" },
@@ -243,6 +246,10 @@ const FLEET_DEFAULTS = {
     // takes precedence at wiring time (src/index.js).
     openrouterKey: "",
   },
+  // Kanban → agent dispatch (src/dispatch.js). baseUrl empty = this server's
+  // own http://127.0.0.1:<port>; node empty = os.hostname() (both resolved at
+  // wiring time in src/index.js / the dispatch module itself).
+  dispatch: { enabled: true, baseUrl: "", maxConcurrent: 3, timeoutSec: 600, node: "" },
   rateLimit: { windowMs: 60000, max: 120 },
   // Cost budgets (USD) over LLM API spend — see src/budgets.js. 0 = no limit.
   budgets: {

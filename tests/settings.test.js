@@ -51,6 +51,7 @@ describe("settings module", () => {
         taskStale: true,
         lessonPending: true,
         budgetBreach: true,
+        dispatchComplete: false,
       });
       assert.deepStrictEqual(result.alerts.flap, { consecutive: 3, minDurationMs: 60000 });
       assert.deepStrictEqual(result.alerts.mutes, []);
@@ -581,6 +582,7 @@ describe("settings module", () => {
         taskStale: true,
         lessonPending: true,
         budgetBreach: true,
+        dispatchComplete: false,
       });
       assert.deepStrictEqual(cfg.flap, { consecutive: 3, minDurationMs: 60000 }); // engine-ready
       assert.deepStrictEqual(cfg.mutes, []);

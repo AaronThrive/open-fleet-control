@@ -96,6 +96,7 @@ const { migrateDataDir } = require("./data");
 const { createStateModule } = require("./state");
 const { createFleetRuntime } = require("./fleet");
 const { createFleetRoutes, isFleetRoute } = require("./fleet-routes");
+const { createDispatch } = require("./dispatch");
 const { createSettings } = require("./settings");
 const { createDocker } = require("./docker");
 const { createUsageSources } = require("./usage-sources");
@@ -207,7 +208,31 @@ const settings = createSettings({
   onChange: (alertsConfig) => fleet.applyAlertsConfig(alertsConfig),
 });
 
-const fleetRoutes = createFleetRoutes({ fleet, settings });
+// Kanban → agent dispatch + follow-through watcher (src/dispatch.js):
+// fires `openclaw agent --json` runs, then closes the loop when they settle
+// (attempt result, auto-move review/failed, optional dispatchComplete alert).
+// Board mutations flow through fleet.kanban, whose onChange already fans out
+// the fleet.kanban SSE event; dispatch lifecycle events are broadcast here.
+const dispatch = createDispatch({
+  kanban: fleet.kanban,
+  briefsDir: CONFIG.fleet.briefsDir,
+  config: {
+    ...CONFIG.fleet.dispatch,
+    baseUrl: CONFIG.fleet.dispatch.baseUrl || `http://127.0.0.1:${PORT}`,
+  },
+  onEvent: (event) =>
+    broadcastSSE("fleet.kanban", { type: event.type, taskId: event.taskId || null }),
+  fireAlert: (event) => fleet.fireAlert(event),
+});
+
+const fleetRoutes = createFleetRoutes({
+  fleet,
+  settings,
+  dispatch,
+  // Lazy closure: agentsRoster is constructed further down; routes only call
+  // this at request time, long after module evaluation completed.
+  rosterFn: () => agentsRoster.getLocalRoster(),
+});
 
 // Cron write-actions — enable/disable/run-now for OPENCLAW-source jobs via
 // the openclaw CLI; Hermes jobs stay read-only. After a successful mutation
