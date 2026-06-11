@@ -9,13 +9,15 @@
  *   c. kanban: API task -> card in inbox -> drag to In Progress -> counts
  *   d. evolution: pending lesson -> approve -> gate OFF via the Settings
  *      card (the gate control's home) -> survives restart
- *   e. briefs: API PUT -> listed -> click -> editor shows content
+ *   e. briefs: API PUT -> listed -> row expands preview -> editor shows content
  *   f. logs: audit rows render; action filter narrows to lesson.approve
  *
  * Run with: npm run test:e2e
  */
 
 "use strict";
+
+/* global window, document -- page.evaluate callbacks execute in the browser */
 
 const fs = require("fs");
 const path = require("path");
@@ -306,10 +308,19 @@ async function journeyBriefs() {
   assert(put.status === 200 && put.body?.success, `brief PUT failed: HTTP ${put.status}`);
 
   await gotoView("briefs");
-  const itemSelector = `.briefs-list-item:has-text("${BRIEF_NAME}")`;
-  await ctx.page.waitForSelector(itemSelector, { state: "visible", timeout: 10000 });
-  await ctx.page.click(itemSelector);
+  // v2.2: briefs render as detail-list rows; clicking a row expands the
+  // rendered markdown preview, and the Edit action opens the editor.
+  const rowSelector = `#briefs-view-section .dl-row:has-text("${BRIEF_NAME}")`;
+  await ctx.page.waitForSelector(rowSelector, { state: "visible", timeout: 10000 });
+  await ctx.page.click(rowSelector);
 
+  const headingText = BRIEF_HEADING.replace(/^#\s*/, "");
+  await ctx.page.waitForSelector(
+    `#briefs-view-section .dl-detail-row .briefs-preview h1:has-text("${headingText}")`,
+    { state: "visible", timeout: 6000 },
+  );
+
+  await ctx.page.click(`#briefs-view-section .dl-detail-row .briefs-edit-btn`);
   await ctx.page.waitForSelector("#briefs-editor", { state: "visible", timeout: 6000 });
   await waitFor(
     async () => {
