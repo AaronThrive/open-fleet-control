@@ -51,17 +51,25 @@ function readJsonFile(filePath) {
  * Create the gauges module.
  *
  * @param {object} [options]
- * @param {object} [options.paths] - overrides: { headroom, leanCtx, lcmDb }
+ * @param {string} [options.home] - home directory override (tests only)
+ * @param {object} [options.paths] - overrides: { headroom, leanCtx, lcmDb }.
+ *   Empty/blank strings are ignored — CONFIG flows "" through fleet.js to
+ *   mean "use the default location", and a blank override must never clobber
+ *   a real default path.
  * @param {function} [options.sqliteLoader] - () => node:sqlite module (may throw)
  */
 function createGauges(options = {}) {
-  const home = os.homedir();
-  const paths = {
+  const home = options.home || os.homedir();
+  const defaults = {
     headroom: path.join(home, ".headroom", "subscription_state.json"),
     leanCtx: path.join(home, ".lean-ctx", "stats.json"),
     lcmDb: path.join(home, ".openclaw", "lcm.db"),
-    ...(options.paths || {}),
   };
+  const overrides = {};
+  for (const [key, value] of Object.entries(options.paths || {})) {
+    if (typeof value === "string" && value.trim() !== "") overrides[key] = value;
+  }
+  const paths = { ...defaults, ...overrides };
   const sqliteLoader = options.sqliteLoader || defaultSqliteLoader;
 
   function headroomGauge() {
@@ -71,14 +79,28 @@ function createGauges(options = {}) {
         return unavailableGauge("headroom", label, `file not found: ${paths.headroom}`);
       }
       const data = readJsonFile(paths.headroom);
-      const window = data.window_tokens || {};
+      // After a restart or failed poll, headroom writes the state file with
+      // `latest: null` and `window_tokens: null`. Reporting that as an
+      // available gauge full of zeros is misleading — call it out instead.
+      const window = data.window_tokens || null;
+      const latest = data.latest || null;
+      if (!window && !latest) {
+        return unavailableGauge(
+          "headroom",
+          label,
+          `headroom state has no poll data yet (latest/window_tokens are null in ${paths.headroom})`,
+        );
+      }
+      const w = window || {};
       const rawTokens =
-        Number(window.total_raw) ||
-        Number(window.input || 0) +
-          Number(window.output || 0) +
-          Number(window.cache_reads || 0) +
-          Number(window.cache_writes_total || 0);
-      const effectiveTokens = Number(window.weighted_token_equivalent ?? rawTokens) || 0;
+        Number(w.total_raw) ||
+        Number(w.input || 0) +
+          Number(w.output || 0) +
+          Number(w.cache_reads || 0) +
+          Number(w.cache_writes_total || 0);
+      const effectiveTokens = Number(w.weighted_token_equivalent ?? rawTokens) || 0;
+      const extra = latest?.extra_usage;
+      const extraEnabled = !!(extra && extra.is_enabled);
       return {
         source: "headroom",
         label,
@@ -86,19 +108,34 @@ function createGauges(options = {}) {
         effectiveTokens,
         savingsPct: computeSavingsPct(rawTokens, effectiveTokens),
         detail: {
-          input: window.input ?? 0,
-          output: window.output ?? 0,
-          cacheReads: window.cache_reads ?? 0,
-          cacheWritesTotal: window.cache_writes_total ?? 0,
-          fiveHourUtilizationPct: data.latest?.five_hour?.utilization_pct ?? null,
-          sevenDayUtilizationPct: data.latest?.seven_day?.utilization_pct ?? null,
-          polledAt: data.latest?.polled_at ?? null,
+          input: w.input ?? 0,
+          output: w.output ?? 0,
+          cacheReads: w.cache_reads ?? 0,
+          cacheWritesTotal: w.cache_writes_total ?? 0,
+          fiveHourUtilizationPct: latest?.five_hour?.utilization_pct ?? null,
+          sevenDayUtilizationPct: latest?.seven_day?.utilization_pct ?? null,
+          extraUsageUsd: extraEnabled ? (extra.used_credits_usd ?? null) : null,
+          extraUsageLimitUsd: extraEnabled ? (extra.monthly_limit_usd ?? null) : null,
+          polledAt: latest?.polled_at ?? null,
         },
         available: true,
       };
     } catch (e) {
       return unavailableGauge("headroom", label, e.message);
     }
+  }
+
+  /** Top per-command token consumers from the stats.json commands map. */
+  function topLeanCtxCommands(commands) {
+    if (!commands || typeof commands !== "object") return [];
+    return Object.entries(commands)
+      .map(([command, stats]) => ({
+        command,
+        count: Number(stats?.count) || 0,
+        tokens: Number(stats?.output_tokens) || 0,
+      }))
+      .sort((a, b) => b.tokens - a.tokens)
+      .slice(0, 5);
   }
 
   function leanCtxGauge() {
@@ -108,19 +145,44 @@ function createGauges(options = {}) {
         return unavailableGauge("lean-ctx", label, `file not found: ${paths.leanCtx}`);
       }
       const data = readJsonFile(paths.leanCtx);
-      const rawTokens = Number(data.total_input_tokens) || 0;
-      const effectiveTokens = Number(data.total_output_tokens) || 0;
+      const tokensProcessed = Number(data.total_output_tokens) || 0;
+      const baseDetail = {
+        totalCommands: data.total_commands ?? 0,
+        tokensProcessed,
+        topCommands: topLeanCtxCommands(data.commands),
+        firstUse: data.first_use ?? null,
+        lastUse: data.last_use ?? null,
+        daysTracked: Array.isArray(data.daily) ? data.daily.length : 0,
+      };
+
+      // Genuine before/after sizes only exist in the cep block. The top-level
+      // total_input_tokens / total_output_tokens are the SAME measurement
+      // recorded twice for nearly every command — treating them as raw vs
+      // effective yields a meaningless ~0% savings figure.
+      const cep = data.cep && typeof data.cep === "object" ? data.cep : {};
+      const cepOriginal = Number(cep.total_tokens_original) || 0;
+      if (cepOriginal > 0) {
+        const cepCompressed = Number(cep.total_tokens_compressed) || 0;
+        return {
+          source: "lean-ctx",
+          label,
+          rawTokens: cepOriginal,
+          effectiveTokens: cepCompressed,
+          savingsPct: computeSavingsPct(cepOriginal, cepCompressed),
+          detail: { ...baseDetail, savingsSource: "cep" },
+          available: true,
+        };
+      }
+
       return {
         source: "lean-ctx",
         label,
-        rawTokens,
-        effectiveTokens,
-        savingsPct: computeSavingsPct(rawTokens, effectiveTokens),
+        rawTokens: tokensProcessed,
+        effectiveTokens: tokensProcessed,
+        savingsPct: null,
         detail: {
-          totalCommands: data.total_commands ?? 0,
-          firstUse: data.first_use ?? null,
-          lastUse: data.last_use ?? null,
-          daysTracked: Array.isArray(data.daily) ? data.daily.length : 0,
+          ...baseDetail,
+          note: "savings not derivable: stats.json does not record pre-compression sizes",
         },
         available: true,
       };
