@@ -59,93 +59,24 @@ function relativeTime(timestamp) {
   return t("time.agoYears", { n: Math.floor(months / 12) }, "{n}y ago");
 }
 
-/** Build a short, human detail line for a gauge's `detail` object. */
-function gaugeDetailLine(gauge) {
-  const d = gauge.detail || {};
-  if (gauge.source === "headroom") {
-    const parts = [
-      t(
-        "views.cortex.detailHeadroom",
-        {
-          input: formatTokens(d.input),
-          output: formatTokens(d.output),
-          cacheReads: formatTokens(d.cacheReads),
-          cacheWrites: formatTokens(d.cacheWritesTotal),
-        },
-        "in {input} · out {output} · cache reads {cacheReads} · cache writes {cacheWrites}",
-      ),
-    ];
-    if (d.fiveHourUtilizationPct !== null && d.fiveHourUtilizationPct !== undefined) {
-      parts.push(
-        t("views.cortex.detailHeadroom5h", { pct: d.fiveHourUtilizationPct }, "5h {pct}%"),
-      );
-    }
-    if (d.sevenDayUtilizationPct !== null && d.sevenDayUtilizationPct !== undefined) {
-      parts.push(
-        t("views.cortex.detailHeadroom7d", { pct: d.sevenDayUtilizationPct }, "7d {pct}%"),
-      );
-    }
-    if (d.extraUsageUsd !== null && d.extraUsageUsd !== undefined) {
-      parts.push(
-        t(
-          "views.cortex.detailHeadroomExtra",
-          { used: d.extraUsageUsd, limit: d.extraUsageLimitUsd ?? "?" },
-          "extra usage ${used} / ${limit}",
-        ),
-      );
-    }
-    if (d.polledAt) {
-      const polledMs = Date.parse(d.polledAt);
-      const when = Number.isFinite(polledMs) ? relativeTime(polledMs) : String(d.polledAt);
-      if (when) parts.push(t("views.cortex.detailHeadroomPolled", { when }, "polled {when}"));
-    }
-    return parts.join(" · ");
-  }
-  if (gauge.source === "lean-ctx") {
-    const parts = [
-      t(
-        "views.cortex.detailLeanCtxTotals",
-        {
-          commands: d.totalCommands ?? 0,
-          tokens: formatTokens(d.tokensProcessed),
-          days: d.daysTracked ?? 0,
-        },
-        "{commands} commands · {tokens} tokens processed · {days} days tracked",
-      ),
-    ];
-    const top = Array.isArray(d.topCommands) ? d.topCommands[0] : null;
-    if (top) {
-      parts.push(
-        t(
-          "views.cortex.detailLeanCtxTop",
-          { command: top.command, tokens: formatTokens(top.tokens) },
-          "top: {command} ({tokens})",
-        ),
-      );
-    }
-    if (d.note) {
-      parts.push(
-        t(
-          "views.cortex.detailLeanCtxNoSavings",
-          {},
-          "savings % not derivable from the stats file",
-        ),
-      );
-    }
-    return parts.join(" · ");
-  }
-  if (gauge.source === "lcm") {
-    return t(
-      "views.cortex.detailLcm",
-      { summaries: d.summaries ?? 0, messages: d.messages ?? 0 },
-      "{summaries} summaries · {messages} source messages",
-    );
-  }
-  // Unknown source: render scalar key/value pairs generically.
-  return Object.entries(d)
-    .filter(([, v]) => v !== null && typeof v !== "object")
-    .map(([k, v]) => `${k}: ${v}`)
-    .join(" · ");
+/**
+ * Local "Jun 1, 21:04" for an ISO or sqlite ("YYYY-MM-DD HH:MM:SS", UTC)
+ * timestamp; falls back to the raw string when unparseable.
+ */
+function formatWhen(value) {
+  if (!value) return "";
+  const normalized =
+    typeof value === "string" && /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(value)
+      ? `${value.replace(" ", "T")}Z`
+      : value;
+  const ms = Date.parse(normalized);
+  if (!Number.isFinite(ms)) return String(value);
+  return new Date(ms).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -225,59 +156,370 @@ function renderAvailability(root, state) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Fuel gauges                                                         */
+/* Engine gauge cards                                                  */
+/*                                                                     */
+/* The three sources are SEPARATE tools, not three readings of one     */
+/* compressor, so each gets a purpose-built card instead of a          */
+/* one-size-fits-all "% saved" bar:                                    */
+/*   headroom     → subscription window meter (quota, not compression) */
+/*   lean-ctx     → command output throughput                          */
+/*   lossless-claw→ transcript compaction (may be idle/historical)     */
 /* ------------------------------------------------------------------ */
 
-function buildGaugeCard(gauge) {
+function buildBadge(text, kind) {
+  return el("span", `cx-badge ${kind}`, text);
+}
+
+/** Card shell with a title row; per-engine bodies are appended by callers. */
+function buildEngineCardShell(gauge, title, badges) {
   const card = el("div", `cx-gauge ${gauge.available ? "available" : "unavailable"}`);
-
   const top = el("div", "cx-gauge-top");
-  const label = el("div", "cx-gauge-label", gauge.label || gauge.source);
-  label.title = gauge.label || "";
+  const label = el("div", "cx-gauge-label", title);
+  label.title = title;
   top.appendChild(label);
-
-  const pct = el("div", "cx-gauge-pct");
-  if (gauge.available && gauge.savingsPct !== null && gauge.savingsPct !== undefined) {
-    pct.textContent = `${gauge.savingsPct}%`;
-    pct.appendChild(el("small", null, t("views.cortex.savedLabel", {}, "saved")));
-  } else {
-    pct.classList.add("na");
-    pct.textContent = gauge.available ? "—" : t("views.cortex.offline", {}, "offline");
-  }
-  top.appendChild(pct);
+  for (const badge of badges) if (badge) top.appendChild(badge);
   card.appendChild(top);
+  return card;
+}
 
-  const bar = el("div", "cx-gauge-bar");
-  const fill = el("div", "cx-gauge-fill");
-  const raw = Number(gauge.rawTokens) || 0;
-  const effective = Number(gauge.effectiveTokens) || 0;
-  const ratio = gauge.available && raw > 0 ? Math.max(0, Math.min(1, effective / raw)) : 0;
-  fill.style.width = `${(ratio * 100).toFixed(2)}%`;
+/** Utilization bar row: name, fill (amber ≥70%, red ≥90%), pct readout. */
+function buildUtilRow(name, pct, resetsAt) {
+  const row = el("div", "cx-util-row");
+  row.appendChild(el("span", "cx-util-name", name));
+  const bar = el("div", "cx-util-bar");
+  const value = Number(pct);
+  const clamped = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+  const fill = el("div", `cx-util-fill${clamped >= 90 ? " hot" : clamped >= 70 ? " warn" : ""}`);
+  fill.style.width = `${clamped.toFixed(1)}%`;
   bar.appendChild(fill);
-  card.appendChild(bar);
+  row.appendChild(bar);
+  row.appendChild(el("span", "cx-util-pct", Number.isFinite(value) ? `${value}%` : "—"));
+  if (resetsAt) {
+    row.title = t("views.cortex.hrResets", { when: formatWhen(resetsAt) }, "resets {when}");
+  }
+  return row;
+}
 
-  const counts = el("div", "cx-gauge-counts");
-  const rawSpan = el("span");
-  rawSpan.append(`${t("views.cortex.rawLabel", {}, "raw")} `);
-  rawSpan.appendChild(el("b", null, formatTokens(raw)));
-  const effSpan = el("span", "eff");
-  effSpan.append(`${t("views.cortex.effectiveLabel", {}, "effective")} `);
-  effSpan.appendChild(el("b", null, formatTokens(effective)));
-  counts.append(rawSpan, effSpan);
-  card.appendChild(counts);
+/** Two-column key/value grid for token breakdowns. */
+function buildKvGrid(pairs) {
+  const grid = el("div", "cx-kv");
+  for (const [label, value] of pairs) {
+    const cell = el("span");
+    cell.append(`${label} `);
+    cell.appendChild(el("b", null, value));
+    grid.appendChild(cell);
+  }
+  return grid;
+}
 
-  if (gauge.available) {
-    card.appendChild(el("div", "cx-gauge-detail", gaugeDetailLine(gauge)));
+function appendUnavailableBody(card, gauge) {
+  const reason =
+    gauge.detail?.error ||
+    t("views.cortex.sourceUnavailable", {}, "source not available on this host");
+  card.appendChild(el("div", "cx-gauge-reason", reason));
+  return card;
+}
+
+/**
+ * Headroom = subscription window meter, NOT a compressor: raw and weighted
+ * totals are usually identical, so a "% saved" reading would be a
+ * meaningless 0%. Show 5h/7d window utilization and the token breakdown.
+ */
+function buildHeadroomCard(gauge, activeEngine) {
+  const d = gauge.detail || {};
+  const badges = [];
+  if (activeEngine === "headroom") {
+    badges.push(buildBadge(t("views.cortex.badgeActiveEngine", {}, "active engine"), "live"));
+  }
+  if (!gauge.available && d.stale) {
+    badges.push(buildBadge(t("views.cortex.badgeStale", {}, "stale"), "stale"));
+  }
+  const card = buildEngineCardShell(
+    gauge,
+    t("views.cortex.hrCardTitle", {}, "Headroom · subscription window"),
+    badges,
+  );
+
+  if (!gauge.available) {
+    if (!d.stale) return appendUnavailableBody(card, gauge);
+    card.appendChild(
+      el(
+        "div",
+        "cx-eng-line warn",
+        t(
+          "views.cortex.hrStaleMsg",
+          { when: formatWhen(d.fileModifiedAt) || "?" },
+          "daemon hasn't polled since {when} — gauge stale",
+        ),
+      ),
+    );
+    if (d.lastError) {
+      card.appendChild(
+        el(
+          "div",
+          "cx-gauge-reason",
+          t("views.cortex.hrLastError", { message: d.lastError }, "last poll error: {message}"),
+        ),
+      );
+    }
+    return card;
+  }
+
+  card.appendChild(
+    buildUtilRow(
+      t("views.cortex.hr5h", {}, "5h window"),
+      d.fiveHourUtilizationPct,
+      d.fiveHourResetsAt,
+    ),
+  );
+  card.appendChild(
+    buildUtilRow(
+      t("views.cortex.hr7d", {}, "7d window"),
+      d.sevenDayUtilizationPct,
+      d.sevenDayResetsAt,
+    ),
+  );
+  card.appendChild(
+    buildKvGrid([
+      [t("views.cortex.hrInput", {}, "input"), formatTokens(d.input)],
+      [t("views.cortex.hrOutput", {}, "output"), formatTokens(d.output)],
+      [t("views.cortex.hrCacheReads", {}, "cache reads"), formatTokens(d.cacheReads)],
+      [t("views.cortex.hrCacheWrites", {}, "cache writes"), formatTokens(d.cacheWritesTotal)],
+    ]),
+  );
+
+  const lines = [];
+  if (d.extraUsageUsd !== null && d.extraUsageUsd !== undefined) {
+    lines.push(
+      t(
+        "views.cortex.hrExtraUsage",
+        { used: d.extraUsageUsd, limit: d.extraUsageLimitUsd ?? "?" },
+        "extra usage ${used} of ${limit}",
+      ),
+    );
+  }
+  if (d.polledAt) {
+    const polledMs = Date.parse(d.polledAt);
+    const when = Number.isFinite(polledMs) ? relativeTime(polledMs) : String(d.polledAt);
+    if (when) lines.push(t("views.cortex.hrPolled", { when }, "polled {when}"));
+  }
+  if (lines.length > 0) card.appendChild(el("div", "cx-eng-line", lines.join(" · ")));
+  return card;
+}
+
+/**
+ * lean-ctx = CLI output throughput. stats.json records totals only; genuine
+ * before/after sizes exist only in the cep block — show a savings % ONLY
+ * when that block has data, never a fabricated 0%.
+ */
+function buildLeanCtxCard(gauge, activeEngine) {
+  const badges = [];
+  if (activeEngine === "lean-ctx") {
+    badges.push(buildBadge(t("views.cortex.badgeActiveEngine", {}, "active engine"), "live"));
+  }
+  const card = buildEngineCardShell(
+    gauge,
+    t("views.cortex.lcCardTitle", {}, "lean-ctx · command throughput"),
+    badges,
+  );
+  if (!gauge.available) return appendUnavailableBody(card, gauge);
+  const d = gauge.detail || {};
+
+  const big = el("div", "cx-stat-big", String(d.totalCommands ?? 0));
+  big.appendChild(el("small", null, t("views.cortex.lcCommands", {}, "commands processed")));
+  card.appendChild(big);
+
+  card.appendChild(
+    buildKvGrid([
+      [t("views.cortex.lcTokens", {}, "tokens through"), formatTokens(d.tokensProcessed)],
+      [t("views.cortex.lcDays", {}, "days tracked"), String(d.daysTracked ?? 0)],
+    ]),
+  );
+
+  const top = Array.isArray(d.topCommands) ? d.topCommands.slice(0, 3) : [];
+  if (top.length > 0) {
+    const list = el("div", "cx-top-cmds");
+    for (const entry of top) {
+      const row = el("div");
+      row.appendChild(el("span", "cmd", entry.command));
+      row.append(` — ${formatTokens(entry.tokens)}`);
+      list.appendChild(row);
+    }
+    card.appendChild(list);
+  }
+
+  if (gauge.savingsPct !== null && gauge.savingsPct !== undefined && d.savingsSource === "cep") {
+    card.appendChild(
+      el(
+        "div",
+        "cx-eng-line accent",
+        t(
+          "views.cortex.lcSavings",
+          {
+            pct: gauge.savingsPct,
+            raw: formatTokens(gauge.rawTokens),
+            effective: formatTokens(gauge.effectiveTokens),
+          },
+          "session compression: {pct}% saved ({raw} → {effective} tokens)",
+        ),
+      ),
+    );
   } else {
-    const reason =
-      gauge.detail?.error ||
-      t("views.cortex.sourceUnavailable", {}, "source not available on this host");
-    card.appendChild(el("div", "cx-gauge-reason", reason));
+    card.appendChild(
+      el(
+        "div",
+        "cx-eng-line",
+        t(
+          "views.cortex.lcNoSavings",
+          {},
+          "no savings % — stats.json records totals only, no before/after sizes yet",
+        ),
+      ),
+    );
+  }
+
+  if (d.lastUse) {
+    const ms = Date.parse(d.lastUse);
+    if (Number.isFinite(ms)) {
+      card.appendChild(
+        el(
+          "div",
+          "cx-eng-line",
+          t("views.cortex.lcLastUse", { when: relativeTime(ms) }, "last used {when}"),
+        ),
+      );
+    }
   }
   return card;
 }
 
-function renderGauges(root, gauges) {
+/**
+ * lossless-claw = transcript compaction. The engine may be installed but
+ * idle (another engine holds the contextEngine slot) — when the newest
+ * summary is old, badge the card "historical" and say so.
+ */
+function buildLcmCard(gauge, activeEngine) {
+  const d = gauge.detail || {};
+  const badges = [];
+  if (activeEngine === "lossless-claw") {
+    badges.push(buildBadge(t("views.cortex.badgeActiveEngine", {}, "active engine"), "live"));
+  }
+  if (gauge.available && d.stale === true) {
+    badges.push(buildBadge(t("views.cortex.badgeHistorical", {}, "historical"), "hist"));
+  }
+  const card = buildEngineCardShell(
+    gauge,
+    t("views.cortex.lcmCardTitle", {}, "lossless-claw · transcript compaction"),
+    badges,
+  );
+  if (!gauge.available) return appendUnavailableBody(card, gauge);
+
+  if (gauge.savingsPct !== null && gauge.savingsPct !== undefined) {
+    const big = el("div", "cx-stat-big", `${gauge.savingsPct}%`);
+    big.appendChild(el("small", null, t("views.cortex.savedLabel", {}, "saved")));
+    card.appendChild(big);
+  }
+  card.appendChild(
+    buildKvGrid([
+      [t("views.cortex.lcmSummaries", {}, "summaries"), String(d.summaries ?? 0)],
+      [t("views.cortex.lcmMessages", {}, "source messages"), String(d.messages ?? 0)],
+      [t("views.cortex.rawLabel", {}, "raw"), formatTokens(gauge.rawTokens)],
+      [t("views.cortex.effectiveLabel", {}, "effective"), formatTokens(gauge.effectiveTokens)],
+    ]),
+  );
+
+  if (d.stale === true) {
+    card.appendChild(
+      el(
+        "div",
+        "cx-eng-line warn",
+        t(
+          "views.cortex.lcmStaleMsg",
+          { when: formatWhen(d.lastActivity) || "?" },
+          "no compaction since {when} — engine idle, numbers are historical",
+        ),
+      ),
+    );
+  } else if (d.lastActivity) {
+    card.appendChild(
+      el(
+        "div",
+        "cx-eng-line",
+        t(
+          "views.cortex.lcmLastActivity",
+          { when: formatWhen(d.lastActivity) },
+          "last compaction {when}",
+        ),
+      ),
+    );
+  }
+  if (d.note) card.appendChild(el("div", "cx-eng-line", d.note));
+  return card;
+}
+
+/** Fallback for unknown future sources: scalar detail key/values. */
+function buildGenericGaugeCard(gauge) {
+  const card = buildEngineCardShell(gauge, gauge.label || gauge.source, []);
+  if (!gauge.available) return appendUnavailableBody(card, gauge);
+  if (gauge.savingsPct !== null && gauge.savingsPct !== undefined) {
+    const big = el("div", "cx-stat-big", `${gauge.savingsPct}%`);
+    big.appendChild(el("small", null, t("views.cortex.savedLabel", {}, "saved")));
+    card.appendChild(big);
+  }
+  const detailText = Object.entries(gauge.detail || {})
+    .filter(([, v]) => v !== null && typeof v !== "object")
+    .map(([k, v]) => `${k}: ${v}`)
+    .join(" · ");
+  if (detailText) card.appendChild(el("div", "cx-eng-line", detailText));
+  return card;
+}
+
+const ENGINE_CARD_BUILDERS = {
+  headroom: buildHeadroomCard,
+  "lean-ctx": buildLeanCtxCard,
+  lcm: buildLcmCard,
+};
+
+/**
+ * "Working in conjunction" strip: exactly one engine owns the OpenClaw
+ * contextEngine slot; the other gauges are complementary tools. Saying this
+ * explicitly is what makes the three different cards legible together.
+ */
+function renderEngineStrip(root, contextEngine) {
+  const host = root.querySelector("#cx-engine-strip");
+  if (!host) return;
+  clearChildren(host);
+  host.style.display = "";
+  host.append(t("views.cortex.engineStripLabel", {}, "Active context engine:"));
+  if (contextEngine?.engine) {
+    host.appendChild(el("b", null, contextEngine.engine));
+    host.appendChild(
+      el(
+        "span",
+        null,
+        t(
+          "views.cortex.engineStripNote",
+          {},
+          "— one engine shapes live context; the others are separate tools (lean-ctx compresses command output, lossless-claw compacts transcripts) and sit idle unless they hold the slot.",
+        ),
+      ),
+    );
+  } else {
+    host.appendChild(
+      el(
+        "span",
+        null,
+        t(
+          "views.cortex.engineStripUnknown",
+          { message: contextEngine?.reason || "no engine configured" },
+          "unknown — {message}",
+        ),
+      ),
+    );
+  }
+}
+
+function renderGauges(root, gauges, contextEngine) {
   const host = root.querySelector("#cx-gauges");
   if (!host) return;
   clearChildren(host);
@@ -292,7 +534,11 @@ function renderGauges(root, gauges) {
     );
     return;
   }
-  for (const gauge of list) host.appendChild(buildGaugeCard(gauge));
+  const activeEngine = contextEngine?.engine || null;
+  for (const gauge of list) {
+    const builder = ENGINE_CARD_BUILDERS[gauge.source] || buildGenericGaugeCard;
+    host.appendChild(builder(gauge, activeEngine));
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -845,6 +1091,41 @@ function computeLayout(nodes, edges, width, height) {
   return positions;
 }
 
+/**
+ * Provenance line answering "where do these nodes come from?": page count
+ * from the gbrain brain (populated by the Obsidian-vault export), the last
+ * update, and the link count — plus the exact command to run when no links
+ * have been extracted yet.
+ */
+function renderGraphProvenance(root, graph, shownNodes, shownEdges) {
+  const host = root.querySelector("#cx-graph-provenance");
+  if (!host) return;
+  clearChildren(host);
+  const prov = graph.provenance || {};
+  const totalPages = Number.isFinite(Number(prov.totalPages))
+    ? Number(prov.totalPages)
+    : shownNodes;
+  const updated = prov.lastUpdated ? formatWhen(prov.lastUpdated) : null;
+  const text = updated
+    ? t(
+        "views.cortex.graphProvenance",
+        { pages: totalPages, shown: shownNodes, updated, links: shownEdges },
+        "{shown} of {pages} pages from gbrain (source: Obsidian vault export, last updated {updated}) · {links} links",
+      )
+    : t(
+        "views.cortex.graphProvenanceNoDate",
+        { pages: totalPages, shown: shownNodes, links: shownEdges },
+        "{shown} of {pages} pages from gbrain (source: Obsidian vault export) · {links} links",
+      );
+  host.appendChild(el("span", null, text));
+  if (shownEdges === 0) {
+    const hint = el("span", "cx-prov-hint");
+    hint.append(t("views.cortex.graphNoLinks", {}, "no links extracted yet — run: "));
+    hint.appendChild(el("code", null, "gbrain extract links --source db"));
+    host.appendChild(hint);
+  }
+}
+
 function renderGraph(root, graph) {
   const svg = root.querySelector("#cx-graph-svg");
   const countEl = root.querySelector("#cx-graph-count");
@@ -858,6 +1139,8 @@ function renderGraph(root, graph) {
   const edges = (Array.isArray(graph.edges) ? graph.edges : []).filter(
     (e) => kept.has(e.from) && kept.has(e.to),
   );
+
+  renderGraphProvenance(root, graph, nodes.length, edges.length);
 
   if (countEl) {
     countEl.textContent =
@@ -1073,8 +1356,10 @@ function showGraphOffline(root, reason) {
   const wrap = root.querySelector("#cx-graph-wrap");
   const foot = root.querySelector(".cx-graph-foot");
   const offline = root.querySelector("#cx-graph-offline");
+  const provenance = root.querySelector("#cx-graph-provenance");
   if (wrap) wrap.style.display = "none";
   if (foot) foot.style.display = "none";
+  if (provenance) provenance.style.display = "none";
   if (!offline) return;
   offline.style.display = "";
   clearChildren(offline);
@@ -1130,7 +1415,8 @@ export function init(container) {
   fetchJson(API_BASE)
     .then((state) => {
       renderAvailability(root, state);
-      renderGauges(root, state.gauges);
+      renderEngineStrip(root, state.contextEngine);
+      renderGauges(root, state.gauges, state.contextEngine);
       setupMemoryBrowser(root, state.memory);
       loadGraph(root, state.gbrain);
     })

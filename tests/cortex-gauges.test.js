@@ -133,6 +133,26 @@ function createLcmFixtureDb(dbPath) {
   db.close();
 }
 
+/**
+ * Real lcm.db summaries schema includes created_at (sqlite datetime, UTC).
+ * Used for the activity-detection tests: lossless-claw may be installed but
+ * idle, in which case the newest created_at is the last compaction.
+ */
+function createLcmFixtureDbWithDates(dbPath, dates) {
+  const db = new sqlite.DatabaseSync(dbPath);
+  db.exec(`
+    CREATE TABLE summaries (
+      summary_id TEXT PRIMARY KEY,
+      token_count INTEGER NOT NULL,
+      source_message_token_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+  `);
+  const insert = db.prepare("INSERT INTO summaries VALUES (?, ?, ?, ?)");
+  dates.forEach((date, i) => insert.run(`s${i}`, 50, 500, date));
+  db.close();
+}
+
 describe("cortex-gauges module", () => {
   let tmpDir;
 
@@ -209,6 +229,35 @@ describe("cortex-gauges module", () => {
       assert.strictEqual(headroom.available, false);
       assert.ok(headroom.detail.error.includes("no poll data"));
       assert.strictEqual(headroom.rawTokens, 0);
+    });
+
+    it("surfaces the 5h/7d window reset timestamps for the subscription card", () => {
+      const dir = fs.mkdtempSync(path.join(tmpDir, "hr-resets-"));
+      writeFixtures(dir);
+      const [headroom] = createGauges({
+        paths: { headroom: path.join(dir, "headroom.json"), leanCtx: "/nope", lcmDb: "/nope" },
+      }).getGauges();
+
+      assert.strictEqual(headroom.detail.fiveHourResetsAt, "2026-06-11T22:00:00Z");
+      assert.strictEqual(headroom.detail.sevenDayResetsAt, "2026-06-15T00:00:00Z");
+    });
+
+    it("marks the no-poll state as stale with the file mtime and last daemon error", () => {
+      // The daemon wrote the state file but every poll failed (latest: null).
+      // The UI needs: stale flag, when the file was last touched, and why.
+      const dir = fs.mkdtempSync(path.join(tmpDir, "hr-stale-"));
+      const statePath = path.join(dir, "headroom.json");
+      fs.writeFileSync(statePath, JSON.stringify(HEADROOM_NULL_STATE));
+      const [headroom] = createGauges({
+        paths: { headroom: statePath, leanCtx: "/nope", lcmDb: "/nope" },
+      }).getGauges();
+
+      assert.strictEqual(headroom.available, false);
+      assert.strictEqual(headroom.detail.stale, true);
+      assert.strictEqual(headroom.detail.lastError, "fetch returned None");
+      const mtime = Date.parse(headroom.detail.fileModifiedAt);
+      assert.ok(Number.isFinite(mtime), "fileModifiedAt must be a parseable timestamp");
+      assert.ok(Math.abs(mtime - Date.now()) < 60000, "fileModifiedAt must be the file mtime");
     });
 
     it("omits extra-usage dollars when extra usage is disabled", () => {
@@ -469,6 +518,55 @@ describe("cortex-gauges module", () => {
       assert.ok(lcm.detail.error.includes("no summaries/messages tables"));
     });
 
+    it("detects last compaction activity and flags a stale (idle) engine", (t) => {
+      if (!sqlite) return t.skip("node:sqlite unavailable");
+      // Live host case: lossless-claw enabled in config but idle — newest
+      // summary is from 2026-06-01 while "now" is 2026-06-11.
+      const dir = fs.mkdtempSync(path.join(tmpDir, "lcm-idle-"));
+      const lcmDb = path.join(dir, "lcm.db");
+      createLcmFixtureDbWithDates(lcmDb, ["2026-03-28 16:27:11", "2026-06-01 21:04:32"]);
+
+      const lcm = createGauges({
+        paths: { headroom: "/nope", leanCtx: "/nope", lcmDb },
+        now: () => Date.parse("2026-06-11T22:00:00Z"),
+      }).getGauges()[2];
+
+      assert.strictEqual(lcm.available, true);
+      assert.strictEqual(lcm.detail.lastActivity, "2026-06-01 21:04:32");
+      assert.strictEqual(lcm.detail.stale, true);
+      assert.strictEqual(lcm.detail.staleDays, 10);
+    });
+
+    it("does not flag a recently active engine as stale", (t) => {
+      if (!sqlite) return t.skip("node:sqlite unavailable");
+      const dir = fs.mkdtempSync(path.join(tmpDir, "lcm-fresh-"));
+      const lcmDb = path.join(dir, "lcm.db");
+      createLcmFixtureDbWithDates(lcmDb, ["2026-06-10 09:00:00"]);
+
+      const lcm = createGauges({
+        paths: { headroom: "/nope", leanCtx: "/nope", lcmDb },
+        now: () => Date.parse("2026-06-11T22:00:00Z"),
+      }).getGauges()[2];
+
+      assert.strictEqual(lcm.detail.lastActivity, "2026-06-10 09:00:00");
+      assert.strictEqual(lcm.detail.stale, false);
+    });
+
+    it("reports lastActivity null (never stale) when created_at is absent", (t) => {
+      if (!sqlite) return t.skip("node:sqlite unavailable");
+      const dir = fs.mkdtempSync(path.join(tmpDir, "lcm-nodates-"));
+      const lcmDb = path.join(dir, "lcm.db");
+      createLcmFixtureDb(lcmDb);
+
+      const lcm = createGauges({
+        paths: { headroom: "/nope", leanCtx: "/nope", lcmDb },
+      }).getGauges()[2];
+
+      assert.strictEqual(lcm.available, true);
+      assert.strictEqual(lcm.detail.lastActivity, null);
+      assert.strictEqual(lcm.detail.stale, null);
+    });
+
     it("reports unavailable when the sqlite loader itself fails", () => {
       const dir = fs.mkdtempSync(path.join(tmpDir, "no-sqlite-"));
       writeFixtures(dir);
@@ -491,6 +589,52 @@ describe("cortex-gauges module", () => {
       // Other gauges unaffected
       assert.strictEqual(gauges[0].available, true);
       assert.strictEqual(gauges[1].available, true);
+    });
+  });
+
+  describe("getContextEngine()", () => {
+    function writeOpenclawConfig(dir, payload) {
+      const configPath = path.join(dir, "openclaw.json");
+      fs.writeFileSync(configPath, JSON.stringify(payload));
+      return configPath;
+    }
+
+    it("reads the active engine from plugins.slots.contextEngine", () => {
+      const dir = fs.mkdtempSync(path.join(tmpDir, "engine-"));
+      const openclawConfig = writeOpenclawConfig(dir, {
+        plugins: { slots: { memory: "memory-lancedb-pro", contextEngine: "headroom" } },
+      });
+
+      const engine = createGauges({ paths: { openclawConfig } }).getContextEngine();
+      assert.strictEqual(engine.engine, "headroom");
+      assert.strictEqual(engine.source, "plugins.slots.contextEngine");
+      assert.strictEqual(engine.reason, null);
+    });
+
+    it("returns engine null with a reason when the config file is missing", () => {
+      const dir = fs.mkdtempSync(path.join(tmpDir, "engine-missing-"));
+      const engine = createGauges({
+        paths: { openclawConfig: path.join(dir, "openclaw.json") },
+      }).getContextEngine();
+
+      assert.strictEqual(engine.engine, null);
+      assert.ok(engine.reason.includes("not found"));
+    });
+
+    it("returns engine null with a reason when the slot is unset or config is malformed", () => {
+      const dir = fs.mkdtempSync(path.join(tmpDir, "engine-bad-"));
+      const noSlot = writeOpenclawConfig(dir, { plugins: { slots: {} } });
+      const unset = createGauges({ paths: { openclawConfig: noSlot } }).getContextEngine();
+      assert.strictEqual(unset.engine, null);
+      assert.ok(unset.reason.includes("no contextEngine slot"));
+
+      const malformedPath = path.join(dir, "broken.json");
+      fs.writeFileSync(malformedPath, "{nope");
+      const broken = createGauges({
+        paths: { openclawConfig: malformedPath },
+      }).getContextEngine();
+      assert.strictEqual(broken.engine, null);
+      assert.ok(broken.reason.length > 0);
     });
   });
 });

@@ -126,6 +126,29 @@ function parseExtractLinks(text) {
   return null;
 }
 
+/**
+ * Parse `gbrain stats` text output ("Pages:     383\nLinks:     0\n…") into
+ * counts. gbrain 0.12.x has no JSON mode for stats; the labelled-number lines
+ * are the stable contract. Returns null when no Pages line is present (e.g.
+ * a broken-bundle error).
+ */
+function parseStatsText(text) {
+  if (!text || typeof text !== "string") return null;
+  const grab = (label) => {
+    const match = text.match(new RegExp(`^${label}:\\s*(\\d+)\\s*$`, "mi"));
+    return match ? Number(match[1]) : null;
+  };
+  const pages = grab("Pages");
+  if (pages === null) return null;
+  return {
+    pages,
+    chunks: grab("Chunks"),
+    embedded: grab("Embedded"),
+    links: grab("Links"),
+    tags: grab("Tags"),
+  };
+}
+
 /** Normalize a gbrain page record into a graph node. */
 function toGraphNode(page) {
   if (!page || typeof page !== "object") return null;
@@ -237,7 +260,26 @@ function createGbrain(options = {}) {
       }
     }
 
-    const graph = { nodes, edges };
+    // Provenance: where the nodes come from. `list` caps its output (100 in
+    // gbrain 0.12.x), so the TRUE page count comes from `gbrain stats`;
+    // dbLinks is the committed link count in the db (0 until the user runs
+    // `gbrain extract links`). lastUpdated rides on the newest list row
+    // (list output is sorted most-recently-updated first).
+    const provenance = {
+      totalPages: nodes.length,
+      dbLinks: null,
+      lastUpdated: pages.find((p) => p && p.updated_at)?.updated_at ?? null,
+    };
+    const statsRes = await runCli(["stats"]);
+    if (!statsRes.error) {
+      const stats = parseStatsText(statsRes.stdout) ?? parseStatsText(statsRes.stderr);
+      if (stats) {
+        if (Number.isFinite(stats.pages)) provenance.totalPages = stats.pages;
+        if (Number.isFinite(stats.links)) provenance.dbLinks = stats.links;
+      }
+    }
+
+    const graph = { nodes, edges, provenance };
     if (note) graph.note = note;
     return graph;
   }
@@ -261,4 +303,10 @@ function createGbrain(options = {}) {
   return { available, getGraph, getPage };
 }
 
-module.exports = { createGbrain, parseJsonOutput, parseTsvPages, parseExtractLinks };
+module.exports = {
+  createGbrain,
+  parseJsonOutput,
+  parseTsvPages,
+  parseExtractLinks,
+  parseStatsText,
+};
