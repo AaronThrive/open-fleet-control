@@ -20,6 +20,7 @@
  */
 
 import { t, formatTimeAgo } from "../utils.js";
+import { splitByQuery } from "../transcript-search.js";
 
 const PAGE_SIZE = 20;
 const POLL_MS = 15000;
@@ -28,6 +29,7 @@ const SSE_FRESH_MS = 20000;
 const TERMINAL_MAX_ROWS = 30;
 const TRANSCRIPT_POLL_MS = 3000;
 const SCROLL_PIN_SLACK_PX = 30;
+const SEARCH_DEBOUNCE_MS = 200;
 
 const OPENCLAW_KILL_TOOLTIP =
   "OpenClaw doesn't expose chat-session termination yet " +
@@ -52,6 +54,7 @@ let terminalLive = null;
 let transcriptTimer = null;
 let transcriptCtx = null;
 let keyListener = null;
+let searchDebounce = null;
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -349,27 +352,136 @@ function transcriptPinned(body) {
   return body.scrollTop + body.clientHeight >= body.scrollHeight - SCROLL_PIN_SLACK_PX;
 }
 
+/**
+ * Build one transcript message node. All content is set via textContent
+ * (transcript text is untrusted); query highlighting wraps match segments
+ * in <mark class="tmatch"> built from text nodes — never markup.
+ */
+function buildMessageNode(message, query, contextClass = "") {
+  const wrap = el("div", `tmsg ${message.role === "user" ? "user" : "assistant"} ${contextClass}`);
+  const head = el("div", "tmsg-head");
+  head.appendChild(el("span", "tmsg-role", message.role));
+  if (message.ts) {
+    const ts = new Date(message.ts);
+    head.appendChild(
+      el("span", "", Number.isFinite(ts.getTime()) ? ts.toLocaleString() : String(message.ts)),
+    );
+  }
+  wrap.appendChild(head);
+  if (message.text) {
+    const textEl = el("div", "tmsg-text");
+    for (const segment of splitByQuery(message.text, query)) {
+      textEl.appendChild(
+        segment.match ? el("mark", "tmatch", segment.text) : document.createTextNode(segment.text),
+      );
+    }
+    wrap.appendChild(textEl);
+  }
+  for (const tool of message.tools || []) {
+    const toolEl = el("span", "tmsg-tool");
+    toolEl.appendChild(document.createTextNode("🔧 "));
+    for (const segment of splitByQuery(tool, query)) {
+      toolEl.appendChild(
+        segment.match ? el("mark", "tmatch", segment.text) : document.createTextNode(segment.text),
+      );
+    }
+    wrap.appendChild(toolEl);
+  }
+  return wrap;
+}
+
+/* ---- match navigation (shared by tail highlighting + server results) ---- */
+
+function transcriptMatchEls(els) {
+  return Array.from(els.transcriptBody.querySelectorAll(".tmatch"));
+}
+
+function updateMatchUi(els) {
+  const ctx = transcriptCtx;
+  const matches = ctx ? transcriptMatchEls(els) : [];
+  const active = !!ctx && (ctx.query.length > 0 || ctx.serverMode);
+  els.transcriptMatchCount.hidden = !active;
+  els.transcriptPrev.hidden = !active;
+  els.transcriptNext.hidden = !active;
+  els.transcriptSearchAll.hidden = !ctx || ctx.query.length === 0 || ctx.serverMode;
+  if (!active) return;
+  if (ctx.current >= matches.length) ctx.current = matches.length - 1;
+  matches.forEach((node, index) => node.classList.toggle("tmatch-current", index === ctx.current));
+  els.transcriptMatchCount.textContent =
+    matches.length === 0 ? "0/0" : `${ctx.current + 1}/${matches.length}`;
+  els.transcriptPrev.disabled = matches.length === 0;
+  els.transcriptNext.disabled = matches.length === 0;
+}
+
+function stepMatch(els, direction) {
+  const ctx = transcriptCtx;
+  if (!ctx) return;
+  const matches = transcriptMatchEls(els);
+  if (matches.length === 0) return;
+  ctx.current = (ctx.current + direction + matches.length) % matches.length;
+  updateMatchUi(els);
+  matches[ctx.current].scrollIntoView({ block: "center" });
+  updateJumpButton(els);
+}
+
+function updateJumpButton(els) {
+  const ctx = transcriptCtx;
+  els.transcriptJump.hidden = !ctx || (!ctx.serverMode && transcriptPinned(els.transcriptBody));
+}
+
+/* ---- rendering: live tail vs server search results ---- */
+
+function renderTranscriptEmpty(els, text) {
+  els.transcriptBody.replaceChildren(el("div", "sessions-transcript-empty", text));
+}
+
+/** Re-render the full tail body from ctx.messages (query may have changed). */
+function renderTailBody(els) {
+  const ctx = transcriptCtx;
+  if (!ctx) return;
+  const body = els.transcriptBody;
+  const pinned = transcriptPinned(body);
+  if (ctx.messages.length === 0) {
+    renderTranscriptEmpty(
+      els,
+      t("views.sessions.transcriptEmpty", {}, "No messages in this transcript window yet."),
+    );
+  } else {
+    body.replaceChildren(...ctx.messages.map((message) => buildMessageNode(message, ctx.query)));
+  }
+  if (pinned) body.scrollTop = body.scrollHeight;
+  updateMatchUi(els);
+  updateJumpButton(els);
+}
+
+function renderTailStatus(els) {
+  const ctx = transcriptCtx;
+  if (!ctx) return;
+  els.transcriptStatus.textContent = t(
+    "views.sessions.transcriptStatus",
+    { count: ctx.messages.length },
+    "{count} messages • tailing",
+  );
+}
+
 function appendTranscriptMessages(els, messages) {
+  const ctx = transcriptCtx;
+  if (!ctx) return;
+  const hadNone = ctx.messages.length === 0;
+  ctx.messages.push(...messages);
+  if (ctx.serverMode) return; // tail keeps accumulating silently behind results
+  if (hadNone) {
+    renderTailBody(els);
+    return;
+  }
   const body = els.transcriptBody;
   const pinned = transcriptPinned(body);
   for (const message of messages) {
-    const wrap = el("div", `tmsg ${message.role === "user" ? "user" : "assistant"}`);
-    const head = el("div", "tmsg-head");
-    head.appendChild(el("span", "tmsg-role", message.role));
-    if (message.ts) {
-      const ts = new Date(message.ts);
-      head.appendChild(
-        el("span", "", Number.isFinite(ts.getTime()) ? ts.toLocaleString() : String(message.ts)),
-      );
-    }
-    wrap.appendChild(head);
-    if (message.text) wrap.appendChild(el("div", "tmsg-text", message.text));
-    for (const tool of message.tools || []) {
-      wrap.appendChild(el("span", "tmsg-tool", `🔧 ${tool}`));
-    }
-    body.appendChild(wrap);
+    body.appendChild(buildMessageNode(message, ctx.query));
   }
   if (pinned) body.scrollTop = body.scrollHeight;
+  if (ctx.query.length > 0) updateMatchUi(els);
+  updateJumpButton(els);
 }
 
 async function pollTranscript(els) {
@@ -387,25 +499,17 @@ async function pollTranscript(els) {
     ctx.offset = data.nextOffset;
     const batch = Array.isArray(data.messages) ? data.messages : [];
     if (batch.length > 0) {
-      if (ctx.total === 0) els.transcriptBody.replaceChildren(); // clear placeholder
-      ctx.total += batch.length;
       appendTranscriptMessages(els, batch);
-    } else if (ctx.total === 0) {
-      els.transcriptBody.replaceChildren(
-        el(
-          "div",
-          "sessions-transcript-empty",
-          t("views.sessions.transcriptEmpty", {}, "No messages in this transcript window yet."),
-        ),
+    } else if (ctx.messages.length === 0 && !ctx.serverMode) {
+      renderTranscriptEmpty(
+        els,
+        t("views.sessions.transcriptEmpty", {}, "No messages in this transcript window yet."),
       );
     }
-    els.transcriptStatus.textContent = t(
-      "views.sessions.transcriptStatus",
-      { count: ctx.total },
-      "{count} messages • tailing",
-    );
+    if (!ctx.serverMode) renderTailStatus(els);
   } catch (error) {
     if (transcriptCtx !== ctx) return;
+    if (ctx.serverMode) return; // keep the search-results status line
     els.transcriptStatus.textContent = t(
       "views.sessions.transcriptError",
       { message: error.message },
@@ -414,32 +518,151 @@ async function pollTranscript(els) {
   }
 }
 
+/* ---- in-transcript search ---- */
+
+function setTranscriptQuery(els, value) {
+  const ctx = transcriptCtx;
+  if (!ctx) return;
+  const query = String(value || "").trim();
+  if (query === ctx.query && !ctx.serverMode) return;
+  ctx.query = query;
+  ctx.current = query.length > 0 ? 0 : -1;
+  if (ctx.serverMode) {
+    // Editing the query drops back to the live tail (client filter mode).
+    ctx.serverMode = false;
+    renderTailStatus(els);
+  }
+  renderTailBody(els);
+}
+
+/** Server-side search over the whole transcript file (content not yet paged in). */
+async function runServerSearch(els) {
+  const ctx = transcriptCtx;
+  if (!ctx || ctx.query.length === 0) return;
+  const query = ctx.query;
+  els.transcriptStatus.textContent = t(
+    "views.sessions.transcriptSearching",
+    {},
+    "searching full transcript…",
+  );
+  try {
+    const response = await fetch(
+      `/api/sessions/transcript/search?source=${encodeURIComponent(ctx.source)}` +
+        `&id=${encodeURIComponent(ctx.id)}&q=${encodeURIComponent(query)}`,
+    );
+    const data = await response.json();
+    if (transcriptCtx !== ctx || ctx.query !== query) return; // stale response
+    if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
+
+    ctx.serverMode = true;
+    ctx.current = (data.matches || []).length > 0 ? 0 : -1;
+    const body = els.transcriptBody;
+    body.replaceChildren();
+    for (const match of data.matches || []) {
+      if (match.before) body.appendChild(buildMessageNode(match.before, "", "tmsg-context"));
+      body.appendChild(buildMessageNode(match.message, query));
+      if (match.after) body.appendChild(buildMessageNode(match.after, "", "tmsg-context"));
+      body.appendChild(el("div", "tmsg-result-sep"));
+    }
+    if ((data.matches || []).length === 0) {
+      renderTranscriptEmpty(
+        els,
+        t("views.sessions.transcriptNoMatches", { query }, "No matches in the full transcript."),
+      );
+    }
+    els.transcriptStatus.textContent = data.truncated
+      ? t(
+          "views.sessions.transcriptServerResultsTruncated",
+          { count: data.matchCount },
+          "{count}+ matches in full transcript (capped)",
+        )
+      : t(
+          "views.sessions.transcriptServerResults",
+          { count: data.matchCount },
+          "{count} matches in full transcript",
+        );
+    body.scrollTop = 0;
+    updateMatchUi(els);
+    updateJumpButton(els);
+  } catch (error) {
+    if (transcriptCtx !== ctx) return;
+    els.transcriptStatus.textContent = t(
+      "views.sessions.transcriptSearchFailed",
+      { message: error.message },
+      "search failed: {message}",
+    );
+  }
+}
+
+/** Re-pin to the live tail (also exits server-search results mode). */
+function jumpToBottom(els) {
+  const ctx = transcriptCtx;
+  if (!ctx) return;
+  if (ctx.serverMode) {
+    ctx.serverMode = false;
+    renderTailBody(els);
+    renderTailStatus(els);
+  }
+  els.transcriptBody.scrollTop = els.transcriptBody.scrollHeight;
+  updateJumpButton(els);
+}
+
 function closeTranscript(els) {
   if (transcriptTimer) {
     clearInterval(transcriptTimer);
     transcriptTimer = null;
   }
+  if (searchDebounce) {
+    clearTimeout(searchDebounce);
+    searchDebounce = null;
+  }
   transcriptCtx = null;
   if (els) {
     els.transcriptOverlay.hidden = true;
     els.transcriptBody.replaceChildren();
+    els.transcriptSearch.value = "";
+    els.transcriptMatchCount.hidden = true;
+    els.transcriptPrev.hidden = true;
+    els.transcriptNext.hidden = true;
+    els.transcriptSearchAll.hidden = true;
+    els.transcriptJump.hidden = true;
+    els.transcriptKill.hidden = true;
   }
 }
 
-function openTranscript(els, source, id, title) {
+/**
+ * Open the transcript viewer. `pid` is the live claude/codex process owning
+ * this transcript (terminal source only) — when known, the modal header
+ * exposes the same kill flow as the terminal rows.
+ */
+function openTranscript(els, source, id, title, pid = null) {
   if (!id) return;
   closeTranscript(els);
-  transcriptCtx = { source, id, offset: null, total: 0 };
+  transcriptCtx = {
+    source,
+    id,
+    offset: null,
+    messages: [],
+    query: "",
+    serverMode: false,
+    current: -1,
+    pid: Number.isInteger(pid) && pid > 1 ? pid : null,
+  };
   els.transcriptTitle.textContent = `${title || id} — ${source}`;
   els.transcriptStatus.textContent = t("views.sessions.transcriptLoading", {}, "loading…");
-  els.transcriptBody.replaceChildren(
-    el(
-      "div",
-      "sessions-transcript-empty",
-      t("views.sessions.transcriptLoadingBody", {}, "Loading transcript…"),
-    ),
-  );
+  renderTranscriptEmpty(els, t("views.sessions.transcriptLoadingBody", {}, "Loading transcript…"));
+  els.transcriptKill.hidden = transcriptCtx.pid === null;
+  els.transcriptKill.disabled = false;
+  els.transcriptKill.textContent = "✕ Kill";
+  if (transcriptCtx.pid !== null) {
+    els.transcriptKill.title = t(
+      "views.sessions.killTerminal",
+      { pid: transcriptCtx.pid },
+      "Kill claude process (pid {pid})",
+    );
+  }
   els.transcriptOverlay.hidden = false;
+  els.transcriptSearch.focus();
   pollTranscript(els);
   transcriptTimer = setInterval(() => {
     if (!els.grid.isConnected) {
@@ -534,7 +757,7 @@ function buildTerminalRow(session, els, livePid) {
     viewBtn.title = t("views.sessions.viewTranscript", {}, "View live transcript");
     viewBtn.addEventListener("click", (event) => {
       event.stopPropagation();
-      openTranscript(els, "terminal", session.sessionId, session.cwd || session.sessionId);
+      openTranscript(els, "terminal", session.sessionId, session.cwd || session.sessionId, livePid);
     });
     row.appendChild(viewBtn);
   }
@@ -797,6 +1020,10 @@ function teardown() {
     clearInterval(transcriptTimer);
     transcriptTimer = null;
   }
+  if (searchDebounce) {
+    clearTimeout(searchDebounce);
+    searchDebounce = null;
+  }
   transcriptCtx = null;
   if (keyListener) {
     document.removeEventListener("keydown", keyListener);
@@ -853,6 +1080,13 @@ export function init(container) {
     transcriptStatus: container.querySelector("#sessions-transcript-status"),
     transcriptBody: container.querySelector("#sessions-transcript-body"),
     transcriptClose: container.querySelector("#sessions-transcript-close"),
+    transcriptSearch: container.querySelector("#sessions-transcript-search"),
+    transcriptMatchCount: container.querySelector("#sessions-transcript-matchcount"),
+    transcriptPrev: container.querySelector("#sessions-transcript-prev"),
+    transcriptNext: container.querySelector("#sessions-transcript-next"),
+    transcriptSearchAll: container.querySelector("#sessions-transcript-searchall"),
+    transcriptJump: container.querySelector("#sessions-transcript-jump"),
+    transcriptKill: container.querySelector("#sessions-transcript-kill"),
   };
   if (Object.values(els).some((node) => !node)) {
     console.error("[Sessions] Partial markup is missing expected elements; aborting init.");
@@ -889,6 +1123,44 @@ export function init(container) {
     if (event.key === "Escape" && transcriptCtx) closeTranscript(els);
   };
   document.addEventListener("keydown", keyListener);
+
+  // Transcript search: debounced client-side filter; Enter (or 🔎 all)
+  // searches the full transcript server-side; Esc clears before closing.
+  els.transcriptSearch.placeholder = t("views.sessions.transcriptSearchPlaceholder", {}, "Search…");
+  els.transcriptSearch.addEventListener("input", () => {
+    if (searchDebounce) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      searchDebounce = null;
+      setTranscriptQuery(els, els.transcriptSearch.value);
+    }, SEARCH_DEBOUNCE_MS);
+  });
+  els.transcriptSearch.addEventListener("keydown", (event) => {
+    // Cancel any pending debounced apply so it cannot fire after Enter/Esc
+    // and clobber the state these handlers just set (e.g. drop the user
+    // out of server-search results right after they were rendered).
+    if (searchDebounce) {
+      clearTimeout(searchDebounce);
+      searchDebounce = null;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      setTranscriptQuery(els, els.transcriptSearch.value);
+      runServerSearch(els);
+    } else if (event.key === "Escape" && els.transcriptSearch.value !== "") {
+      event.stopPropagation(); // clear the query first; second Esc closes
+      els.transcriptSearch.value = "";
+      setTranscriptQuery(els, "");
+    }
+  });
+  els.transcriptSearchAll.addEventListener("click", () => runServerSearch(els));
+  els.transcriptPrev.addEventListener("click", () => stepMatch(els, -1));
+  els.transcriptNext.addEventListener("click", () => stepMatch(els, 1));
+  els.transcriptJump.addEventListener("click", () => jumpToBottom(els));
+  els.transcriptBody.addEventListener("scroll", () => updateJumpButton(els));
+  els.transcriptKill.addEventListener("click", () => {
+    const pid = transcriptCtx?.pid;
+    if (pid) killTerminalPid(pid, els.transcriptKill, els);
+  });
 
   els.prevBtn.addEventListener("click", () => {
     if (pagination?.hasPrev) {
