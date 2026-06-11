@@ -23,9 +23,10 @@ const { createBriefs } = require("./briefs");
 const { createEvolution } = require("./evolution");
 const { createAudit } = require("./audit");
 const { createCortex } = require("./cortex");
-const { createAlerts, createNodeAlertTracker } = require("./alerts");
+const { createAlerts, createNodeAlertTracker, createSinkDispatcher } = require("./alerts");
 const { createRateLimiter } = require("./rate-limit");
 const { createBudgets } = require("./budgets");
+const { createDigest } = require("./digest");
 const { defaultSecrets } = require("./secrets");
 
 const CORTEX_SUMMARY_TTL_MS = 60000;
@@ -116,6 +117,11 @@ function createFleetRuntime({ config, broadcast }) {
   // evolution hooks and the REST routes always use the current instance.
   let alerts = createAlerts({ config: config.alerts, logsDir });
 
+  // Effective alerts config tracker — the digest reads the CURRENT sink
+  // endpoints (fleet.alerts.sinks) at delivery time, surviving settings
+  // hot-swaps of the alert engine.
+  let currentAlertsConfig = config.alerts || {};
+
   /**
    * Rebuild the alert engine from a new effective alerts config (hot-apply
    * path for PATCH /api/fleet/settings). The ring buffer of the previous
@@ -137,6 +143,7 @@ function createFleetRuntime({ config, broadcast }) {
       );
     }
     alerts = createAlerts({ config: resolvedAlerts, logsDir });
+    currentAlertsConfig = resolvedAlerts || {};
     nodeAlertTracker.setFlapConfig(resolvedAlerts && resolvedAlerts.flap);
     console.log("[Fleet] Alerts engine rebuilt from updated settings");
   }
@@ -320,6 +327,51 @@ function createFleetRuntime({ config, broadcast }) {
     console.log("[Fleet] Budget evaluator reconfigured from updated settings");
   }
 
+  // Scheduled fleet digest (src/digest.js): a 60s tick sends the compact
+  // markdown summary through the SHARED sink dispatcher over the current
+  // alerts sink endpoints, restricted to fleet.digest.sinks. Sources that
+  // live outside this runtime (cron jobs, top token consumers) are injected
+  // by the orchestrator via setDigestSources().
+  const digestDispatcher = createSinkDispatcher();
+  let digestExtras = {};
+
+  const digest = createDigest({
+    config: config.digest,
+    stateFile: path.join(stateDir, "digest.json"),
+    sources: {
+      getBudgetStatus: () => budgets.getStatus(),
+      getBoard: () => kanban.getBoard(),
+      getMeshState: () => mesh.getState(),
+      getEvolutionState: () => evolution.getState(),
+      getAlertHistory: (filters) => alerts.query(filters),
+      getCronJobs: () => (digestExtras.getCronJobs ? digestExtras.getCronJobs() : null),
+      getTopConsumers: () => (digestExtras.getTopConsumers ? digestExtras.getTopConsumers() : null),
+    },
+    deliver: (alert, sinkNames) => {
+      const allowAll = !Array.isArray(sinkNames) || sinkNames.includes("*");
+      const allowed = allowAll ? null : new Set(sinkNames);
+      return digestDispatcher.dispatch(
+        currentAlertsConfig.sinks || {},
+        alert,
+        (sinkName) => allowed === null || allowed.has(sinkName),
+      );
+    },
+  });
+
+  /**
+   * Inject digest sources that live outside the fleet runtime
+   * ({getCronJobs, getTopConsumers} — wired by src/index.js).
+   */
+  function setDigestSources(extras) {
+    digestExtras = extras && typeof extras === "object" ? extras : {};
+  }
+
+  /** Hot-apply a new fleet.digest config (settings PATCH path). */
+  function applyDigestConfig(digestConfig) {
+    digest.applyConfig(digestConfig);
+    console.log("[Fleet] Digest scheduler reconfigured from updated settings");
+  }
+
   // ---------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------
@@ -331,6 +383,7 @@ function createFleetRuntime({ config, broadcast }) {
     federation.start();
     watchdog.start();
     budgets.start();
+    digest.start();
     if (!boardWatcher) boardWatcher = kanban.watch();
   }
 
@@ -339,6 +392,7 @@ function createFleetRuntime({ config, broadcast }) {
     federation.stop();
     watchdog.stop();
     budgets.stop();
+    digest.stop();
     if (boardWatcher) {
       boardWatcher.close();
       boardWatcher = null;
@@ -493,6 +547,9 @@ function createFleetRuntime({ config, broadcast }) {
     budgets,
     applyBudgetsConfig,
     setUsageProvider,
+    digest,
+    applyDigestConfig,
+    setDigestSources,
     rateLimiter,
     fireAlert,
     start,

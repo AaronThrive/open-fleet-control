@@ -44,7 +44,8 @@
  *     validationGate: {default: bool},
  *     federation: {intervalMs},
  *     budgets: {enabled, daily: {totalUSD, perProvider: {<provider>: usd}},
- *               weekly: {...}, checkIntervalMs}
+ *               weekly: {...}, checkIntervalMs, enforce: {enabled}},
+ *     digest: {enabled, schedule: "daily"|"weekly", hourUtc, sinks: ["*"|...]}
  *   }
  *   1Password refs: secret-bearing fields (slack.gatewayUrl, ntfy.topic,
  *   webhook secret) accept op://vault/item/field references; refs are not
@@ -73,9 +74,11 @@
  *     },
  *     mesh?: {intervalMs}, federation?: {intervalMs},
  *     watchdog?: {thresholdMs}, validationGate?: {default},
- *     budgets?: {enabled?, checkIntervalMs?,
+ *     budgets?: {enabled?, checkIntervalMs?, enforce?: {enabled},
  *                daily?: {totalUSD?, perProvider?},   // perProvider = FULL
- *                weekly?: {totalUSD?, perProvider?}}  // replacement map
+ *                weekly?: {totalUSD?, perProvider?}}, // replacement map
+ *     digest?: {enabled?, schedule?, hourUtc?, sinks?} // sinks = FULL
+ *                                                      // replacement list
  *   }
  *   Webhook `secret` is WRITE-ONLY: accepted in patches, stored in the config
  *   file, but never present in get()/applied responses.
@@ -188,7 +191,9 @@ const EDITABLE_DEFAULTS = Object.freeze({
     daily: { totalUSD: 0, perProvider: {} },
     weekly: { totalUSD: 0, perProvider: {} },
     checkIntervalMs: 900000,
+    enforce: { enabled: false },
   },
+  digest: { enabled: false, schedule: "daily", hourUtc: 8, sinks: ["*"] },
 });
 
 // Paths whose changes always need a process restart (bound at boot).
@@ -295,7 +300,7 @@ function validatePatch(patch) {
   }
   requireKnownKeys(
     patch,
-    ["alerts", "mesh", "federation", "watchdog", "validationGate", "budgets"],
+    ["alerts", "mesh", "federation", "watchdog", "validationGate", "budgets", "digest"],
     "patch",
   );
   const result = {};
@@ -370,6 +375,10 @@ function validatePatch(patch) {
     result.budgets = validateBudgetsPatch(patch.budgets);
   }
 
+  if (patch.digest !== undefined) {
+    result.digest = validateDigestPatch(patch.digest);
+  }
+
   return result;
 }
 
@@ -418,12 +427,23 @@ function validateBudgetPeriodPatch(period, label) {
   return out;
 }
 
-/** budgets: {enabled?, daily?, weekly?, checkIntervalMs?} (≥1 key). */
+/** budgets: {enabled?, daily?, weekly?, checkIntervalMs?, enforce?} (≥1 key). */
 function validateBudgetsPatch(budgets) {
-  requireKnownKeys(budgets, ["enabled", "daily", "weekly", "checkIntervalMs"], "budgets");
+  requireKnownKeys(
+    budgets,
+    ["enabled", "daily", "weekly", "checkIntervalMs", "enforce"],
+    "budgets",
+  );
   const out = {};
   if (budgets.enabled !== undefined) {
     out.enabled = requireBool(budgets.enabled, "budgets.enabled");
+  }
+  if (budgets.enforce !== undefined) {
+    requireKnownKeys(budgets.enforce, ["enabled"], "budgets.enforce");
+    if (budgets.enforce.enabled === undefined) {
+      throw badRequest("budgets.enforce.enabled is required");
+    }
+    out.enforce = { enabled: requireBool(budgets.enforce.enabled, "budgets.enforce.enabled") };
   }
   if (budgets.daily !== undefined) {
     out.daily = validateBudgetPeriodPatch(budgets.daily, "budgets.daily");
@@ -444,9 +464,71 @@ function validateBudgetsPatch(budgets) {
     out.checkIntervalMs = budgets.checkIntervalMs;
   }
   if (Object.keys(out).length === 0) {
-    throw badRequest("budgets must set at least one of enabled/daily/weekly/checkIntervalMs");
+    throw badRequest(
+      "budgets must set at least one of enabled/daily/weekly/checkIntervalMs/enforce",
+    );
   }
   return out;
+}
+
+// --- Fleet digest (fleet.digest) — v2.2 scheduled-digest --------------------
+
+const DIGEST_SCHEDULES = ["daily", "weekly"];
+
+/** digest: {enabled?, schedule?, hourUtc?, sinks?} (≥1 key, sinks = FULL replacement). */
+function validateDigestPatch(digest) {
+  requireKnownKeys(digest, ["enabled", "schedule", "hourUtc", "sinks"], "digest");
+  const out = {};
+  if (digest.enabled !== undefined) {
+    out.enabled = requireBool(digest.enabled, "digest.enabled");
+  }
+  if (digest.schedule !== undefined) {
+    if (!DIGEST_SCHEDULES.includes(digest.schedule)) {
+      throw badRequest('digest.schedule must be "daily" or "weekly"');
+    }
+    out.schedule = digest.schedule;
+  }
+  if (digest.hourUtc !== undefined) {
+    if (!Number.isInteger(digest.hourUtc) || digest.hourUtc < 0 || digest.hourUtc > 23) {
+      throw badRequest("digest.hourUtc must be an integer between 0 and 23");
+    }
+    out.hourUtc = digest.hourUtc;
+  }
+  if (digest.sinks !== undefined) {
+    if (!Array.isArray(digest.sinks) || digest.sinks.length === 0) {
+      throw badRequest("digest.sinks must be a non-empty array of sink names");
+    }
+    const seen = new Set();
+    for (const sink of digest.sinks) {
+      if (sink !== "*" && !ALERT_SINK_NAMES.includes(sink)) {
+        throw badRequest(`digest.sinks: unknown sink "${String(sink)}"`);
+      }
+      seen.add(sink);
+    }
+    out.sinks = seen.has("*") ? ["*"] : ALERT_SINK_NAMES.filter((sink) => seen.has(sink));
+  }
+  if (Object.keys(out).length === 0) {
+    throw badRequest("digest must set at least one of enabled/schedule/hourUtc/sinks");
+  }
+  return out;
+}
+
+/** Effective fleet.digest: defaults <- persisted, normalized. */
+function buildEffectiveDigest(raw, defaults) {
+  const src = isPlainObject(raw) ? raw : {};
+  let sinks = Array.isArray(src.sinks)
+    ? src.sinks.filter((sink) => sink === "*" || ALERT_SINK_NAMES.includes(sink))
+    : [...defaults.sinks];
+  if (sinks.length === 0 || sinks.includes("*")) sinks = ["*"];
+  return {
+    enabled: typeof src.enabled === "boolean" ? src.enabled : defaults.enabled,
+    schedule: DIGEST_SCHEDULES.includes(src.schedule) ? src.schedule : defaults.schedule,
+    hourUtc:
+      Number.isInteger(src.hourUtc) && src.hourUtc >= 0 && src.hourUtc <= 23
+        ? src.hourUtc
+        : defaults.hourUtc,
+    sinks,
+  };
 }
 
 /** flap: {consecutive?: int 1..20, minDurationMs?: int 0..1h} (≥1 key). */
@@ -765,6 +847,7 @@ function buildEffective(fleet) {
       intervalMs: pickInt(src.federation && src.federation.intervalMs, d.federation.intervalMs),
     },
     budgets: buildEffectiveBudgets(src.budgets, d.budgets),
+    digest: buildEffectiveDigest(src.digest, d.digest),
   };
 }
 
@@ -796,6 +879,12 @@ function buildEffectiveBudgets(raw, defaults) {
     checkIntervalMs: Number.isInteger(src.checkIntervalMs)
       ? src.checkIntervalMs
       : defaults.checkIntervalMs,
+    enforce: {
+      enabled:
+        isPlainObject(src.enforce) && typeof src.enforce.enabled === "boolean"
+          ? src.enforce.enabled
+          : defaults.enforce.enabled,
+    },
   };
 }
 
@@ -850,10 +939,13 @@ function changedPaths(before, after, prefix = "") {
  * @param {function} [options.onBudgetsChange] - Hot-apply hook for budgets.*
  *   changes, called with the effective fleet.budgets config. Without it,
  *   budgets changes are honestly reported as restartRequired.
+ * @param {function} [options.onDigestChange] - Hot-apply hook for digest.*
+ *   changes, called with the effective fleet.digest config. Without it,
+ *   digest changes are honestly reported as restartRequired.
  * @returns {{get: function, update: function, getAlertsConfig: function,
- *            getBudgetsConfig: function}}
+ *            getBudgetsConfig: function, getDigestConfig: function}}
  */
-function createSettings({ configPath, onChange, onBudgetsChange } = {}) {
+function createSettings({ configPath, onChange, onBudgetsChange, onDigestChange } = {}) {
   if (typeof configPath !== "string" || configPath.length === 0) {
     throw new TypeError("configPath is required");
   }
@@ -862,6 +954,9 @@ function createSettings({ configPath, onChange, onBudgetsChange } = {}) {
   }
   if (onBudgetsChange !== undefined && typeof onBudgetsChange !== "function") {
     throw new TypeError("onBudgetsChange must be a function when provided");
+  }
+  if (onDigestChange !== undefined && typeof onDigestChange !== "function") {
+    throw new TypeError("onDigestChange must be a function when provided");
   }
 
   /** Read the FULL config file (not just fleet) so unrelated keys survive writes. */
@@ -903,6 +998,12 @@ function createSettings({ configPath, onChange, onBudgetsChange } = {}) {
   function getBudgetsConfig() {
     const raw = readConfigFile();
     return buildEffective(raw.fleet).budgets;
+  }
+
+  /** Effective `fleet.digest` config, shaped for createDigest(). */
+  function getDigestConfig() {
+    const raw = readConfigFile();
+    return buildEffective(raw.fleet).digest;
   }
 
   /** Apply webhook add/update/remove operations to the normalized list. */
@@ -1012,6 +1113,9 @@ function createSettings({ configPath, onChange, onBudgetsChange } = {}) {
       if (validated.budgets.checkIntervalMs !== undefined) {
         budgetsNext.checkIntervalMs = validated.budgets.checkIntervalMs;
       }
+      if (validated.budgets.enforce !== undefined) {
+        budgetsNext.enforce = { ...validated.budgets.enforce };
+      }
       for (const period of ["daily", "weekly"]) {
         if (validated.budgets[period]) {
           // totalUSD merged per-field; perProvider is a FULL replacement.
@@ -1024,6 +1128,12 @@ function createSettings({ configPath, onChange, onBudgetsChange } = {}) {
       next.budgets = budgetsNext;
     }
 
+    if (validated.digest) {
+      const digestBefore = isPlainObject(fleetBefore.digest) ? fleetBefore.digest : {};
+      // sinks is a FULL replacement list by contract; scalars merge per-field.
+      next.digest = { ...digestBefore, ...validated.digest };
+    }
+
     const after = buildEffective(next);
     const changed = changedPaths(before, after);
 
@@ -1034,12 +1144,15 @@ function createSettings({ configPath, onChange, onBudgetsChange } = {}) {
 
     const alertsChanged = changed.some((p) => p === "alerts" || p.startsWith("alerts."));
     const budgetsChanged = changed.some((p) => p === "budgets" || p.startsWith("budgets."));
+    const digestChanged = changed.some((p) => p === "digest" || p.startsWith("digest."));
     const hotApplyAlerts = typeof onChange === "function";
     const hotApplyBudgets = typeof onBudgetsChange === "function";
+    const hotApplyDigest = typeof onDigestChange === "function";
     const restartRequired = changed.filter((p) => {
       if (RESTART_PATHS.has(p)) return true;
       if (p === "alerts" || p.startsWith("alerts.")) return !hotApplyAlerts;
       if (p === "budgets" || p.startsWith("budgets.")) return !hotApplyBudgets;
+      if (p === "digest" || p.startsWith("digest.")) return !hotApplyDigest;
       return false;
     });
 
@@ -1059,10 +1172,18 @@ function createSettings({ configPath, onChange, onBudgetsChange } = {}) {
       }
     }
 
+    if (digestChanged && hotApplyDigest) {
+      try {
+        onDigestChange(after.digest);
+      } catch (err) {
+        console.error("[Settings] onDigestChange hook failed:", err.message);
+      }
+    }
+
     return { applied: redact(after), restartRequired };
   }
 
-  return { get, update, getAlertsConfig, getBudgetsConfig };
+  return { get, update, getAlertsConfig, getBudgetsConfig, getDigestConfig };
 }
 
 module.exports = { createSettings };

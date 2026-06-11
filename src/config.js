@@ -256,12 +256,17 @@ const FLEET_DEFAULTS = {
   dispatch: { enabled: true, baseUrl: "", maxConcurrent: 3, timeoutSec: 600, node: "" },
   rateLimit: { windowMs: 60000, max: 120 },
   // Cost budgets (USD) over LLM API spend — see src/budgets.js. 0 = no limit.
+  // enforce.enabled gates dispatch blocking when a budget crosses 100%.
   budgets: {
     enabled: false,
     daily: { totalUSD: 0, perProvider: {} },
     weekly: { totalUSD: 0, perProvider: {} },
     checkIntervalMs: 900000,
+    enforce: { enabled: false },
   },
+  // Scheduled fleet digest (src/digest.js): compact markdown summary
+  // delivered through the alert sinks. ["*"] = every configured sink.
+  digest: { enabled: false, schedule: "daily", hourUtc: 8, sinks: ["*"] },
   // Per-instance agents roster source (GET /api/agents — src/agents-roster.js).
   // source: "openclaw" reads openclaw.json + per-agent session dirs (default,
   // preserves prior behavior); "hermes" enumerates Hermes-system agents from

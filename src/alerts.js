@@ -33,6 +33,12 @@
  * injected fetchFn), sinks become no-ops — the alert is still recorded in
  * the ring buffer + history, but nothing leaves the process. Tests that
  * inject a fetchFn stub keep deterministic delivery assertions.
+ *
+ * Sink dispatcher reuse: the actual sink delivery (webhook HMAC POST, Slack
+ * gateway POST, ntfy publish — including timeout, single retry, and
+ * test-mode suppression) lives in createSinkDispatcher(), used both by the
+ * alert engine's fire() and by the fleet digest (src/digest.js) so there is
+ * exactly one delivery implementation.
  */
 
 const crypto = require("crypto");
@@ -146,71 +152,31 @@ function normalizeEvent(event, nowFn) {
 }
 
 /**
- * Create the alert engine.
+ * Reusable sink dispatcher — the single implementation of webhook / Slack /
+ * ntfy delivery (10s timeout, one retry, failures logged and never thrown).
+ * Consumed by createAlerts() below and by the fleet digest (src/digest.js).
  *
- * @param {object} options
- * @param {object} options.config - The `fleet.alerts` config section:
- *   {enabled, rules: {nodeOffline, nodeUnreachable, nodeRecovered, taskFailed,
- *                     taskStale, lessonPending},
- *    mutes: [{rule?, node?, until?}],
- *    routing: {<rule>: ["*"] | ["slack"|"ntfy"|"webhooks", ...]},
- *    sinks: {slack: {enabled, gatewayUrl, channel},
- *            ntfy: {enabled, server?, topic, priorityMap?},
- *            webhooks: [{url, secret, events}]}}
- *   ntfy.server defaults to https://ntfy.sh; ntfy.priorityMap optionally
- *   overrides the default severity→priority mapping per severity, e.g.
- *   {critical: "max", info: "min"}.
- * @param {string} [options.logsDir] - When set, fired alerts are persisted to
- *   <logsDir>/alerts.jsonl and query() reads them back (see alerts-history.js)
- * @param {function} [options.fetchFn=fetch] - Injectable fetch for tests
- * @param {function} [options.nowFn=Date.now] - Injectable clock for tests
- * @param {number} [options.timeoutMs=10000] - Per-request timeout
- * @param {number} [options.retryDelayMs=30000] - Delay before the single retry
- * @param {number} [options.historyMaxBytes] - History rotation threshold (tests)
- * @param {number} [options.historyKeepFiles] - Rotated history files kept (tests)
- * @returns {{fire: function, getRecent: function, query: function,
- *            getMutedCount: function, analytics: function}}
+ * Test-mode suppression matches the alert engine contract: when the process
+ * runs under `node --test` or OFC_DISABLE_ALERT_DELIVERY=1 AND delivery
+ * would go through the ambient global fetch, dispatch() becomes a no-op
+ * that reports { suppressed: true }.
+ *
+ * @param {object} [options]
+ * @param {function} [options.fetchFn=fetch] - injectable fetch for tests
+ * @param {number} [options.timeoutMs=10000] - per-request timeout
+ * @param {number} [options.retryDelayMs=30000] - delay before the single retry
+ * @returns {{dispatch: function, suppressed: boolean}}
  */
-function createAlerts({
-  config = {},
-  logsDir = null,
+function createSinkDispatcher({
   fetchFn = globalThis.fetch,
-  nowFn = Date.now,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   retryDelayMs = DEFAULT_RETRY_DELAY_MS,
-  historyMaxBytes = undefined,
-  historyKeepFiles = undefined,
 } = {}) {
   if (typeof fetchFn !== "function") {
     throw new TypeError("fetchFn must be a function");
   }
 
-  // Suppress real network delivery in test contexts UNLESS the caller
-  // injected a fetch stub (unit tests assert against injected stubs).
-  const suppressDelivery = isTestDeliveryContext() && fetchFn === globalThis.fetch;
-
-  const history =
-    typeof logsDir === "string" && logsDir.length > 0
-      ? createAlertHistory({
-          logsDir,
-          ...(historyMaxBytes !== undefined ? { maxBytes: historyMaxBytes } : {}),
-          ...(historyKeepFiles !== undefined ? { keepFiles: historyKeepFiles } : {}),
-        })
-      : null;
-
-  const dedupeLastFired = new Map();
-  let recentAlerts = [];
-  let mutedCount = 0;
-
-  // Lazy cleanup so the dedupe map cannot grow unbounded.
-  function sweepDedupe(now) {
-    if (dedupeLastFired.size < DEDUPE_SWEEP_THRESHOLD) return;
-    for (const [key, ts] of dedupeLastFired) {
-      if (now - ts >= DEDUPE_WINDOW_MS) {
-        dedupeLastFired.delete(key);
-      }
-    }
-  }
+  const suppressed = isTestDeliveryContext() && fetchFn === globalThis.fetch;
 
   async function postOnce(url, body, headers) {
     const controller = new globalThis.AbortController();
@@ -325,6 +291,118 @@ function createAlerts({
   }
 
   /**
+   * Dispatch an alert-shaped payload to every configured + routed sink.
+   *
+   * @param {object} sinks - `fleet.alerts.sinks` shape:
+   *   {slack: {enabled, gatewayUrl, channel}, ntfy: {enabled, server?, topic},
+   *    webhooks: [{url, secret?, events?}]}
+   * @param {{type, severity, node?, task?, message, ts}} alert
+   * @param {function} [routedTo] - (sinkName) => boolean filter over
+   *   "webhooks"/"slack"/"ntfy" (default: all sinks)
+   * @returns {Promise<{dispatched: number, delivered: number, suppressed: boolean}>}
+   */
+  async function dispatch(sinks, alert, routedTo = () => true) {
+    if (suppressed) {
+      return { dispatched: 0, delivered: 0, suppressed: true };
+    }
+    const effective = sinks && typeof sinks === "object" ? sinks : {};
+    const dispatches = [];
+
+    if (routedTo("webhooks")) {
+      for (const webhook of Array.isArray(effective.webhooks) ? effective.webhooks : []) {
+        if (webhook && webhook.url && webhookMatchesEvent(webhook, alert.type)) {
+          dispatches.push(dispatchToWebhook(webhook, alert));
+        }
+      }
+    }
+
+    if (
+      routedTo("slack") &&
+      effective.slack &&
+      effective.slack.enabled &&
+      effective.slack.gatewayUrl
+    ) {
+      dispatches.push(dispatchToSlack(effective.slack, alert));
+    }
+
+    if (routedTo("ntfy") && effective.ntfy && effective.ntfy.enabled && effective.ntfy.topic) {
+      dispatches.push(dispatchToNtfy(effective.ntfy, alert));
+    }
+
+    const results = await Promise.allSettled(dispatches);
+    const delivered = results.filter((r) => r.status === "fulfilled" && r.value === true).length;
+
+    return { dispatched: dispatches.length, delivered, suppressed: false };
+  }
+
+  return { dispatch, suppressed };
+}
+
+/**
+ * Create the alert engine.
+ *
+ * @param {object} options
+ * @param {object} options.config - The `fleet.alerts` config section:
+ *   {enabled, rules: {nodeOffline, nodeUnreachable, nodeRecovered, taskFailed,
+ *                     taskStale, lessonPending},
+ *    mutes: [{rule?, node?, until?}],
+ *    routing: {<rule>: ["*"] | ["slack"|"ntfy"|"webhooks", ...]},
+ *    sinks: {slack: {enabled, gatewayUrl, channel},
+ *            ntfy: {enabled, server?, topic, priorityMap?},
+ *            webhooks: [{url, secret, events}]}}
+ *   ntfy.server defaults to https://ntfy.sh; ntfy.priorityMap optionally
+ *   overrides the default severity→priority mapping per severity, e.g.
+ *   {critical: "max", info: "min"}.
+ * @param {string} [options.logsDir] - When set, fired alerts are persisted to
+ *   <logsDir>/alerts.jsonl and query() reads them back (see alerts-history.js)
+ * @param {function} [options.fetchFn=fetch] - Injectable fetch for tests
+ * @param {function} [options.nowFn=Date.now] - Injectable clock for tests
+ * @param {number} [options.timeoutMs=10000] - Per-request timeout
+ * @param {number} [options.retryDelayMs=30000] - Delay before the single retry
+ * @param {number} [options.historyMaxBytes] - History rotation threshold (tests)
+ * @param {number} [options.historyKeepFiles] - Rotated history files kept (tests)
+ * @returns {{fire: function, getRecent: function, query: function,
+ *            getMutedCount: function, analytics: function}}
+ */
+function createAlerts({
+  config = {},
+  logsDir = null,
+  fetchFn = globalThis.fetch,
+  nowFn = Date.now,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  retryDelayMs = DEFAULT_RETRY_DELAY_MS,
+  historyMaxBytes = undefined,
+  historyKeepFiles = undefined,
+} = {}) {
+  // Shared sink delivery (timeout + retry + test-mode suppression); see
+  // createSinkDispatcher above. Suppression only engages when delivery
+  // would go through the ambient global fetch (unit tests inject stubs).
+  const dispatcher = createSinkDispatcher({ fetchFn, timeoutMs, retryDelayMs });
+
+  const history =
+    typeof logsDir === "string" && logsDir.length > 0
+      ? createAlertHistory({
+          logsDir,
+          ...(historyMaxBytes !== undefined ? { maxBytes: historyMaxBytes } : {}),
+          ...(historyKeepFiles !== undefined ? { keepFiles: historyKeepFiles } : {}),
+        })
+      : null;
+
+  const dedupeLastFired = new Map();
+  let recentAlerts = [];
+  let mutedCount = 0;
+
+  // Lazy cleanup so the dedupe map cannot grow unbounded.
+  function sweepDedupe(now) {
+    if (dedupeLastFired.size < DEDUPE_SWEEP_THRESHOLD) return;
+    for (const [key, ts] of dedupeLastFired) {
+      if (now - ts >= DEDUPE_WINDOW_MS) {
+        dedupeLastFired.delete(key);
+      }
+    }
+  }
+
+  /**
    * Fire an alert event: mute-check, dedupe, record (ring + history), and
    * dispatch to matching sinks. Sink failures never propagate to the caller.
    *
@@ -363,36 +441,16 @@ function createAlerts({
     recentAlerts = [...recentAlerts, alert].slice(-RING_BUFFER_SIZE);
     if (history) history.append(alert);
 
-    if (suppressDelivery) {
+    if (dispatcher.suppressed) {
       console.log(`[Alerts] ${alert.type} delivery suppressed (test mode)`);
       return { fired: true, dispatched: 0, delivered: 0, suppressed: true };
     }
 
-    const sinks = config.sinks || {};
     const routes = sinkRoutesForType(config.routing, alert.type);
     const routedTo = (sinkName) => routes === null || routes.has(sinkName);
-    const dispatches = [];
+    const result = await dispatcher.dispatch(config.sinks || {}, alert, routedTo);
 
-    if (routedTo("webhooks")) {
-      for (const webhook of Array.isArray(sinks.webhooks) ? sinks.webhooks : []) {
-        if (webhook && webhook.url && webhookMatchesEvent(webhook, alert.type)) {
-          dispatches.push(dispatchToWebhook(webhook, alert));
-        }
-      }
-    }
-
-    if (routedTo("slack") && sinks.slack && sinks.slack.enabled && sinks.slack.gatewayUrl) {
-      dispatches.push(dispatchToSlack(sinks.slack, alert));
-    }
-
-    if (routedTo("ntfy") && sinks.ntfy && sinks.ntfy.enabled && sinks.ntfy.topic) {
-      dispatches.push(dispatchToNtfy(sinks.ntfy, alert));
-    }
-
-    const results = await Promise.allSettled(dispatches);
-    const delivered = results.filter((r) => r.status === "fulfilled" && r.value === true).length;
-
-    return { fired: true, dispatched: dispatches.length, delivered };
+    return { fired: true, dispatched: result.dispatched, delivered: result.delivered };
   }
 
   /**
@@ -573,4 +631,9 @@ function createNodeAlertTracker({ flap, fire, nowFn = Date.now } = {}) {
   return { observe, setFlapConfig };
 }
 
-module.exports = { createAlerts, createNodeAlertTracker, normalizeFlapConfig };
+module.exports = {
+  createAlerts,
+  createNodeAlertTracker,
+  createSinkDispatcher,
+  normalizeFlapConfig,
+};
