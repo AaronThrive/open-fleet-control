@@ -202,9 +202,9 @@ Fleet Control slots into the `openclaw-stack` appliance as two extra Compose con
 
 ## 🚀 Roadmap
 
-- **Federation remote-node drill-down** — click through a federated card into the remote's mesh/kanban detail, not just the summary tiles.
 - **Graph edge extraction scheduling** — periodic gbrain edge extraction runs managed (and visualized) from the Cortex panel.
-- **Alert rule UI** — edit alert rules and sinks from the dashboard instead of `dashboard.json`.
+- **Multi-turn dispatch** — let a dispatched kanban card continue across agent turns (auto-redispatch with continuation context) instead of one turn per dispatch.
+- **Federation write-actions for briefs and chat** — extend the opt-in `allowWrites` proxy beyond task.move / lesson / gate.
 
 ---
 

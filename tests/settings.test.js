@@ -773,6 +773,7 @@ describe("alerts.routing (per-rule sink routing)", () => {
     "taskStale",
     "lessonPending",
     "budgetBreach",
+    "dispatchComplete",
   ];
 
   it('get() defaults every rule to ["*"]', () => {
