@@ -675,6 +675,32 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ error: "Internal error" }));
       });
     return;
+  } else if (pathname === "/api/sessions/transcript/search") {
+    if (req.method !== "GET") {
+      res.writeHead(405, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    const maxRaw = query.get("max");
+    sessionControl
+      .searchTranscript({
+        source: query.get("source"),
+        id: query.get("id"),
+        query: query.get("q"),
+        ...(maxRaw !== null && maxRaw !== "" ? { maxResults: Number(maxRaw) } : {}),
+      })
+      .then((result) => {
+        res.writeHead(result.error ? result.code || 500 : 200, {
+          "Content-Type": "application/json",
+        });
+        res.end(JSON.stringify(result, null, 2));
+      })
+      .catch((e) => {
+        console.error("[SessionControl] Transcript search failed:", e.message);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Internal error" }));
+      });
+    return;
   } else if (pathname === "/api/sessions/terminal/live") {
     sessionControl
       .getTerminalLive()
