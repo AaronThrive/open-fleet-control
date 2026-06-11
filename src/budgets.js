@@ -8,7 +8,18 @@
  *   { enabled: false,
  *     daily:  { totalUSD: 0, perProvider: {} },   // 0 / absent = no limit
  *     weekly: { totalUSD: 0, perProvider: {} },
- *     checkIntervalMs: 900000 }
+ *     checkIntervalMs: 900000,
+ *     enforce: { enabled: false } }               // dispatch blocking (below)
+ *
+ * Enforcement (fleet.budgets.enforce, default OFF): when ANY scope of a
+ * period reaches 100% of its budget, checkDispatchBlock() reports a block
+ * and the kanban dispatch route refuses new dispatches with a 429-style
+ * {error: "budget exceeded", scope, spent, limit} until either the budget
+ * window rolls over or an operator acknowledges via ack() (wired to
+ * POST /api/fleet/budgets/ack). Acks are per period-window, persisted in
+ * the state file, and pruned automatically when the window rolls. Block
+ * state is refreshed by every evaluate() AND getStatus() pass, so the
+ * guard always reflects the latest computed spend.
  *
  * getUsage contract (injected; see createUsageProvider for the standard
  * implementation over the usage-sources module):
@@ -71,6 +82,11 @@ function normalizeBudgetsConfig(raw) {
       Number.isInteger(src.checkIntervalMs) && src.checkIntervalMs >= 60000
         ? src.checkIntervalMs
         : DEFAULT_CHECK_INTERVAL_MS,
+    enforce: {
+      enabled: Boolean(
+        src.enforce && typeof src.enforce === "object" && src.enforce.enabled === true,
+      ),
+    },
   };
 }
 
@@ -137,7 +153,14 @@ function scopeStatus(scope, limitUSD, spentUSD) {
  * @param {object} [options.log=console]
  * @returns {{start, stop, evaluate, applyConfig, getState, getStatus}}
  */
-function createBudgets({ getUsage, onBreach, config, stateFile = null, nowFn = Date.now, log = console } = {}) {
+function createBudgets({
+  getUsage,
+  onBreach,
+  config,
+  stateFile = null,
+  nowFn = Date.now,
+  log = console,
+} = {}) {
   if (typeof getUsage !== "function") throw new TypeError("createBudgets requires getUsage");
   if (typeof onBreach !== "function") throw new TypeError("createBudgets requires onBreach");
 
@@ -148,11 +171,19 @@ function createBudgets({ getUsage, onBreach, config, stateFile = null, nowFn = D
   let lastCheck = null;
   let lastSpend = null;
 
-  // ---- persisted state: { fired: {key: {ts,...}}, openrouterBaseline: {} } --
+  // In-memory dispatch-block registry, refreshed by every spend computation:
+  // "<period>:<periodKey>:<scope>" -> {period, periodKey, scope, limitUSD,
+  // spentUSD}. Deliberately NOT persisted — it is recomputed from real spend
+  // on the first evaluation after boot (budgets.start() evaluates eagerly).
+  let blocked = {};
+
+  // ---- persisted state: { fired, openrouterBaseline, acks } -----------------
+  // acks: "<period>:<periodKey>" -> {by, ts} — operator acknowledgements that
+  // clear dispatch blocking for the current window (pruned on window roll).
   let state = loadState();
 
   function loadState() {
-    const empty = { fired: {}, openrouterBaseline: {} };
+    const empty = { fired: {}, openrouterBaseline: {}, acks: {} };
     if (!stateFile) return empty;
     try {
       if (!fs.existsSync(stateFile)) return empty;
@@ -163,6 +194,7 @@ function createBudgets({ getUsage, onBreach, config, stateFile = null, nowFn = D
           raw && typeof raw.openrouterBaseline === "object" && raw.openrouterBaseline !== null
             ? raw.openrouterBaseline
             : {},
+        acks: raw && typeof raw.acks === "object" && raw.acks !== null ? raw.acks : {},
       };
     } catch (e) {
       log.warn(`[Budgets] Failed to read state file ${stateFile}: ${e.message}`);
@@ -182,13 +214,19 @@ function createBudgets({ getUsage, onBreach, config, stateFile = null, nowFn = D
     }
   }
 
-  /** Drop fired entries + baselines from periods other than the current ones. */
+  /** Drop fired entries + baselines + acks from non-current periods. */
   function pruneState(currentKeys) {
     let changed = false;
     const next = {};
     for (const [key, value] of Object.entries(state.fired)) {
       const [period, pKey] = key.split(":");
       if (currentKeys[period] === pKey) next[key] = value;
+      else changed = true;
+    }
+    const nextAcks = {};
+    for (const [key, value] of Object.entries(state.acks)) {
+      const [period, pKey] = key.split(":");
+      if (currentKeys[period] === pKey) nextAcks[key] = value;
       else changed = true;
     }
     for (const period of Object.keys(state.openrouterBaseline)) {
@@ -198,7 +236,7 @@ function createBudgets({ getUsage, onBreach, config, stateFile = null, nowFn = D
         changed = true;
       }
     }
-    if (changed) state = { ...state, fired: next };
+    if (changed) state = { ...state, fired: next, acks: nextAcks };
     return changed;
   }
 
@@ -250,6 +288,81 @@ function createBudgets({ getUsage, onBreach, config, stateFile = null, nowFn = D
       totalUSD = usage.tokensEstUSD; // est-cost fallback
     }
     return { byProvider, totalUSD: round2(totalUSD) };
+  }
+
+  // ---- dispatch-block registry ------------------------------------------------
+
+  /**
+   * Refresh the block registry for one scope from a freshly computed spend.
+   * Crossing 100% adds the entry; dropping back below removes it. Stale
+   * entries from rolled-over windows are filtered at read time.
+   */
+  function recordBlockState(period, key, scope, limitUSD, spentUSD) {
+    const blockKey = `${period}:${key}:${scope}`;
+    if (limitUSD > 0 && spentUSD / limitUSD >= CRITICAL_RATIO) {
+      blocked = {
+        ...blocked,
+        [blockKey]: { period, periodKey: key, scope, limitUSD, spentUSD: round2(spentUSD) },
+      };
+    } else if (blocked[blockKey]) {
+      const rest = { ...blocked };
+      delete rest[blockKey];
+      blocked = rest;
+    }
+  }
+
+  /** Block entries for the CURRENT windows only, unacked first. */
+  function currentBlocks(now) {
+    const currentKeys = { daily: dailyKey(now), weekly: weeklyKey(now) };
+    return Object.values(blocked).filter((entry) => currentKeys[entry.period] === entry.periodKey);
+  }
+
+  /**
+   * Dispatch guard for the kanban dispatch route. Returns null when
+   * dispatching is allowed, otherwise the first unacknowledged over-budget
+   * scope: {scope, spent, limit, period, periodKey}.
+   *
+   * Synchronous by design — it reads the registry maintained by
+   * evaluate()/getStatus() (budgets.start() evaluates eagerly at boot, so
+   * the registry is warm before the first dispatch can arrive).
+   */
+  function checkDispatchBlock() {
+    if (!cfg.enabled || !cfg.enforce.enabled) return null;
+    const now = nowFn();
+    for (const entry of currentBlocks(now)) {
+      if (state.acks[`${entry.period}:${entry.periodKey}`]) continue; // acknowledged
+      return {
+        scope: entry.scope,
+        spent: entry.spentUSD,
+        limit: entry.limitUSD,
+        period: entry.period,
+        periodKey: entry.periodKey,
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Operator acknowledgement: clears dispatch blocking for every currently
+   * blocked window (the ack is per period-window and expires automatically
+   * when the window rolls — see pruneState).
+   *
+   * @param {string} [user]
+   * @returns {{acked: string[]}} the "<period>:<periodKey>" windows acked
+   */
+  function ack(user = "anonymous") {
+    const now = nowFn();
+    const acked = [];
+    for (const entry of currentBlocks(now)) {
+      const ackKey = `${entry.period}:${entry.periodKey}`;
+      if (acked.includes(ackKey)) continue;
+      acked.push(ackKey);
+      if (!state.acks[ackKey]) {
+        state = { ...state, acks: { ...state.acks, [ackKey]: { by: user, ts: now } } };
+      }
+    }
+    if (acked.length > 0) saveState();
+    return { acked };
   }
 
   // ---- breach checks ----------------------------------------------------------
@@ -327,10 +440,12 @@ function createBudgets({ getUsage, onBreach, config, stateFile = null, nowFn = D
 
       if (periodCfg.totalUSD > 0) {
         checkScope(period, key, "total", periodCfg.totalUSD, spend.totalUSD, now);
+        recordBlockState(period, key, "total", periodCfg.totalUSD, spend.totalUSD);
       }
       for (const [provider, budgetUSD] of providerScopes) {
         const actual = Number(spend.byProvider[provider]) || 0;
         checkScope(period, key, `provider:${provider}`, budgetUSD, actual, now);
+        recordBlockState(period, key, `provider:${provider}`, budgetUSD, actual);
       }
     }
 
@@ -423,29 +538,64 @@ function createBudgets({ getUsage, onBreach, config, stateFile = null, nowFn = D
       const scopes = [];
       if (periodCfg.totalUSD > 0) {
         scopes.push(scopeStatus("total", periodCfg.totalUSD, spend.totalUSD));
+        if (usageAvailable)
+          recordBlockState(period, key, "total", periodCfg.totalUSD, spend.totalUSD);
       }
       for (const [provider, limitUSD] of providerScopes) {
         const actual = Number(spend.byProvider[provider]) || 0;
         scopes.push(scopeStatus(`provider:${provider}`, limitUSD, actual));
+        if (usageAvailable) recordBlockState(period, key, `provider:${provider}`, limitUSD, actual);
       }
       periods[period] = { periodKey: key, elapsedPct, usageAvailable, scopes };
     }
 
     if (Object.keys(periods).length === 0) return { enabled: false };
-    return { enabled: true, generatedAt: now, periods };
+    return {
+      enabled: true,
+      generatedAt: now,
+      periods,
+      enforcement: {
+        enabled: cfg.enforce.enabled,
+        blocked: currentBlocks(now).map((entry) => ({
+          period: entry.period,
+          periodKey: entry.periodKey,
+          scope: entry.scope,
+          limitUSD: entry.limitUSD,
+          spentUSD: entry.spentUSD,
+          acked: Boolean(state.acks[`${entry.period}:${entry.periodKey}`]),
+        })),
+        acks: Object.entries(state.acks).map(([window, value]) => ({
+          window,
+          by: value.by || "anonymous",
+          ts: value.ts || null,
+        })),
+      },
+    };
   }
 
   function getState() {
     return {
       enabled: cfg.enabled,
       checkIntervalMs: cfg.checkIntervalMs,
+      enforceEnabled: cfg.enforce.enabled,
       lastCheck,
       lastSpend,
       firedCount: Object.keys(state.fired).length,
+      blockedCount: Object.keys(blocked).length,
+      ackCount: Object.keys(state.acks).length,
     };
   }
 
-  return { start, stop, evaluate, applyConfig, getState, getStatus };
+  return {
+    start,
+    stop,
+    evaluate,
+    applyConfig,
+    getState,
+    getStatus,
+    checkDispatchBlock,
+    ack,
+  };
 }
 
 /**

@@ -597,6 +597,7 @@ describe("settings module", () => {
         daily: { totalUSD: 0, perProvider: {} },
         weekly: { totalUSD: 0, perProvider: {} },
         checkIntervalMs: 900000,
+        enforce: { enabled: false },
       });
     });
 
@@ -616,6 +617,7 @@ describe("settings module", () => {
         daily: { totalUSD: 10, perProvider: { kimi: 5, openrouter: 2.5 } },
         weekly: { totalUSD: 50, perProvider: {} },
         checkIntervalMs: 60000,
+        enforce: { enabled: false },
       });
       // No onBudgetsChange hook → honestly restartRequired.
       assert.ok(restartRequired.some((p) => p.startsWith("budgets.")));
