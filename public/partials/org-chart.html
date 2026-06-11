@@ -1,0 +1,347 @@
+<!-- Org Chart View Partial -->
+<div class="section" id="org-chart-view-section">
+  <style>
+    /* Explicit display rules below would defeat the `hidden` attribute */
+    #org-chart-view-section [hidden] {
+      display: none !important;
+    }
+
+    /* ---- Layout: tree panel + unassigned tray ---- */
+    .org-layout {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      padding-top: 14px;
+    }
+    .org-tree-panel {
+      flex: 1;
+      min-width: 0;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      overflow-x: auto;
+      min-height: 320px;
+    }
+    .org-tray-panel {
+      flex: 0 0 252px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      max-height: 72vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .org-tray-title {
+      font-size: 0.74rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--accent-2);
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .org-tray-count {
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 1px 8px;
+      margin-left: auto;
+    }
+    .org-tray-hint {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      padding: 8px 0 4px;
+    }
+
+    /* ---- Toolbar: save + dirty indicator ---- */
+    .org-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-top: 12px;
+      flex-wrap: wrap;
+    }
+    .org-save-btn {
+      background: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      color: var(--on-accent);
+      cursor: pointer;
+      font-size: 0.76rem;
+      font-weight: 700;
+      padding: 6px 16px;
+    }
+    .org-save-btn:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+    .org-save-btn.org-save-retry {
+      background: transparent;
+      color: var(--red);
+      border-color: rgba(248, 81, 73, 0.55);
+    }
+    .org-status {
+      font-size: 0.74rem;
+      color: var(--text-muted);
+    }
+    .org-status.org-status-dirty {
+      color: var(--yellow);
+      font-weight: 600;
+    }
+    .org-status.org-status-error {
+      color: var(--red);
+      font-weight: 600;
+    }
+    .org-status.org-status-saved {
+      color: var(--accent);
+    }
+
+    /* ---- Tree lists (nested) ---- */
+    .org-children {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 14px; /* drop target even when empty */
+    }
+    .org-node > .org-children {
+      margin-top: 8px;
+      margin-left: 26px;
+      padding-left: 12px;
+      border-left: 1px dashed var(--border);
+    }
+    .org-node {
+      list-style: none;
+    }
+
+    /* ---- Agent cards ---- */
+    .org-card {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      cursor: grab;
+      max-width: 480px;
+    }
+    .org-card:hover {
+      background: var(--card-hover);
+      border-color: rgba(var(--accent-rgb), 0.4);
+    }
+    .org-card:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .org-card.org-move-mode,
+    .org-card.org-move-mode:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-color: var(--accent);
+      box-shadow: 0 0 14px rgba(var(--accent-rgb), 0.55);
+    }
+    .sortable-ghost > .org-card,
+    .org-card.sortable-ghost {
+      opacity: 0.4;
+      border: 1px dashed var(--accent);
+    }
+    .org-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--text-muted);
+      opacity: 0.5;
+    }
+    .org-dot.active {
+      background: var(--accent);
+      opacity: 1;
+      box-shadow: 0 0 6px rgba(var(--accent-rgb), 0.8);
+    }
+    .org-card-main {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    .org-card-name {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .org-card-node {
+      font-size: 0.66rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .org-title-input {
+      margin-left: auto;
+      background: var(--bg);
+      border: 1px solid transparent;
+      border-radius: 5px;
+      color: var(--accent-2);
+      font-size: 0.7rem;
+      font-style: italic;
+      padding: 3px 6px;
+      width: 132px;
+      flex-shrink: 0;
+    }
+    .org-title-input:hover {
+      border-color: var(--border);
+    }
+    .org-title-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      font-style: normal;
+    }
+
+    /* ---- Ghost nodes (agent id missing from the roster) ---- */
+    .org-card.org-ghost {
+      border-style: dashed;
+      opacity: 0.65;
+    }
+    .org-card.org-ghost .org-card-name {
+      text-decoration: line-through;
+      color: var(--text-muted);
+    }
+    .org-remove {
+      background: transparent;
+      border: 1px solid rgba(248, 81, 73, 0.55);
+      border-radius: 5px;
+      color: var(--red);
+      cursor: pointer;
+      font-size: 0.7rem;
+      line-height: 1;
+      padding: 3px 7px;
+      flex-shrink: 0;
+    }
+    .org-remove:hover {
+      background: rgba(248, 81, 73, 0.12);
+    }
+    .org-remove:focus-visible,
+    .org-save-btn:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+
+    /* ---- Empty / loading / hints ---- */
+    .org-empty-hint {
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      padding: 20px 6px;
+    }
+    .org-loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 200px;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+    .org-kbd-hint {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      padding: 8px 2px 2px;
+      letter-spacing: 0.02em;
+    }
+    .org-kbd-hint kbd {
+      font-family: monospace;
+      color: var(--accent-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0 4px;
+    }
+    .org-move-hint {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--accent);
+      background: rgba(var(--accent-rgb), 0.08);
+      border: 1px solid rgba(var(--accent-rgb), 0.4);
+      border-radius: 6px;
+      padding: 5px 10px;
+      margin-top: 8px;
+    }
+    .org-visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      border: 0;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+  </style>
+
+  <section class="view-panel">
+    <div class="view-header">
+      <div class="view-title">
+        <span class="view-icon">🌳</span>
+        <span data-i18n="views.orgChart.title">Org Chart</span>
+      </div>
+      <div class="view-subtitle" data-i18n="views.orgChart.subtitle">
+        Owner-defined agent hierarchy — purely organizational, drives nothing
+      </div>
+    </div>
+
+    <div class="org-toolbar">
+      <button class="org-save-btn" id="org-save" data-i18n="views.orgChart.save" disabled>
+        Save
+      </button>
+      <span class="org-status" id="org-status"></span>
+    </div>
+
+    <div class="org-loading" id="org-loading" data-i18n="views.orgChart.loading">
+      Loading org chart...
+    </div>
+
+    <div class="org-layout" id="org-layout" hidden>
+      <div class="org-tree-panel">
+        <div class="org-empty-hint" id="org-empty-hint" data-i18n="views.orgChart.emptyTree" hidden>
+          No structure yet — drag agents here from the Unassigned tray to build your org.
+        </div>
+        <ul class="org-children" id="org-roots"></ul>
+      </div>
+      <div class="org-tray-panel">
+        <div class="org-tray-title">
+          <span data-i18n="views.orgChart.unassigned">Unassigned</span>
+          <span class="org-tray-count" id="org-tray-count">0</span>
+        </div>
+        <div class="org-tray-hint" data-i18n="views.orgChart.trayHint">
+          Roster agents not yet placed in the tree.
+        </div>
+        <ul class="org-children" id="org-tray"></ul>
+      </div>
+    </div>
+
+    <div class="org-move-hint" id="org-move-hint" hidden></div>
+    <div class="org-kbd-hint" id="org-kbd-hint" hidden>
+      <kbd>Tab</kbd><span data-i18n="views.orgChart.kbdNavigate">: navigate</span> · <kbd>M</kbd
+      ><span data-i18n="views.orgChart.kbdMoveMode">: move mode</span> · <kbd>↑↓</kbd
+      ><span data-i18n="views.orgChart.kbdSiblings">: among siblings</span> · <kbd>←</kbd
+      ><span data-i18n="views.orgChart.kbdPromote">: promote (root → tray)</span> · <kbd>→</kbd
+      ><span data-i18n="views.orgChart.kbdDemote">: nest (tray → root)</span> · <kbd>Enter</kbd
+      ><span data-i18n="views.orgChart.kbdConfirm">: confirm</span> · <kbd>Esc</kbd
+      ><span data-i18n="views.orgChart.kbdCancel">: cancel</span>
+    </div>
+    <div class="org-visually-hidden" id="org-live" aria-live="polite" role="status"></div>
+  </section>
+</div>

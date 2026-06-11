@@ -115,6 +115,8 @@ function parseIntParam(query, name, fallback) {
  *   omitted the /api/fleet/settings routes respond 404
  * @param {object} [options.dispatch] - module from createDispatch(); when
  *   omitted the kanban dispatch routes respond 503 (clean "not configured")
+ * @param {object} [options.orgChart] - module from createOrgChart(); when
+ *   omitted the /api/fleet/org-chart routes respond 404
  * @param {function} [options.rosterFn] - () => local roster ({agents:[{id}]})
  *   or a Promise of one (agents-roster getLocalRoster); when provided, the
  *   dispatch agent must exist in it. Wiring (src/index.js):
@@ -134,6 +136,7 @@ function createFleetRoutes({
   fleet,
   settings = null,
   dispatch = null,
+  orgChart = null,
   rosterFn = null,
   secretsStatusFn = () => defaultSecrets.getStatus(),
   exitFn = (code) => process.exit(code),
@@ -555,6 +558,33 @@ function createFleetRoutes({
   }
 
   // -------------------------------------------------------------------
+  // Org chart (owner-defined agent hierarchy — purely organizational)
+  // -------------------------------------------------------------------
+
+  async function handleOrgChart(req, res, method, segments) {
+    if (!orgChart || segments.length !== 1) return false;
+    if (method === "GET") {
+      json(res, 200, orgChart.getChart());
+      return true;
+    }
+    if (method === "PUT") {
+      const user = guardMutation(req, res);
+      if (!user) return true;
+      const body = await readJsonBody(req);
+      // Full-tree replace: normalize + schema-validate (400 on invalid trees,
+      // duplicate agentIds, unknown fields), atomic write + rolling backup.
+      const chart = orgChart.replaceChart({ roots: body.roots, unassigned: body.unassigned }, user);
+      recordAudit(user, "org.update", null, {
+        roots: chart.roots.length,
+        unassigned: chart.unassigned.length,
+      });
+      json(res, 200, { success: true, chart });
+      return true;
+    }
+    return false;
+  }
+
+  // -------------------------------------------------------------------
   // Briefs
   // -------------------------------------------------------------------
 
@@ -947,6 +977,8 @@ function createFleetRoutes({
         return handleChat(req, res, method, segments, query);
       case "kanban":
         return handleKanban(req, res, method, segments, query);
+      case "org-chart":
+        return handleOrgChart(req, res, method, segments);
       case "briefs":
         return handleBriefs(req, res, method, segments);
       case "evolution":
