@@ -391,8 +391,12 @@ function createFleetRoutes({
         payload: body.payload,
         toolCalls: body.toolCalls,
       });
-      // Note: chat publish has no entry in AUDIT_ACTIONS — the durable
-      // JSONL + SQLite trail in fleet-chat itself is the audit record.
+      // fleet-chat keeps its own durable JSONL + SQLite trail; the audit
+      // entry records WHO published (the HTTP actor) without the payload.
+      recordAudit(user, "chat.publish", message.id || null, {
+        sender: message.sender,
+        receiver: message.receiver,
+      });
       json(res, 200, { success: true, message });
       return true;
     }
@@ -826,7 +830,9 @@ function createFleetRoutes({
       // update() validates strictly (400 on unknown/malformed keys) and
       // hot-applies alerts changes via the createSettings onChange hook.
       const result = settings.update(body, user);
-      recordAudit(user, "alerts.config", null, {
+      // Record WHICH top-level sections changed (alerts, budgets, mesh, …)
+      // — never the values themselves, which may contain secrets.
+      recordAudit(user, "settings.update", null, {
         sections: Object.keys(body),
         restartRequired: result.restartRequired,
       });
@@ -852,6 +858,7 @@ function createFleetRoutes({
             ? body.message
             : "Test alert from Settings",
       });
+      recordAudit(user, "alert.test", null, { fired: result ? !!result.fired : null });
       json(res, 200, { success: true, result });
       return true;
     }
