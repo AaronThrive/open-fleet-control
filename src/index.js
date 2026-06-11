@@ -79,7 +79,9 @@ const {
   calculateOperatorStats,
 } = require("./operators");
 const { createSessionsModule } = require("./sessions");
-const { getCronJobs } = require("./cron");
+const { getCronJobs, forceCliRefresh } = require("./cron");
+const { createCronActions } = require("./cron-actions");
+const { createCronRoutes } = require("./cron-routes");
 const { getCerebroTopics, updateTopicStatus } = require("./cerebro");
 const {
   getDailyTokenUsage,
@@ -206,6 +208,21 @@ const settings = createSettings({
 });
 
 const fleetRoutes = createFleetRoutes({ fleet, settings });
+
+// Cron write-actions — enable/disable/run-now for OPENCLAW-source jobs via
+// the openclaw CLI; Hermes jobs stay read-only. After a successful mutation
+// the 60s-TTL CLI job cache is force-refreshed so the UI's verifying refetch
+// sees the change. Shares the fleet audit trail + per-user rate limiter.
+const cronActions = createCronActions({
+  getJobs: getCronJobsSafe,
+  refreshJobs: forceCliRefresh,
+});
+const cronRoutes = createCronRoutes({
+  actions: cronActions,
+  audit: fleet.audit,
+  rateLimiter: fleet.rateLimiter,
+  enabled: OPENCLAW_SOURCES,
+});
 
 // Usage sources — read-only adapters over Claude Code / Codex / 9Router /
 // Headroom / OpenRouter usage data (paths configurable via fleet.usage).
@@ -731,6 +748,14 @@ const server = http.createServer((req, res) => {
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Internal error" }));
       });
+    return;
+  } else if (cronRoutes.isCronActionRoute(pathname)) {
+    // POST /api/cron/:id/{enable|disable|run} — handler sends all responses.
+    cronRoutes.handle(req, res, pathname).catch((e) => {
+      console.error("[Cron] Action route failed:", e.message);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Internal error" }));
+    });
     return;
   } else if (pathname === "/api/cron") {
     const cron = getCronJobsSafe();

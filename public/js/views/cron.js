@@ -12,6 +12,12 @@
  * Real-time: listens for the `fleet:state` window event (fed by the page's
  * single /api/events EventSource) with a polling fallback.
  *
+ * Write actions (openclaw-source jobs only): enable/disable toggle and
+ * run-now (confirm dialog) via POST /api/cron/:id/{enable|disable|run}.
+ * Updates are optimistic-but-verified — the card flips immediately and a
+ * re-fetch after the response is the source of truth. Hermes-source jobs
+ * stay read-only.
+ *
  * All dynamic values are rendered via textContent — XSS-safe.
  */
 
@@ -42,6 +48,18 @@ function isCronHidden(job) {
   return typeof window.isCronHidden === "function" ? window.isCronHidden(job) : false;
 }
 
+/** Toast using the dashboard's global .toast styles. */
+function showToast(message, kind) {
+  let host = document.querySelector(".toast-container");
+  if (!host) {
+    host = el("div", "toast-container");
+    document.body.appendChild(host);
+  }
+  const toast = el("div", `toast ${kind === "error" ? "error" : "success"}`, message);
+  host.appendChild(toast);
+  setTimeout(() => toast.remove(), 5000);
+}
+
 /**
  * Rough schedule classification from the cron expression for the
  * frequent/daily/weekly filter.
@@ -59,10 +77,92 @@ function classifySchedule(job) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Write actions (openclaw-source jobs only)                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * POST /api/cron/:id/{enable|disable|run}, then re-fetch to verify.
+ * Optimistic UI happens at the call site (toggle only); the load() in the
+ * finally block is the source of truth and reverts any failed optimism.
+ */
+async function performAction(els, job, action) {
+  try {
+    const response = await fetch(`/api/cron/${encodeURIComponent(job.id)}/${action}`, {
+      method: "POST",
+    });
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (e) {
+      payload = null;
+    }
+    if (!response.ok) {
+      throw new Error(payload?.error || `HTTP ${response.status}`);
+    }
+    const name = job.name || job.id;
+    if (action === "run") {
+      showToast(t("views.cron.runQueued", { name }, "Run queued: {name}"), "success");
+    } else if (action === "enable") {
+      showToast(t("views.cron.enabledToast", { name }, "Enabled: {name}"), "success");
+    } else {
+      showToast(t("views.cron.disabledToast", { name }, "Disabled: {name}"), "success");
+    }
+  } catch (error) {
+    showToast(
+      t("views.cron.actionError", { message: error.message }, "Cron action failed: {message}"),
+      "error",
+    );
+  } finally {
+    // Verified update: re-fetch regardless of outcome (reverts bad optimism).
+    if (els.grid.isConnected) load(els);
+  }
+}
+
+/** Build the per-job action buttons (openclaw-source jobs only). */
+function buildActions(els, job, card) {
+  const actions = el("div", "cron-actions");
+
+  const toggleBtn = el(
+    "button",
+    "cron-action-btn toggle",
+    job.enabled !== false
+      ? t("views.cron.actionDisable", {}, "⏸ Disable")
+      : t("views.cron.actionEnable", {}, "✓ Enable"),
+  );
+  toggleBtn.type = "button";
+  toggleBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const action = job.enabled !== false ? "disable" : "enable";
+    actions.querySelectorAll("button").forEach((btn) => (btn.disabled = true));
+    // Optimistic: flip the card state immediately; load() verifies/reverts.
+    card.classList.toggle("disabled", action === "disable");
+    card.dataset.enabled = action === "enable" ? "true" : "false";
+    performAction(els, job, action);
+  });
+  actions.appendChild(toggleBtn);
+
+  const runBtn = el("button", "cron-action-btn run", t("views.cron.actionRun", {}, "▶ Run now"));
+  runBtn.type = "button";
+  runBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const name = job.name || job.id;
+    const ok = window.confirm(
+      t("views.cron.runConfirm", { name }, 'Run "{name}" now? The job executes immediately.'),
+    );
+    if (!ok) return;
+    actions.querySelectorAll("button").forEach((btn) => (btn.disabled = true));
+    performAction(els, job, "run");
+  });
+  actions.appendChild(runBtn);
+
+  return actions;
+}
+
+/* ------------------------------------------------------------------ */
 /* Rendering                                                           */
 /* ------------------------------------------------------------------ */
 
-function buildCard(job) {
+function buildCard(els, job) {
   const card = el("div", `cron-card ${job.enabled === false ? "disabled" : ""}`);
   const source = job.source === "hermes" ? "hermes" : "openclaw";
   card.dataset.enabled = job.enabled !== false ? "true" : "false";
@@ -123,6 +223,11 @@ function buildCard(job) {
     meta.appendChild(hideBtn);
   }
   card.appendChild(meta);
+
+  // Write actions are openclaw-source only; Hermes jobs are read-only.
+  if (source === "openclaw" && job.id) {
+    card.appendChild(buildActions(els, job, card));
+  }
   return card;
 }
 
@@ -220,7 +325,7 @@ function render(els, jobs) {
     updateFilterEmptyNote(els, 0);
     return;
   }
-  els.grid.replaceChildren(...visible.map(buildCard));
+  els.grid.replaceChildren(...visible.map((job) => buildCard(els, job)));
   applyFilters(els);
 }
 

@@ -6,6 +6,7 @@ const path = require("path");
 const {
   cronToHuman,
   getCronJobs,
+  forceCliRefresh,
   _resetForTesting,
   _waitForCliRefreshForTesting,
 } = require("../src/cron");
@@ -241,6 +242,30 @@ describe("cron module", () => {
       fs.writeFileSync(path.join(tmpDir, "cron", "jobs.json"), "{not json");
       const jobs = getCronJobs(() => tmpDir, { hermesCronPath: NO_HERMES });
       assert.deepStrictEqual(jobs, []);
+    });
+
+    it("forceCliRefresh() re-runs the CLI within the TTL (post-mutation invalidation)", async () => {
+      let cliCalls = 0;
+      const enabledById = { "job-1": true };
+      _resetForTesting({
+        cliRunner: async () => {
+          cliCalls += 1;
+          return JSON.stringify({ jobs: [{ ...OPENCLAW_JOB, enabled: enabledById["job-1"] }] });
+        },
+      });
+
+      getCronJobs(() => tmpDir, { hermesCronPath: NO_HERMES });
+      await _waitForCliRefreshForTesting();
+      assert.strictEqual(cliCalls, 1);
+
+      // Simulate a mutation, then force a refresh despite the warm cache
+      enabledById["job-1"] = false;
+      await forceCliRefresh();
+      assert.strictEqual(cliCalls, 2);
+
+      const jobs = getCronJobs(() => tmpDir, { hermesCronPath: NO_HERMES });
+      assert.strictEqual(jobs.length, 1);
+      assert.strictEqual(jobs[0].enabled, false);
     });
 
     it("maps one-time schedules", () => {

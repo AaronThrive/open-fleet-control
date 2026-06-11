@@ -304,6 +304,23 @@ function getCronJobs(getOpenClawDir, opts = {}) {
 }
 
 /**
+ * Force a CLI cache refresh regardless of TTL — used after a successful
+ * cron mutation so the next getCronJobs() reflects the change. Waits for any
+ * in-flight refresh first (its data predates the mutation), then re-runs the
+ * CLI. Resolves when the cache holds post-mutation data; never rejects
+ * (refresh failures keep stale data, same as the background path).
+ *
+ * @returns {Promise<void>}
+ */
+function forceCliRefresh() {
+  const inflight = cliCache.promise || Promise.resolve();
+  return inflight.then(() => {
+    cliCache = { ...cliCache, fetchedAt: 0 };
+    return refreshCliCache();
+  });
+}
+
+/**
  * Reset module state for testing.
  * @param {object} [options]
  * @param {function} [options.cliRunner] - replacement async runner returning CLI stdout
@@ -321,6 +338,7 @@ function _waitForCliRefreshForTesting() {
 module.exports = {
   cronToHuman,
   getCronJobs,
+  forceCliRefresh,
   _resetForTesting,
   _waitForCliRefreshForTesting,
 };
