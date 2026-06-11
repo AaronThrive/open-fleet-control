@@ -700,8 +700,18 @@ function createFleetRoutes({ fleet, settings = null, dispatch = null, rosterFn =
    * GET /api/fleet/alerts?limit&type&node&severity&since[&history=1]
    * Default: in-memory ring buffer (newest first). history=1 reads the
    * persistent JSONL history from disk instead (limit capped at 500).
+   *
+   * GET /api/fleet/alerts/analytics[?days=14]
+   * Read-only rollup of the persistent history (per-day counts, flap
+   * cycles, top nodes/rules). days is clamped to 1..90.
    */
   function handleAlerts(res, method, segments, query) {
+    if (segments.length === 2 && segments[1] === "analytics" && method === "GET") {
+      const days = parseIntParam(query, "days", 14);
+      if (days < 1 || days > 90) throw httpError(400, "days must be between 1 and 90");
+      json(res, 200, fleet.alerts.analytics({ days }));
+      return true;
+    }
     if (segments.length !== 1 || method !== "GET") return false;
     const limit = parseIntParam(query, "limit", 50);
     const filters = {};

@@ -131,6 +131,7 @@ export function init(containerEl) {
   buildRuleToggles();
   buildWebhookEventToggles();
   setupCollapsibles(root);
+  initAlertRules(root); // "Alert rules" card (v2) — see section at end of file
 
   refs.alertsSave?.addEventListener("click", saveAlerts);
   refs.intervalsSave?.addEventListener("click", saveIntervals);
@@ -173,6 +174,7 @@ function setupCollapsibles(root) {
 
 function teardown() {
   refs = null;
+  arRefs = null; // "Alert rules" card refs (v2)
 }
 
 // --- Data fetching ----------------------------------------------------------
@@ -267,6 +269,8 @@ function populate(settings) {
   setOpBadge(refs.ntfyTopicBadge, ntfy.topic);
 
   renderWebhooks(Array.isArray(sinks.webhooks) ? sinks.webhooks : []);
+
+  populateAlertRules(alerts); // "Alert rules" card (v2)
 
   populateBudgets(settings.budgets || {});
 
@@ -803,4 +807,198 @@ function showToast(message, kind) {
   const toast = el("div", `toast ${kind === "error" ? "error" : "success"}`, message);
   host.appendChild(toast);
   setTimeout(() => toast.remove(), 5000);
+}
+
+// ============================================================================
+// Alert rules card (v2 alert-rules-ui) — per-rule enable/disable, flap
+// thresholds, and sink routing (alerts.routing). Self-contained: own refs
+// (arRefs), own populate/save; wired from init() via initAlertRules() and
+// from populate() via populateAlertRules() only, so merges stay clean.
+// ============================================================================
+
+const ALERT_SINK_NAMES = ["slack", "ntfy", "webhooks"];
+const ALERT_SINK_LABELS = {
+  slack: "Slack",
+  ntfy: "ntfy",
+  webhooks: "Webhooks",
+};
+
+let arRefs = null; // DOM refs for the Alert rules card (reset in teardown())
+let arRuleNames = []; // rule names from the last server response
+
+/** Wire the Alert rules card: refs, i18n labels, and the save handler. */
+function initAlertRules(root) {
+  arRefs = {
+    rows: root.querySelector("#set-arules-rows"),
+    save: root.querySelector("#set-arules-save"),
+    error: root.querySelector("#set-arules-error"),
+    flapConsecutive: root.querySelector("#set-arules-flap-consecutive"),
+    flapDuration: root.querySelector("#set-arules-flap-duration"),
+  };
+  if (Object.values(arRefs).some((node) => !node)) {
+    console.error("[Settings] Alert rules card markup is missing expected elements.");
+    arRefs = null;
+    return;
+  }
+
+  // Re-label static partial text through t() (inline English fallbacks; the
+  // partial cannot use data-i18n for keys absent from the locale bundle).
+  setText(root, "#set-arules-title", t("views.settings.arulesTitle", {}, "🚨 Alert rules"));
+  setText(root, "#set-arules-col-rule", t("views.settings.arulesColRule", {}, "Rule"));
+  setText(root, "#set-arules-col-enabled", t("views.settings.arulesColEnabled", {}, "Enabled"));
+  setText(root, "#set-arules-col-sinks", t("views.settings.arulesColSinks", {}, "Sends to"));
+  setText(
+    root,
+    "#set-arules-hint",
+    t(
+      "views.settings.arulesHint",
+      {},
+      'Per-rule delivery: enable/disable each alert rule and choose which sink(s) it fires to. "All sinks" routes through every configured sink; webhook event filters still apply.',
+    ),
+  );
+  setText(
+    root,
+    "#set-arules-flap-title",
+    t("views.settings.arulesFlapTitle", {}, "Flap suppression (nodeOffline / nodeUnreachable)"),
+  );
+  setText(
+    root,
+    "#set-arules-flap-consecutive-label",
+    t("views.settings.arulesFlapConsecutive", {}, "Consecutive failed checks (1–20)"),
+  );
+  setText(
+    root,
+    "#set-arules-flap-duration-label",
+    t("views.settings.arulesFlapDuration", {}, "Min failing duration, seconds (0–3600)"),
+  );
+  arRefs.save.textContent = t("views.settings.arulesSave", {}, "Save alert rules");
+  arRefs.save.addEventListener("click", saveAlertRules);
+}
+
+function setText(root, selector, text) {
+  const node = root.querySelector(selector);
+  if (node) node.textContent = text;
+}
+
+/** Rebuild the rules table + flap inputs from server truth (settings.alerts). */
+function populateAlertRules(alerts) {
+  if (!arRefs) return;
+  const rules = alerts.rules || {};
+  const routing = alerts.routing || {};
+  const flap = alerts.flap || {};
+  arRuleNames = Object.keys(rules);
+
+  arRefs.rows.replaceChildren();
+  for (const rule of arRuleNames) {
+    arRefs.rows.appendChild(buildAlertRuleRow(rule, rules[rule] !== false, routing[rule]));
+  }
+
+  arRefs.flapConsecutive.value = String(flap.consecutive ?? 3);
+  arRefs.flapDuration.value = String(Math.round((flap.minDurationMs ?? 60000) / SEC));
+}
+
+/** One table row: rule name, enabled toggle, routing checkboxes (All + sinks). */
+function buildAlertRuleRow(rule, enabled, sinkList) {
+  const row = el("div", "set-arules-row");
+  row.dataset.arule = rule;
+
+  const name = el("span", "set-arules-rule", rule);
+  name.title = rule;
+  row.appendChild(name);
+
+  const enabledLabel = el("label", "set-toggle");
+  const enabledInput = document.createElement("input");
+  enabledInput.type = "checkbox";
+  enabledInput.dataset.aruleEnabled = rule;
+  enabledInput.checked = enabled;
+  enabledLabel.appendChild(enabledInput);
+  row.appendChild(enabledLabel);
+
+  const routesToAll = !Array.isArray(sinkList) || sinkList.includes("*");
+  const sinksWrap = el("span", "set-arules-sinks");
+  const boxes = [];
+
+  const allLabel = el("label");
+  const allInput = document.createElement("input");
+  allInput.type = "checkbox";
+  allInput.dataset.aruleSink = "*";
+  allInput.checked = routesToAll;
+  allLabel.appendChild(allInput);
+  allLabel.appendChild(el("span", null, t("views.settings.arulesAllSinks", {}, "All sinks")));
+  sinksWrap.appendChild(allLabel);
+
+  for (const sink of ALERT_SINK_NAMES) {
+    const label = el("label");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.dataset.aruleSink = sink;
+    input.checked = !routesToAll && sinkList.includes(sink);
+    label.appendChild(input);
+    label.appendChild(el("span", null, ALERT_SINK_LABELS[sink] || sink));
+    sinksWrap.appendChild(label);
+    boxes.push(input);
+  }
+
+  // "All sinks" is exclusive with the specific-sink boxes.
+  allInput.addEventListener("change", () => {
+    if (allInput.checked) for (const box of boxes) box.checked = false;
+  });
+  for (const box of boxes) {
+    box.addEventListener("change", () => {
+      if (box.checked) allInput.checked = false;
+      else if (boxes.every((other) => !other.checked)) allInput.checked = true;
+    });
+  }
+
+  row.appendChild(sinksWrap);
+  return row;
+}
+
+/** Read one rule row's routing selection back into the PATCH shape. */
+function readAlertRuleRouting(row) {
+  const selected = [];
+  let all = false;
+  for (const input of row.querySelectorAll("input[data-arule-sink]")) {
+    if (!input.checked) continue;
+    if (input.dataset.aruleSink === "*") all = true;
+    else selected.push(input.dataset.aruleSink);
+  }
+  return all || selected.length === 0 ? ["*"] : selected;
+}
+
+function saveAlertRules() {
+  if (!arRefs) return;
+  const consecutive = readBoundedNumber(arRefs.flapConsecutive, 1, 20);
+  const durationSec = readBoundedNumber(arRefs.flapDuration, 0, 3600);
+  if (consecutive === null || durationSec === null) {
+    arRefs.error.hidden = false;
+    arRefs.error.textContent = t(
+      "views.settings.arulesFlapInvalid",
+      {},
+      "Flap thresholds must be 1–20 consecutive checks and 0–3600 seconds.",
+    );
+    return;
+  }
+
+  const rules = {};
+  const routing = {};
+  for (const row of arRefs.rows.querySelectorAll(".set-arules-row[data-arule]")) {
+    const rule = row.dataset.arule;
+    const enabledInput = row.querySelector("input[data-arule-enabled]");
+    rules[rule] = Boolean(enabledInput && enabledInput.checked);
+    routing[rule] = readAlertRuleRouting(row);
+  }
+  if (Object.keys(rules).length === 0) return; // nothing loaded yet
+
+  arRefs.error.hidden = true;
+  patchSettings(
+    {
+      alerts: {
+        rules,
+        routing,
+        flap: { consecutive, minDurationMs: durationSec * SEC },
+      },
+    },
+    { button: arRefs.save, errorEl: arRefs.error },
+  );
 }

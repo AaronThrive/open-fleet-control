@@ -757,3 +757,117 @@ describe("settings module", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Alert rule sink routing (alerts.routing) — v2 alert-rules-ui
+// ---------------------------------------------------------------------------
+
+describe("alerts.routing (per-rule sink routing)", () => {
+  const ALL_RULES = [
+    "nodeOffline",
+    "nodeUnreachable",
+    "nodeRecovered",
+    "taskFailed",
+    "taskStale",
+    "lessonPending",
+    "budgetBreach",
+  ];
+
+  it('get() defaults every rule to ["*"]', () => {
+    const settings = createSettings({ configPath });
+    const routing = settings.get().alerts.routing;
+    assert.deepStrictEqual(Object.keys(routing).sort(), [...ALL_RULES].sort());
+    for (const rule of ALL_RULES) {
+      assert.deepStrictEqual(routing[rule], ["*"], `routing.${rule} should default to ["*"]`);
+    }
+  });
+
+  it("applies and persists a per-rule routing patch", () => {
+    const settings = createSettings({ configPath });
+    const { applied } = settings.update({
+      alerts: { routing: { nodeOffline: ["ntfy"], taskFailed: ["slack", "webhooks"] } },
+    });
+    assert.deepStrictEqual(applied.alerts.routing.nodeOffline, ["ntfy"]);
+    assert.deepStrictEqual(applied.alerts.routing.taskFailed, ["slack", "webhooks"]);
+    assert.deepStrictEqual(applied.alerts.routing.nodeRecovered, ["*"]); // untouched
+
+    const onDisk = readConfig();
+    assert.deepStrictEqual(onDisk.fleet.alerts.routing.nodeOffline, ["ntfy"]);
+
+    // Survives a fresh service instance
+    const reloaded = createSettings({ configPath }).get();
+    assert.deepStrictEqual(reloaded.alerts.routing.nodeOffline, ["ntfy"]);
+  });
+
+  it("merges per rule: a later patch keeps earlier rules", () => {
+    const settings = createSettings({ configPath });
+    settings.update({ alerts: { routing: { nodeOffline: ["ntfy"] } } });
+    const { applied } = settings.update({ alerts: { routing: { taskFailed: ["slack"] } } });
+    assert.deepStrictEqual(applied.alerts.routing.nodeOffline, ["ntfy"]);
+    assert.deepStrictEqual(applied.alerts.routing.taskFailed, ["slack"]);
+  });
+
+  it('normalizes "*" mixed with sink names to ["*"] and dedupes', () => {
+    const settings = createSettings({ configPath });
+    const { applied } = settings.update({
+      alerts: { routing: { nodeOffline: ["*", "ntfy"], taskStale: ["ntfy", "ntfy", "slack"] } },
+    });
+    assert.deepStrictEqual(applied.alerts.routing.nodeOffline, ["*"]);
+    assert.deepStrictEqual(applied.alerts.routing.taskStale, ["slack", "ntfy"]);
+  });
+
+  it("rejects garbage routing patches with 400-style errors", () => {
+    const settings = createSettings({ configPath });
+    const cases = [
+      [{ alerts: { routing: { bogusRule: ["ntfy"] } } }, /unknown key "bogusRule"/],
+      [{ alerts: { routing: { nodeOffline: ["smoke-signals"] } } }, /unknown sink/],
+      [{ alerts: { routing: { nodeOffline: [] } } }, /non-empty array/],
+      [{ alerts: { routing: { nodeOffline: "ntfy" } } }, /non-empty array/],
+      [{ alerts: { routing: [] } }, /object/],
+      [{ alerts: { routing: {} } }, /at least one rule/],
+    ];
+    for (const [patch, re] of cases) {
+      assert.throws(() => settings.update(patch), re, JSON.stringify(patch));
+      const err = (() => {
+        try {
+          settings.update(patch);
+          return null;
+        } catch (e) {
+          return e;
+        }
+      })();
+      assert.strictEqual(err.statusCode, 400);
+    }
+  });
+
+  it("hot-applies routing changes through the onChange hook (no restart)", () => {
+    let received = null;
+    const settings = createSettings({ configPath, onChange: (cfg) => (received = cfg) });
+    const { restartRequired } = settings.update({
+      alerts: { routing: { nodeOffline: ["ntfy"] } },
+    });
+    assert.deepStrictEqual(restartRequired, []);
+    assert.ok(received, "onChange should be invoked");
+    assert.deepStrictEqual(received.routing.nodeOffline, ["ntfy"]);
+  });
+
+  it("normalizes hand-edited garbage in the config file to safe defaults", () => {
+    writeConfig({
+      fleet: {
+        alerts: {
+          routing: {
+            nodeOffline: ["ntfy", "smoke-signals"],
+            taskFailed: "nope",
+            taskStale: [],
+            unknownRule: ["slack"],
+          },
+        },
+      },
+    });
+    const routing = createSettings({ configPath }).get().alerts.routing;
+    assert.deepStrictEqual(routing.nodeOffline, ["ntfy"]); // unknown sink dropped
+    assert.deepStrictEqual(routing.taskFailed, ["*"]); // non-array → default
+    assert.deepStrictEqual(routing.taskStale, ["*"]); // empty → default
+    assert.strictEqual(routing.unknownRule, undefined); // unknown rule dropped
+  });
+});
