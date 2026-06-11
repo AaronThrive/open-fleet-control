@@ -15,6 +15,13 @@
  *
  * Append failures are logged and never thrown — history is best-effort and
  * must never break alert delivery.
+ *
+ * Analytics: analytics({now?, days?}) rolls the persisted history up into
+ * per-UTC-day counts (default last 14 days), flap cycles (a nodeOffline/
+ * nodeUnreachable followed by a nodeRecovered for the same node = one
+ * fired→recovered cycle, attributed to the firing rule), and the noisiest
+ * nodes/rules. The pure computation is exported as computeAlertAnalytics()
+ * for unit testing. Empty or missing history yields a zeroed shape.
  */
 
 const crypto = require("crypto");
@@ -28,6 +35,14 @@ const DEFAULT_MAX_ROTATED_FILES = 5;
 const DEFAULT_QUERY_LIMIT = 200;
 const MAX_QUERY_LIMIT = 500;
 const SEVERITIES = new Set(["info", "warn", "critical"]);
+
+// Analytics rollup bounds (computeAlertAnalytics).
+const DAY_MS = 24 * 60 * 60 * 1000;
+const ANALYTICS_DEFAULT_DAYS = 14;
+const ANALYTICS_MAX_DAYS = 90;
+const ANALYTICS_TOP_LIMIT = 10;
+const ANALYTICS_FLAP_LIMIT = 20;
+const NODE_DOWN_RULES = new Set(["nodeOffline", "nodeUnreachable"]);
 
 /**
  * Convert a since value (ISO string, Date, or epoch ms) to epoch ms.
@@ -51,6 +66,122 @@ function toEpochMs(value) {
     throw new Error("Invalid since: could not parse as a timestamp");
   }
   return ms;
+}
+
+/** Clamp the analytics window to a safe integer day count. */
+function clampAnalyticsDays(days) {
+  return Number.isInteger(days) && days >= 1 && days <= ANALYTICS_MAX_DAYS
+    ? days
+    : ANALYTICS_DEFAULT_DAYS;
+}
+
+/** "YYYY-MM-DD" UTC day key for an epoch-ms timestamp. */
+function utcDayKey(ts) {
+  return new Date(ts).toISOString().slice(0, 10);
+}
+
+/** Top-N [{<keyName>, count}] descending from a Map of counts. */
+function topCounts(counts, keyName, limit) {
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))
+    .slice(0, limit)
+    .map(([key, count]) => ({ [keyName]: key, count }));
+}
+
+/**
+ * Flap cycles: chronological scan per node — a nodeOffline/nodeUnreachable
+ * opens a pending down-state; the next nodeRecovered for the same node
+ * closes it as one cycle attributed to the rule that fired.
+ *
+ * @param {Array<object>} entries - window entries, any order
+ * @returns {Array<{rule: string, node: string, cycles: number}>} desc by cycles
+ */
+function countFlapCycles(entries) {
+  const ordered = [...entries].sort((a, b) => a.ts - b.ts);
+  const pendingRuleByNode = new Map(); // node -> rule that fired last
+  const cycles = new Map(); // "rule|node" -> count
+  for (const rec of ordered) {
+    if (typeof rec.node !== "string" || rec.node.length === 0) continue;
+    if (NODE_DOWN_RULES.has(rec.type)) {
+      pendingRuleByNode.set(rec.node, rec.type);
+    } else if (rec.type === "nodeRecovered" && pendingRuleByNode.has(rec.node)) {
+      const key = `${pendingRuleByNode.get(rec.node)}|${rec.node}`;
+      cycles.set(key, (cycles.get(key) || 0) + 1);
+      pendingRuleByNode.delete(rec.node);
+    }
+  }
+  return [...cycles.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, ANALYTICS_FLAP_LIMIT)
+    .map(([key, count]) => {
+      const [rule, ...nodeParts] = key.split("|");
+      return { rule, node: nodeParts.join("|"), cycles: count };
+    });
+}
+
+/**
+ * Pure analytics rollup over alert history entries.
+ *
+ * @param {Array<object>} entries - parsed history records ({type, severity, node, ts})
+ * @param {object} [options]
+ * @param {number} [options.now=Date.now()] - epoch ms reference point
+ * @param {number} [options.days=14] - window length in UTC days (1..90)
+ * @returns {{days: number, since: number, total: number,
+ *            perDay: Array<{date: string, total: number, critical: number, warn: number, info: number}>,
+ *            flaps: Array<{rule: string, node: string, cycles: number}>,
+ *            topNodes: Array<{node: string, count: number}>,
+ *            topRules: Array<{type: string, count: number}>}}
+ */
+function computeAlertAnalytics(entries, { now = Date.now(), days = ANALYTICS_DEFAULT_DAYS } = {}) {
+  const windowDays = clampAnalyticsDays(days);
+  const reference = Number.isFinite(now) ? now : Date.now();
+  // Window: start of the UTC day (days-1) days ago, through "now".
+  const todayStart = Math.floor(reference / DAY_MS) * DAY_MS;
+  const since = todayStart - (windowDays - 1) * DAY_MS;
+
+  const perDayByKey = new Map();
+  for (let i = 0; i < windowDays; i++) {
+    const dayStart = since + i * DAY_MS;
+    perDayByKey.set(utcDayKey(dayStart), {
+      date: utcDayKey(dayStart),
+      total: 0,
+      critical: 0,
+      warn: 0,
+      info: 0,
+    });
+  }
+
+  const inWindow = [];
+  const nodeCounts = new Map();
+  const ruleCounts = new Map();
+  for (const rec of Array.isArray(entries) ? entries : []) {
+    if (!rec || typeof rec !== "object") continue;
+    if (!Number.isFinite(rec.ts) || rec.ts < since || rec.ts > reference) continue;
+    inWindow.push(rec);
+
+    const bucket = perDayByKey.get(utcDayKey(rec.ts));
+    if (bucket) {
+      bucket.total += 1;
+      const severity = SEVERITIES.has(rec.severity) ? rec.severity : "info";
+      bucket[severity] += 1;
+    }
+    if (typeof rec.node === "string" && rec.node.length > 0) {
+      nodeCounts.set(rec.node, (nodeCounts.get(rec.node) || 0) + 1);
+    }
+    if (typeof rec.type === "string" && rec.type.length > 0) {
+      ruleCounts.set(rec.type, (ruleCounts.get(rec.type) || 0) + 1);
+    }
+  }
+
+  return {
+    days: windowDays,
+    since,
+    total: inWindow.length,
+    perDay: [...perDayByKey.values()],
+    flaps: countFlapCycles(inWindow),
+    topNodes: topCounts(nodeCounts, "node", ANALYTICS_TOP_LIMIT),
+    topRules: topCounts(ruleCounts, "type", ANALYTICS_TOP_LIMIT),
+  };
 }
 
 /**
@@ -201,7 +332,22 @@ function createAlertHistory({
     return results.sort((a, b) => b.ts - a.ts);
   }
 
-  return { append, query };
+  /**
+   * Roll the full on-disk history (active + rotated files) up into the
+   * analytics shape. See computeAlertAnalytics() for options and shape.
+   *
+   * @param {{now?: number, days?: number}} [options]
+   * @returns {object} analytics rollup (zeroed when no history exists)
+   */
+  function analytics(options = {}) {
+    const entries = [];
+    for (const filePath of [activePath, ...listRotatedFiles().map((f) => path.join(logsDir, f))]) {
+      entries.push(...readEntries(filePath));
+    }
+    return computeAlertAnalytics(entries, options);
+  }
+
+  return { append, query, analytics };
 }
 
-module.exports = { createAlertHistory, MAX_QUERY_LIMIT };
+module.exports = { createAlertHistory, computeAlertAnalytics, MAX_QUERY_LIMIT };

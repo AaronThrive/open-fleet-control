@@ -13,6 +13,12 @@
  * mapped from severity, Tags from severity). No credentials are stored —
  * access control is the topic name itself (treat it like a secret).
  *
+ * Routing: `config.routing` is an optional {<rule>: [sink names]} map that
+ * restricts which sinks a rule's alerts are dispatched to. Sink names are
+ * "slack", "ntfy", and "webhooks" (the whole webhook group — per-webhook
+ * `events` filters still apply on top). A missing rule entry, a non-array
+ * value, or an entry containing "*" means ALL sinks (fail open).
+ *
  * Mutes: `config.mutes` is an array of {rule?, node?, until?} entries.
  * A FIRE-able alert matching any active (non-expired) entry is skipped
  * (reason "muted") and counted; muted alerts never consume the dedupe slot.
@@ -30,7 +36,7 @@
  */
 
 const crypto = require("crypto");
-const { createAlertHistory } = require("./alerts-history");
+const { createAlertHistory, computeAlertAnalytics } = require("./alerts-history");
 
 const SEVERITIES = new Set(["info", "warn", "critical"]);
 const NTFY_DEFAULT_SERVER = "https://ntfy.sh";
@@ -98,6 +104,20 @@ function matchesMute(mutes, alert, now) {
 }
 
 /**
+ * Resolve which sinks a rule's alerts may dispatch to.
+ *
+ * @param {object|undefined} routing - `config.routing` ({<rule>: [sinks]})
+ * @param {string} type - alert type (rule name)
+ * @returns {Set<string>|null} allowed sink names, or null = all sinks
+ */
+function sinkRoutesForType(routing, type) {
+  if (!routing || typeof routing !== "object" || Array.isArray(routing)) return null;
+  const entry = routing[type];
+  if (!Array.isArray(entry) || entry.includes("*")) return null; // fail open
+  return new Set(entry.filter((sink) => typeof sink === "string"));
+}
+
+/**
  * Validate and normalize a fired event, throwing descriptive errors.
  * @param {object} event
  * @param {function} nowFn
@@ -133,6 +153,7 @@ function normalizeEvent(event, nowFn) {
  *   {enabled, rules: {nodeOffline, nodeUnreachable, nodeRecovered, taskFailed,
  *                     taskStale, lessonPending},
  *    mutes: [{rule?, node?, until?}],
+ *    routing: {<rule>: ["*"] | ["slack"|"ntfy"|"webhooks", ...]},
  *    sinks: {slack: {enabled, gatewayUrl, channel},
  *            ntfy: {enabled, server?, topic, priorityMap?},
  *            webhooks: [{url, secret, events}]}}
@@ -147,7 +168,8 @@ function normalizeEvent(event, nowFn) {
  * @param {number} [options.retryDelayMs=30000] - Delay before the single retry
  * @param {number} [options.historyMaxBytes] - History rotation threshold (tests)
  * @param {number} [options.historyKeepFiles] - Rotated history files kept (tests)
- * @returns {{fire: function, getRecent: function, query: function, getMutedCount: function}}
+ * @returns {{fire: function, getRecent: function, query: function,
+ *            getMutedCount: function, analytics: function}}
  */
 function createAlerts({
   config = {},
@@ -347,19 +369,23 @@ function createAlerts({
     }
 
     const sinks = config.sinks || {};
+    const routes = sinkRoutesForType(config.routing, alert.type);
+    const routedTo = (sinkName) => routes === null || routes.has(sinkName);
     const dispatches = [];
 
-    for (const webhook of Array.isArray(sinks.webhooks) ? sinks.webhooks : []) {
-      if (webhook && webhook.url && webhookMatchesEvent(webhook, alert.type)) {
-        dispatches.push(dispatchToWebhook(webhook, alert));
+    if (routedTo("webhooks")) {
+      for (const webhook of Array.isArray(sinks.webhooks) ? sinks.webhooks : []) {
+        if (webhook && webhook.url && webhookMatchesEvent(webhook, alert.type)) {
+          dispatches.push(dispatchToWebhook(webhook, alert));
+        }
       }
     }
 
-    if (sinks.slack && sinks.slack.enabled && sinks.slack.gatewayUrl) {
+    if (routedTo("slack") && sinks.slack && sinks.slack.enabled && sinks.slack.gatewayUrl) {
       dispatches.push(dispatchToSlack(sinks.slack, alert));
     }
 
-    if (sinks.ntfy && sinks.ntfy.enabled && sinks.ntfy.topic) {
+    if (routedTo("ntfy") && sinks.ntfy && sinks.ntfy.enabled && sinks.ntfy.topic) {
       dispatches.push(dispatchToNtfy(sinks.ntfy, alert));
     }
 
@@ -410,7 +436,20 @@ function createAlerts({
     return mutedCount;
   }
 
-  return { fire, getRecent, query, getMutedCount };
+  /**
+   * Analytics rollup over the persistent history (per-day counts, flap
+   * cycles, top nodes/rules). Returns the zeroed shape when no logsDir was
+   * configured. See alerts-history.js computeAlertAnalytics().
+   *
+   * @param {{now?: number, days?: number}} [options]
+   * @returns {object}
+   */
+  function analytics(options = {}) {
+    if (!history) return computeAlertAnalytics([], options);
+    return history.analytics(options);
+  }
+
+  return { fire, getRecent, query, getMutedCount, analytics };
 }
 
 // ---------------------------------------------------------------------------

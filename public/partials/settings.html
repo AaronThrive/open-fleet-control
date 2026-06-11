@@ -463,6 +463,134 @@
         <div class="set-inline-error" id="set-wh-error" hidden></div>
       </div>
 
+      <!-- ================== Alert rules (v2 alert-rules-ui) ============== -->
+      <!-- Self-contained card: per-rule enable, flap thresholds, sink routing.
+           New text is plain English here (no data-i18n: keys absent from the
+           locale bundle would render as raw key paths); settings.js re-labels
+           via t(key, {}, fallback). -->
+      <div class="set-card" id="set-arules-card">
+        <style>
+          /* Alert rules table — scoped to this card only */
+          #settings-view-section #set-arules-card .set-arules-table {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--card-bg);
+          }
+          #settings-view-section #set-arules-card .set-arules-head,
+          #settings-view-section #set-arules-card .set-arules-row {
+            display: grid;
+            grid-template-columns: 170px 90px 1fr;
+            gap: 10px;
+            align-items: center;
+            padding: 8px 12px;
+          }
+          #settings-view-section #set-arules-card .set-arules-head {
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            background: var(--bg);
+            border-bottom: 1px solid var(--border);
+          }
+          #settings-view-section #set-arules-card .set-arules-row {
+            border-bottom: 1px solid var(--border);
+            font-size: 0.8rem;
+          }
+          #settings-view-section #set-arules-card .set-arules-row:last-child {
+            border-bottom: none;
+          }
+          #settings-view-section #set-arules-card .set-arules-rule {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.78rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          #settings-view-section #set-arules-card .set-arules-sinks {
+            display: flex;
+            gap: 14px;
+            flex-wrap: wrap;
+          }
+          #settings-view-section #set-arules-card .set-arules-sinks label {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.76rem;
+            color: var(--text);
+            cursor: pointer;
+            white-space: nowrap;
+          }
+          @media (max-width: 800px) {
+            #settings-view-section #set-arules-card .set-arules-head,
+            #settings-view-section #set-arules-card .set-arules-row {
+              grid-template-columns: 1fr 70px;
+            }
+            #settings-view-section #set-arules-card .set-arules-sinks {
+              grid-column: 1 / -1;
+            }
+          }
+        </style>
+        <div class="set-card-head">
+          <button
+            type="button"
+            class="set-collapse-toggle"
+            data-collapse-toggle
+            aria-expanded="true"
+          >
+            <span class="set-collapse-chevron" aria-hidden="true">▼</span>
+            <span class="set-card-title" id="set-arules-title">🚨 Alert rules</span>
+          </button>
+          <button type="button" class="set-save-btn" id="set-arules-save">Save alert rules</button>
+        </div>
+
+        <div class="set-hint" id="set-arules-hint">
+          Per-rule delivery: enable/disable each alert rule and choose which sink(s) it fires to.
+          "All sinks" routes through every configured sink; webhook event filters still apply.
+        </div>
+
+        <div class="set-arules-table">
+          <div class="set-arules-head">
+            <span id="set-arules-col-rule">Rule</span>
+            <span id="set-arules-col-enabled">Enabled</span>
+            <span id="set-arules-col-sinks">Sends to</span>
+          </div>
+          <div id="set-arules-rows"></div>
+        </div>
+
+        <div class="set-subtitle" id="set-arules-flap-title">
+          Flap suppression (nodeOffline / nodeUnreachable)
+        </div>
+        <div class="set-row">
+          <div class="set-field">
+            <span class="set-field-label" id="set-arules-flap-consecutive-label"
+              >Consecutive failed checks (1–20)</span
+            >
+            <input
+              type="number"
+              class="set-num-input"
+              id="set-arules-flap-consecutive"
+              min="1"
+              max="20"
+            />
+          </div>
+          <div class="set-field">
+            <span class="set-field-label" id="set-arules-flap-duration-label"
+              >Min failing duration, seconds (0–3600)</span
+            >
+            <input
+              type="number"
+              class="set-num-input"
+              id="set-arules-flap-duration"
+              min="0"
+              max="3600"
+            />
+          </div>
+        </div>
+
+        <div class="set-inline-error" id="set-arules-error" hidden></div>
+      </div>
+
       <!-- =========================== Intervals ========================== -->
       <div class="set-card">
         <div class="set-card-head">
@@ -635,10 +763,10 @@
         </div>
 
         <div class="set-hint" data-i18n="views.settings.budgetsHint">
-          Budgets guard real API spend: Nine-Router provider names (e.g. kimi) plus "openrouter"
-          and "claude-code" (estimated cost — informational for OAuth subscriptions). Warn fires
-          at 80%, critical at 100%, once per day/ISO-week per scope. Provider rows and totals
-          apply on Save budgets.
+          Budgets guard real API spend: Nine-Router provider names (e.g. kimi) plus "openrouter" and
+          "claude-code" (estimated cost — informational for OAuth subscriptions). Warn fires at 80%,
+          critical at 100%, once per day/ISO-week per scope. Provider rows and totals apply on Save
+          budgets.
         </div>
         <div class="set-inline-error" id="set-budgets-error" hidden></div>
       </div>
