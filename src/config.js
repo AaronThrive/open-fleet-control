@@ -142,10 +142,14 @@ function deepMerge(base, override) {
 
 /**
  * Load config files - base + local overrides
+ * @param {Object} [options]
+ * @param {string} [options.localPath] - override the local-overrides file path
+ *   (tests use this to isolate from the developer's real dashboard.local.json)
  */
-function loadConfigFile() {
+function loadConfigFile({ localPath: localPathOverride } = {}) {
   const basePath = path.join(__dirname, "..", "config", "dashboard.json");
-  const localPath = path.join(__dirname, "..", "config", "dashboard.local.json");
+  const localPath =
+    localPathOverride || path.join(__dirname, "..", "config", "dashboard.local.json");
 
   let config = {};
 
@@ -351,8 +355,8 @@ function buildFleetConfig(fileFleet) {
  * @param {object} [options.secrets=defaultSecrets] - secrets resolver
  *   (injectable for tests so the real op CLI is never spawned)
  */
-function loadConfig({ secrets = defaultSecrets } = {}) {
-  const fileConfig = loadConfigFile();
+function loadConfig({ secrets = defaultSecrets, localPath } = {}) {
+  const fileConfig = loadConfigFile({ localPath });
   const workspace =
     process.env.OPENCLAW_WORKSPACE || expandPath(fileConfig.paths?.workspace) || detectWorkspace();
 

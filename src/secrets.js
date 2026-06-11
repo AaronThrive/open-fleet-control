@@ -33,8 +33,9 @@
 const { execFile, execFileSync } = require("child_process");
 
 // Full op://<vault>/<item>/<field> shape (a field may itself contain `/`
-// when a section is addressed: op://vault/item/section/field).
-const OP_REF_RE = /^op:\/\/[^/\s]+\/[^/\s]+\/\S+$/;
+// when a section is addressed: op://vault/item/section/field). Vault and
+// item names may contain spaces ("op://CEO Scale/ITEM/credential").
+const OP_REF_RE = /^op:\/\/[^/\n]+\/[^/\n]+\/[^\n]+$/;
 const DEFAULT_OP_PATH = "op";
 const DEFAULT_CACHE_TTL_MS = 300000; // 5 min
 const DEFAULT_TIMEOUT_MS = 10000; // 10 s
