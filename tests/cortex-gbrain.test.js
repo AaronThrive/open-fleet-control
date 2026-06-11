@@ -5,7 +5,22 @@ const {
   parseJsonOutput,
   parseTsvPages,
   parseExtractLinks,
+  parseStatsText,
 } = require("../src/cortex-gbrain");
+
+/** Verbatim `gbrain stats` text output from gbrain 0.12.3 on a live host. */
+const STATS_TEXT_OUTPUT =
+  "Pages:     383\n" +
+  "Chunks:    1582\n" +
+  "Embedded:  1582\n" +
+  "Links:     0\n" +
+  "Tags:      8\n" +
+  "Timeline:  0\n" +
+  "\n" +
+  "By type:\n" +
+  "  concept: 379\n" +
+  "  system: 3\n" +
+  "  reference: 1\n";
 
 function mockExecFn(responder) {
   const calls = [];
@@ -274,6 +289,74 @@ describe("cortex-gbrain module", () => {
       const gbrain = createGbrain({ execFn });
       const graph = await gbrain.getGraph();
       assert.ok(graph.error.includes("gbrain list failed"));
+    });
+  });
+
+  describe("parseStatsText()", () => {
+    it("parses gbrain stats text output (pages/links/chunks counts)", () => {
+      assert.deepStrictEqual(parseStatsText(STATS_TEXT_OUTPUT), {
+        pages: 383,
+        chunks: 1582,
+        embedded: 1582,
+        links: 0,
+        tags: 8,
+      });
+    });
+
+    it("returns null for unusable output (broken bundle error, empty)", () => {
+      assert.strictEqual(parseStatsText("ENOENT: no such file or directory"), null);
+      assert.strictEqual(parseStatsText(""), null);
+      assert.strictEqual(parseStatsText(null), null);
+    });
+  });
+
+  describe("getGraph() provenance", () => {
+    it("attaches total pages, db link count, and last-updated from stats + list", async () => {
+      const execFn = mockExecFn(({ args }) => {
+        if (args[0] === "list") {
+          // gbrain list is sorted most-recently-updated first
+          return {
+            error: null,
+            stdout:
+              "projects/alpha\tproject\tThu Jun 11\tProject Alpha\n" +
+              "people/bob\tperson\tMon Jun 08\tBob\n",
+            stderr: "",
+          };
+        }
+        if (args[0] === "extract") {
+          return { error: null, stdout: '{\n  "links_created": 0\n}\n', stderr: "" };
+        }
+        if (args[0] === "stats") {
+          return { error: null, stdout: STATS_TEXT_OUTPUT, stderr: "" };
+        }
+        return { error: new Error(`unexpected: ${args.join(" ")}`), stdout: "", stderr: "" };
+      });
+      const gbrain = createGbrain({ execFn });
+      const graph = await gbrain.getGraph({ limit: 10 });
+
+      assert.ok(!graph.error, graph.error);
+      // The graph may render fewer nodes (list caps at 100) than the brain
+      // holds — provenance must carry the TRUE page count from stats.
+      assert.deepStrictEqual(graph.provenance, {
+        totalPages: 383,
+        dbLinks: 0,
+        lastUpdated: "Thu Jun 11",
+      });
+    });
+
+    it("falls back to the listed page count when stats is unusable", async () => {
+      const execFn = mockExecFn(({ args }) => {
+        if (args[0] === "list") return { error: null, stdout: JSON.stringify(PAGES), stderr: "" };
+        if (args[0] === "extract")
+          return { error: null, stdout: JSON.stringify(LINKS), stderr: "" };
+        return { error: new Error("stats not supported"), stdout: "", stderr: "" };
+      });
+      const gbrain = createGbrain({ execFn });
+      const graph = await gbrain.getGraph();
+
+      assert.ok(!graph.error, graph.error);
+      assert.strictEqual(graph.provenance.totalPages, 3);
+      assert.strictEqual(graph.provenance.dbLinks, null);
     });
   });
 
