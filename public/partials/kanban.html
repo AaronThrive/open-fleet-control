@@ -361,6 +361,80 @@
       color: var(--text-muted);
     }
 
+    /* ---- Federation: origin legend + remote cards ---- */
+    .kb-legend {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding-top: 12px;
+    }
+    .kb-origin-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text-muted);
+    }
+    .kb-origin-chip.unreachable {
+      opacity: 0.55;
+    }
+    .kb-origin-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--kb-origin-color, var(--text-muted));
+      flex-shrink: 0;
+    }
+    .kb-origin-mode {
+      font-size: 0.6rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    .kb-origin-mode.writable {
+      color: var(--accent);
+    }
+    .kb-fed-notice {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      padding-top: 8px;
+    }
+    .kb-card.kb-remote {
+      border-left: 3px solid var(--kb-origin-color, var(--border));
+    }
+    .kb-card.kb-remote-locked {
+      cursor: default;
+    }
+    .kb-card-origin {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.66rem;
+      font-weight: 600;
+      padding: 1px 7px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text-muted);
+      max-width: 130px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .kb-card-origin .kb-origin-dot {
+      width: 6px;
+      height: 6px;
+    }
+    .kb-card-lock {
+      flex-shrink: 0;
+    }
+
     /* ---- Loading ---- */
     .kb-loading {
       flex: 1;
@@ -729,6 +803,9 @@
         Task board for work assigned to the swarm
       </div>
     </div>
+
+    <div class="kb-legend" id="kb-legend" hidden></div>
+    <div class="kb-fed-notice" id="kb-fed-notice" hidden></div>
 
     <div class="kb-loading" id="kb-loading" data-i18n="views.kanban.loading">Loading board...</div>
 

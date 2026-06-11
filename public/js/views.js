@@ -17,7 +17,6 @@
     "federation",
     "fleet-chat",
     "kanban",
-    "fleet-board",
     "briefs",
     "cortex",
     "evolution",
