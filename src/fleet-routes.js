@@ -196,9 +196,78 @@ function createFleetRoutes({ fleet, settings = null, dispatch = null, rosterFn =
     "task.move": "task.move",
   };
 
+  // Fleet board column order — mirrors the kanban schema's status enum.
+  const FLEET_BOARD_COLUMNS = ["inbox", "assigned", "inprogress", "review", "done", "failed"];
+
+  /** Trim a LOCAL task to the same card shape remote detail tasks use. */
+  function trimBoardTask(task) {
+    return {
+      id: task.id,
+      title: task.title,
+      status: task.status,
+      assignee: typeof task.assignee === "string" && task.assignee ? task.assignee : null,
+      priority: Number.isFinite(task.priority) ? task.priority : null,
+      order: Number.isFinite(task.order) ? task.order : 0,
+      updated_at: typeof task.updated_at === "string" ? task.updated_at : null,
+      stale: task.stale === true,
+    };
+  }
+
+  /**
+   * Build the unified fleet-wide board: local cards + every federated
+   * remote's cached cards, each labeled with its origin. Remote origins are
+   * writable only when the remote connection has allowWrites (the UI then
+   * proxies moves through the federation write-action whitelist). A dead or
+   * never-fetched remote contributes zero tasks but still appears in
+   * `origins` so the UI can say "no data" instead of silently omitting it.
+   */
+  function buildFleetBoard() {
+    const board = fleet.kanban.getBoard();
+    const origins = [{ key: "local", label: "This dashboard", kind: "local", writable: true }];
+    const tasks = (Array.isArray(board.tasks) ? board.tasks : []).map((task) => ({
+      ...trimBoardTask(task),
+      origin: "local",
+    }));
+
+    for (const source of fleet.federation.getBoardSources()) {
+      origins.push({
+        key: source.remote.id,
+        label: source.remote.label,
+        kind: "remote",
+        writable: source.remote.allowWrites === true,
+        reachable: source.reachable,
+        baseUrl: source.remote.baseUrl,
+        hasData: !!(source.detail && source.detail.kanban),
+      });
+      const remoteTasks =
+        source.detail && source.detail.kanban && Array.isArray(source.detail.kanban.tasks)
+          ? source.detail.kanban.tasks
+          : [];
+      for (const task of remoteTasks) {
+        tasks.push({ ...task, origin: source.remote.id });
+      }
+    }
+
+    return { columns: FLEET_BOARD_COLUMNS, origins, tasks };
+  }
+
   async function handleFederation(req, res, method, segments) {
     if (segments.length === 1 && method === "GET") {
       json(res, 200, fleet.federation.getState());
+      return true;
+    }
+    // Read-only drill-down + fleet board (no rate-limit token, no audit).
+    if (segments[1] === "board" && segments.length === 2 && method === "GET") {
+      json(res, 200, buildFleetBoard());
+      return true;
+    }
+    if (
+      segments[1] === "remotes" &&
+      segments.length === 4 &&
+      segments[3] === "detail" &&
+      method === "GET"
+    ) {
+      json(res, 200, fleet.federation.getRemoteDetail(segments[2]));
       return true;
     }
     if (segments[1] === "remotes" && segments.length === 2 && method === "POST") {

@@ -18,6 +18,12 @@
  * registry unless a remote is explicitly opted in (allowWrites). With writes
  * enabled, the card exposes the remote's pending lessons (approve/reject)
  * and a gate toggle — all proxied through the server-side whitelist.
+ *
+ * Drill-down: clicking a card opens a drawer backed by the cached detail at
+ *   GET /api/fleet/federation/remotes/:id/detail
+ * showing the remote's mesh nodes (with vitals), kanban column counts with
+ * the top cards, and recent alerts. A dead remote serves its last-known
+ * cached detail with an "unreachable" notice.
  */
 
 import { t } from "../utils.js";
@@ -35,6 +41,8 @@ let refreshTimer = null;
 let eventSource = null;
 let sseDebounceTimer = null;
 let fetchSeq = 0; // guards against out-of-order responses
+let drawerFetchSeq = 0; // guards the drill-down drawer's fetch
+let drawerKeyHandler = null; // document-level Escape handler while open
 
 // --- Entry point ------------------------------------------------------------
 
@@ -61,10 +69,18 @@ export function init(containerEl) {
     addToken: root.querySelector("#fed-add-token"),
     addBtn: root.querySelector("#fed-add-btn"),
     addError: root.querySelector("#fed-add-error"),
+    drawer: root.querySelector("#fed-drawer"),
+    drawerBackdrop: root.querySelector("#fed-drawer-backdrop"),
+    drawerTitle: root.querySelector("#fed-drawer-title"),
+    drawerSub: root.querySelector("#fed-drawer-sub"),
+    drawerBody: root.querySelector("#fed-drawer-body"),
+    drawerClose: root.querySelector("#fed-drawer-close"),
   };
 
   refs.emptyCta?.addEventListener("click", () => refs?.addLabel?.focus());
   refs.addForm?.addEventListener("submit", onAddSubmit);
+  refs.drawerClose?.addEventListener("click", closeDrillDown);
+  refs.drawerBackdrop?.addEventListener("click", closeDrillDown);
 
   refresh({ initial: true });
 
@@ -83,6 +99,10 @@ function teardown() {
   if (refreshTimer) {
     clearInterval(refreshTimer);
     refreshTimer = null;
+  }
+  if (drawerKeyHandler) {
+    document.removeEventListener("keydown", drawerKeyHandler);
+    drawerKeyHandler = null;
   }
   if (sseDebounceTimer) {
     clearTimeout(sseDebounceTimer);
@@ -198,6 +218,12 @@ function buildRemoteCard(remote) {
   const status = remote.status && typeof remote.status === "object" ? remote.status : {};
   const summary = status.summary && typeof status.summary === "object" ? status.summary : null;
   const card = el("div", "fed-card");
+  // Click-to-drill-down (buttons inside the card keep their own actions).
+  card.title = t("views.federation.drillDownTitle", {}, "Click for remote detail");
+  card.addEventListener("click", (event) => {
+    if (event.target.closest("button")) return;
+    openDrillDown(remote);
+  });
 
   // Head: reachability dot, label + host, latency
   const head = el("div", "fed-card-head");
@@ -497,6 +523,212 @@ function buildWriteControls(remote, status, summary) {
   }
 
   return wrap;
+}
+
+// --- Drill-down drawer (read-only remote detail) ------------------------------
+
+async function openDrillDown(remote) {
+  if (!refs || !refs.drawer) return;
+  const seq = ++drawerFetchSeq;
+
+  refs.drawer.hidden = false;
+  refs.drawerBackdrop.hidden = false;
+  refs.drawerTitle.textContent = remote.label || baseUrlHost(remote.baseUrl);
+  refs.drawerSub.textContent = baseUrlHost(remote.baseUrl);
+  refs.drawerBody.replaceChildren(
+    el("div", "fed-muted", t("views.federation.drillLoading", {}, "Loading remote detail...")),
+  );
+
+  if (!drawerKeyHandler) {
+    drawerKeyHandler = (event) => {
+      if (event.key === "Escape") closeDrillDown();
+    };
+    document.addEventListener("keydown", drawerKeyHandler);
+  }
+
+  try {
+    const payload = await fetchJson(
+      `/api/fleet/federation/remotes/${encodeURIComponent(remote.id)}/detail`,
+    );
+    if (seq !== drawerFetchSeq || !refs || refs.drawer.hidden) return;
+    renderDrillDown(payload);
+  } catch (err) {
+    if (seq !== drawerFetchSeq || !refs || refs.drawer.hidden) return;
+    refs.drawerBody.replaceChildren(
+      el(
+        "div",
+        "fed-card-error",
+        t(
+          "views.federation.drillError",
+          { message: err.message },
+          "Failed to load remote detail: {message}",
+        ),
+      ),
+    );
+  }
+}
+
+function closeDrillDown() {
+  drawerFetchSeq++; // invalidate any in-flight fetch
+  if (drawerKeyHandler) {
+    document.removeEventListener("keydown", drawerKeyHandler);
+    drawerKeyHandler = null;
+  }
+  if (!refs || !refs.drawer) return;
+  refs.drawer.hidden = true;
+  refs.drawerBackdrop.hidden = true;
+  refs.drawerBody.replaceChildren();
+}
+
+function renderDrillDown({ status, detail }) {
+  const body = refs.drawerBody;
+  body.replaceChildren();
+
+  if (status && status.reachable === false) {
+    body.appendChild(
+      el(
+        "div",
+        "fed-detail-warning",
+        t(
+          "views.federation.drillUnreachable",
+          {},
+          "Remote currently unreachable — showing last-known cached detail.",
+        ),
+      ),
+    );
+  }
+
+  if (!detail) {
+    body.appendChild(
+      el(
+        "div",
+        "fed-muted",
+        t(
+          "views.federation.drillNoData",
+          {},
+          "No detail cached from this remote yet. It appears after the first successful poll.",
+        ),
+      ),
+    );
+    return;
+  }
+
+  body.appendChild(
+    el(
+      "div",
+      "fed-detail-stamp",
+      t(
+        "views.federation.drillFetched",
+        { value: formatAgo(detail.fetchedAt) },
+        "Detail fetched: {value}",
+      ),
+    ),
+  );
+  body.appendChild(buildDetailNodes(detail.mesh));
+  body.appendChild(buildDetailBoard(detail.kanban));
+  body.appendChild(buildDetailAlerts(detail.alerts));
+}
+
+/** Helper: section wrapper with an uppercase title. */
+function detailSection(titleText) {
+  const section = el("div");
+  section.appendChild(el("div", "fed-detail-section-title", titleText));
+  return section;
+}
+
+function pct(value) {
+  return isFiniteNumber(value) ? `${Math.round(value)}%` : "—";
+}
+
+function buildDetailNodes(mesh) {
+  const section = detailSection(t("views.federation.drillNodes", {}, "Mesh nodes"));
+  const nodes = mesh && Array.isArray(mesh.nodes) ? mesh.nodes : null;
+  if (!nodes || nodes.length === 0) {
+    section.appendChild(
+      el("div", "fed-muted", t("views.federation.drillNoNodes", {}, "No node data.")),
+    );
+    return section;
+  }
+  for (const node of nodes) {
+    const row = el("div", "fed-node-row");
+    const dotClass =
+      node.status === "online" ? "reachable" : node.status === "unknown" ? "" : "unreachable";
+    const dot = el("span", `fed-status-dot ${dotClass}`.trim());
+    dot.title = node.status;
+    row.appendChild(dot);
+
+    const name = node.hostname || node.label || node.id || "?";
+    const port = isFiniteNumber(node.port) && node.port !== 443 ? `:${node.port}` : "";
+    row.appendChild(el("span", "fed-node-name", `${name}${port}`));
+
+    const vitals = el("span", "fed-node-vitals");
+    if (node.vitals) {
+      vitals.appendChild(el("span", null, `CPU ${pct(node.vitals.cpuPct)}`));
+      vitals.appendChild(el("span", null, `MEM ${pct(node.vitals.memPct)}`));
+      vitals.appendChild(el("span", null, `DISK ${pct(node.vitals.diskPct)}`));
+    }
+    if (isFiniteNumber(node.latencyMs)) {
+      vitals.appendChild(el("span", null, `${Math.round(node.latencyMs)} ms`));
+    }
+    row.appendChild(vitals);
+    section.appendChild(row);
+  }
+  return section;
+}
+
+const DRILL_TOP_CARDS = 3;
+
+function buildDetailBoard(kanban) {
+  const section = detailSection(t("views.federation.drillKanban", {}, "Kanban"));
+  if (!kanban || !kanban.counts) {
+    section.appendChild(
+      el("div", "fed-muted", t("views.federation.drillNoKanban", {}, "No kanban data.")),
+    );
+    return section;
+  }
+  const tasks = Array.isArray(kanban.tasks) ? kanban.tasks : [];
+  for (const status of TASK_STATUS_ORDER) {
+    const row = el("div", "fed-detail-col");
+    row.appendChild(el("span", "fed-detail-col-name", status));
+    const count = isFiniteNumber(kanban.counts[status]) ? kanban.counts[status] : 0;
+    row.appendChild(el("span", "fed-detail-col-count", String(count)));
+    const top = tasks
+      .filter((task) => task.status === status)
+      .slice(0, DRILL_TOP_CARDS)
+      .map((task) => (task.assignee ? `${task.title} (@${task.assignee})` : task.title));
+    const cards = el("span", "fed-detail-col-cards", top.join(" · "));
+    cards.title = top.join("\n");
+    row.appendChild(cards);
+    section.appendChild(row);
+  }
+  return section;
+}
+
+function buildDetailAlerts(alertsBlock) {
+  const section = detailSection(t("views.federation.drillAlerts", {}, "Recent alerts"));
+  const alerts = alertsBlock && Array.isArray(alertsBlock.alerts) ? alertsBlock.alerts : null;
+  if (!alerts || alerts.length === 0) {
+    section.appendChild(
+      el("div", "fed-muted", t("views.federation.drillNoAlerts", {}, "No recent alerts.")),
+    );
+    return section;
+  }
+  for (const alert of alerts) {
+    const row = el("div", "fed-alert-row");
+    const severity = alert.severity || "info";
+    row.appendChild(el("span", `fed-alert-sev ${severity}`, severity));
+    const message = el(
+      "span",
+      "fed-alert-message",
+      alert.message || alert.type || t("views.federation.drillAlertUnknown", {}, "(no message)"),
+    );
+    if (alert.node) message.title = `${alert.node}: ${alert.message || ""}`;
+    row.appendChild(message);
+    const ts = typeof alert.ts === "string" ? Date.parse(alert.ts) : alert.ts;
+    row.appendChild(el("span", "fed-alert-when", formatAgo(ts)));
+    section.appendChild(row);
+  }
+  return section;
 }
 
 // --- Mutations (LOCAL registry + whitelisted remote write proxy) -------------

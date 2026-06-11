@@ -219,7 +219,14 @@ describe("federation module", () => {
       await federation._pollOnce();
 
       assert.ok(fetchLog.length >= 1);
-      const allowedUrls = [`${REMOTE_URL}/api/state`, `${REMOTE_URL}/api/fleet/evolution`];
+      const allowedUrls = [
+        `${REMOTE_URL}/api/state`,
+        `${REMOTE_URL}/api/fleet/evolution`,
+        // Drill-down detail enrichment (read-only, added in v2)
+        `${REMOTE_URL}/api/fleet/mesh`,
+        `${REMOTE_URL}/api/fleet/kanban`,
+        `${REMOTE_URL}/api/fleet/alerts?limit=10`,
+      ];
       for (const { url, init } of fetchLog) {
         assert.ok(allowedUrls.includes(url), `unexpected poll URL: ${url}`);
         assert.strictEqual(init.headers.Authorization, "Bearer tok-123");
