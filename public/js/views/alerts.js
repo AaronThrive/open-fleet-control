@@ -8,6 +8,7 @@
  * Data sources:
  *   GET   /api/fleet/alerts?history=1&type&node&severity&limit — disk history
  *   GET   /api/fleet/alerts?type&node&severity&limit           — memory ring
+ *   GET   /api/fleet/alerts/analytics                          — 14d rollup
  *   GET   /api/fleet/settings                                  — rules + mutes
  *   PATCH /api/fleet/settings                                  — mute / unmute /
  *                                                                re-enable rules
@@ -291,6 +292,125 @@ async function reEnableNodeRules(els) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Analytics (v2 alert-rules-ui) — GET /api/fleet/alerts/analytics     */
+/* ------------------------------------------------------------------ */
+
+/** Best-effort load: the section stays hidden if the endpoint is missing. */
+async function loadAnalytics(els) {
+  try {
+    const { ok, payload } = await fetchJson("/api/fleet/alerts/analytics");
+    if (!els.rows.isConnected) return;
+    if (!ok || !payload || !Array.isArray(payload.perDay)) {
+      els.analytics.hidden = true;
+      return;
+    }
+    renderAnalytics(els, payload);
+  } catch (error) {
+    if (els.analytics) els.analytics.hidden = true; // analytics is best-effort
+  }
+}
+
+function analyticsItem(name, countText) {
+  const row = document.createElement("div");
+  row.className = "alerts-analytics-item";
+  const nameEl = document.createElement("span");
+  nameEl.className = "alerts-analytics-item-name";
+  nameEl.textContent = name;
+  nameEl.title = name;
+  const countEl = document.createElement("span");
+  countEl.className = "alerts-analytics-item-count";
+  countEl.textContent = countText;
+  row.append(nameEl, countEl);
+  return row;
+}
+
+function renderAnalyticsList(listEl, rows) {
+  if (rows.length === 0) {
+    const none = document.createElement("span");
+    none.className = "alerts-analytics-item-count";
+    none.textContent = t("views.alerts.analyticsNone", {}, "—");
+    listEl.replaceChildren(none);
+    return;
+  }
+  listEl.replaceChildren(...rows);
+}
+
+/** Stacked per-day severity bars; column heights scale to the busiest day. */
+function renderAnalyticsChart(els, perDay) {
+  const max = Math.max(1, ...perDay.map((day) => day.total));
+  els.analyticsChart.replaceChildren(
+    ...perDay.map((day) => {
+      const col = document.createElement("div");
+      col.className = "alerts-analytics-col";
+      col.title = t(
+        "views.alerts.analyticsDayTitle",
+        { date: day.date, n: day.total },
+        "{date}: {n} alerts",
+      );
+      col.style.height = day.total > 0 ? `${Math.max(4, (day.total / max) * 100)}%` : "100%";
+      for (const severity of ["info", "warn", "critical"]) {
+        if (!day[severity]) continue;
+        const seg = document.createElement("div");
+        seg.className = `alerts-analytics-seg-${severity}`;
+        seg.style.flexGrow = String(day[severity]);
+        col.appendChild(seg);
+      }
+      return col;
+    }),
+  );
+  els.analyticsAxisStart.textContent = perDay.length > 0 ? perDay[0].date : "";
+  els.analyticsAxisEnd.textContent = perDay.length > 0 ? perDay[perDay.length - 1].date : "";
+}
+
+function renderAnalytics(els, data) {
+  els.analytics.hidden = false;
+  els.analyticsTitle.textContent = t(
+    "views.alerts.analyticsTitle",
+    { days: data.days, n: data.total },
+    "Alert analytics — {n} alerts in the last {days} days",
+  );
+  els.analyticsRulesTitle.textContent = t("views.alerts.analyticsRules", {}, "Noisiest rules");
+  els.analyticsNodesTitle.textContent = t("views.alerts.analyticsNodes", {}, "Noisiest nodes");
+  els.analyticsFlapsTitle.textContent = t(
+    "views.alerts.analyticsFlaps",
+    {},
+    "Flapping (fired → recovered cycles)",
+  );
+  els.analyticsEmpty.textContent = t(
+    "views.alerts.analyticsEmpty",
+    {},
+    "No alerts in the analytics window yet.",
+  );
+
+  const isEmpty = data.total === 0;
+  els.analyticsEmpty.hidden = !isEmpty;
+  els.analyticsGrid.hidden = isEmpty;
+
+  renderAnalyticsChart(els, data.perDay);
+  renderAnalyticsList(
+    els.analyticsRules,
+    (data.topRules || []).map((row) =>
+      analyticsItem(row.type, t("views.alerts.analyticsCount", { n: row.count }, "{n}×")),
+    ),
+  );
+  renderAnalyticsList(
+    els.analyticsNodes,
+    (data.topNodes || []).map((row) =>
+      analyticsItem(row.node, t("views.alerts.analyticsCount", { n: row.count }, "{n}×")),
+    ),
+  );
+  renderAnalyticsList(
+    els.analyticsFlaps,
+    (data.flaps || []).map((row) =>
+      analyticsItem(
+        `${row.rule} @ ${row.node}`,
+        t("views.alerts.analyticsCycles", { n: row.cycles }, "{n} cycles"),
+      ),
+    ),
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* SSE                                                                 */
 /* ------------------------------------------------------------------ */
 
@@ -379,6 +499,20 @@ export function init(container) {
     reEnableBtn: container.querySelector("#alerts-reenable-btn"),
     activeMutes: container.querySelector("#alerts-active-mutes"),
     muteChips: container.querySelector("#alerts-mute-chips"),
+    // Analytics (v2 alert-rules-ui)
+    analytics: container.querySelector("#alerts-analytics"),
+    analyticsTitle: container.querySelector("#alerts-analytics-title"),
+    analyticsChart: container.querySelector("#alerts-analytics-chart"),
+    analyticsAxisStart: container.querySelector("#alerts-analytics-axis-start"),
+    analyticsAxisEnd: container.querySelector("#alerts-analytics-axis-end"),
+    analyticsEmpty: container.querySelector("#alerts-analytics-empty"),
+    analyticsGrid: container.querySelector("#alerts-analytics-grid"),
+    analyticsRulesTitle: container.querySelector("#alerts-analytics-rules-title"),
+    analyticsRules: container.querySelector("#alerts-analytics-rules"),
+    analyticsNodesTitle: container.querySelector("#alerts-analytics-nodes-title"),
+    analyticsNodes: container.querySelector("#alerts-analytics-nodes"),
+    analyticsFlapsTitle: container.querySelector("#alerts-analytics-flaps-title"),
+    analyticsFlaps: container.querySelector("#alerts-analytics-flaps"),
   };
   if (Object.values(els).some((el) => !el)) {
     console.error("[Alerts] Partial markup is missing expected elements; aborting init.");
@@ -398,6 +532,7 @@ export function init(container) {
   els.refreshBtn.addEventListener("click", () => {
     load(els);
     loadSettings(els);
+    loadAnalytics(els);
   });
   els.emptyRefreshBtn.addEventListener("click", reload);
   els.reEnableBtn.addEventListener("click", () => reEnableNodeRules(els));
@@ -414,8 +549,10 @@ export function init(container) {
     if (document.hidden) return;
     load(els);
     loadSettings(els);
+    loadAnalytics(els);
   }, AUTO_REFRESH_MS);
 
   load(els);
   loadSettings(els);
+  loadAnalytics(els);
 }
