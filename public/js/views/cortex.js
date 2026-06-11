@@ -8,9 +8,11 @@
  */
 
 import { t } from "../utils.js";
+import { createDetailList } from "../components/detail-list.js";
 
 const API_BASE = "/api/fleet/cortex";
 const MEMORY_LIST_LIMIT = 30;
+const MEMORY_CELL_PREVIEW_CHARS = 110;
 const GRAPH_NODE_CAP = 150;
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -20,6 +22,8 @@ const MEMORY_CATEGORIES = ["fact", "preference", "decision", "entity", "reflecti
 // by the view loader, so listeners die with it — only timers/aborts persist).
 let abortController = null;
 let searchTimer = null;
+// Shared detail-list instance for the memory browser (rebuilt on every init).
+let memoryList = null;
 // Memory write capabilities from the last /api/fleet/cortex state: editing
 // needs CLI + readable dataset (merge reads the row), delete needs the CLI.
 let memoryCaps = { cli: false, lancedb: false };
@@ -66,27 +70,69 @@ function gaugeDetailLine(gauge) {
           input: formatTokens(d.input),
           output: formatTokens(d.output),
           cacheReads: formatTokens(d.cacheReads),
+          cacheWrites: formatTokens(d.cacheWritesTotal),
         },
-        "in {input} · out {output} · cache reads {cacheReads}",
+        "in {input} · out {output} · cache reads {cacheReads} · cache writes {cacheWrites}",
       ),
     ];
     if (d.fiveHourUtilizationPct !== null && d.fiveHourUtilizationPct !== undefined) {
       parts.push(
+        t("views.cortex.detailHeadroom5h", { pct: d.fiveHourUtilizationPct }, "5h {pct}%"),
+      );
+    }
+    if (d.sevenDayUtilizationPct !== null && d.sevenDayUtilizationPct !== undefined) {
+      parts.push(
+        t("views.cortex.detailHeadroom7d", { pct: d.sevenDayUtilizationPct }, "7d {pct}%"),
+      );
+    }
+    if (d.extraUsageUsd !== null && d.extraUsageUsd !== undefined) {
+      parts.push(
         t(
-          "views.cortex.detailHeadroomWindow",
-          { pct: d.fiveHourUtilizationPct },
-          "5h window {pct}%",
+          "views.cortex.detailHeadroomExtra",
+          { used: d.extraUsageUsd, limit: d.extraUsageLimitUsd ?? "?" },
+          "extra usage ${used} / ${limit}",
         ),
       );
+    }
+    if (d.polledAt) {
+      const polledMs = Date.parse(d.polledAt);
+      const when = Number.isFinite(polledMs) ? relativeTime(polledMs) : String(d.polledAt);
+      if (when) parts.push(t("views.cortex.detailHeadroomPolled", { when }, "polled {when}"));
     }
     return parts.join(" · ");
   }
   if (gauge.source === "lean-ctx") {
-    return t(
-      "views.cortex.detailLeanCtx",
-      { commands: d.totalCommands ?? 0, days: d.daysTracked ?? 0 },
-      "{commands} commands compressed · {days} days tracked",
-    );
+    const parts = [
+      t(
+        "views.cortex.detailLeanCtxTotals",
+        {
+          commands: d.totalCommands ?? 0,
+          tokens: formatTokens(d.tokensProcessed),
+          days: d.daysTracked ?? 0,
+        },
+        "{commands} commands · {tokens} tokens processed · {days} days tracked",
+      ),
+    ];
+    const top = Array.isArray(d.topCommands) ? d.topCommands[0] : null;
+    if (top) {
+      parts.push(
+        t(
+          "views.cortex.detailLeanCtxTop",
+          { command: top.command, tokens: formatTokens(top.tokens) },
+          "top: {command} ({tokens})",
+        ),
+      );
+    }
+    if (d.note) {
+      parts.push(
+        t(
+          "views.cortex.detailLeanCtxNoSavings",
+          {},
+          "savings % not derivable from the stats file",
+        ),
+      );
+    }
+    return parts.join(" · ");
   }
   if (gauge.source === "lcm") {
     return t(
@@ -403,16 +449,16 @@ async function deleteMemoryRow(root, row, item, btn) {
   );
   if (!confirmed) return;
   btn.disabled = true;
-  item.classList.add("cx-mem-removing");
+  item?.classList.add("cx-mem-removing");
   try {
     await fetchJson(`${API_BASE}/memory/${encodeURIComponent(row.id)}`, { method: "DELETE" });
     showToast(t("views.cortex.deleted", {}, "Memory deleted."), "success");
-    item.remove();
+    item?.remove();
     refreshMemoryList(root);
   } catch (error) {
     if (error.name === "AbortError") return;
     btn.disabled = false;
-    item.classList.remove("cx-mem-removing");
+    item?.classList.remove("cx-mem-removing");
     showToast(
       t(
         "views.cortex.deleteFailed",
@@ -441,30 +487,8 @@ function buildMemoryActions(root, row, item) {
   return actions;
 }
 
-function buildMemoryItem(root, row) {
-  const item = el("div", "cx-mem-item");
-
-  const text = el("div", "cx-mem-text", row.text || t("views.cortex.emptyMemory", {}, "(empty)"));
-  item.appendChild(text);
-
-  const expand = el("button", "cx-mem-expand", t("views.cortex.showMore", {}, "Show more"));
-  expand.type = "button";
-  let expanded = false;
-  const toggle = () => {
-    expanded = !expanded;
-    text.classList.toggle("expanded", expanded);
-    expand.textContent = expanded
-      ? t("views.cortex.showLess", {}, "Show less")
-      : t("views.cortex.showMore", {}, "Show more");
-  };
-  expand.addEventListener("click", toggle);
-  text.addEventListener("click", toggle);
-  // Only show the toggle when the text actually overflows three lines.
-  requestAnimationFrame(() => {
-    if (text.scrollHeight <= text.clientHeight + 2) expand.style.display = "none";
-  });
-  item.appendChild(expand);
-
+/** Category/scope/importance/score/time chips for a memory row. */
+function buildMemoryMeta(row) {
   const meta = el("div", "cx-mem-meta");
   if (row.category) meta.appendChild(el("span", "cx-chip", row.category));
   if (row.scope) meta.appendChild(el("span", "cx-chip scope", row.scope));
@@ -485,64 +509,117 @@ function buildMemoryItem(root, row) {
   }
   const when = relativeTime(row.timestamp);
   if (when) meta.appendChild(el("span", "cx-mem-time", when));
-  item.appendChild(meta);
+  return meta;
+}
 
+/**
+ * Expanded detail panel for a memory row: full text, meta chips, and the
+ * v2.0 edit/delete actions (the inline editor mounts inside this panel).
+ */
+function buildMemoryDetail(root, row) {
+  const panel = el("div");
+  const text = el(
+    "div",
+    "cx-mem-text expanded",
+    row.text || t("views.cortex.emptyMemory", {}, "(empty)"),
+  );
+  panel.appendChild(text);
+  panel.appendChild(buildMemoryMeta(row));
   if (row.id && (memoryCaps.cli || memoryCaps.lancedb)) {
-    const actions = buildMemoryActions(root, row, item);
-    if (actions.childElementCount > 0) item.appendChild(actions);
+    const actions = buildMemoryActions(root, row, panel);
+    if (actions.childElementCount > 0) panel.appendChild(actions);
   }
-  return item;
+  return panel;
+}
+
+/** Quick-action Delete button for the detail-list actions column. */
+function buildMemoryRowActions(root, row) {
+  if (!row.id || !memoryCaps.cli) return null;
+  const actions = el("div", "cx-mem-actions");
+  const deleteBtn = el("button", "cx-mem-act danger", t("views.cortex.deleteBtn", {}, "Delete"));
+  deleteBtn.type = "button";
+  deleteBtn.addEventListener("click", () => deleteMemoryRow(root, row, null, deleteBtn));
+  actions.appendChild(deleteBtn);
+  return actions;
+}
+
+/** Columns for the memory detail list (labels resolved via t() at build time). */
+function memoryColumns() {
+  return [
+    {
+      key: "text",
+      label: t("views.cortex.colMemory", {}, "Memory"),
+      render: (row) => {
+        const full = row.text || t("views.cortex.emptyMemory", {}, "(empty)");
+        const preview =
+          full.length > MEMORY_CELL_PREVIEW_CHARS
+            ? `${full.slice(0, MEMORY_CELL_PREVIEW_CHARS - 1)}…`
+            : full;
+        return el("span", null, preview);
+      },
+    },
+    {
+      key: "category",
+      label: t("views.cortex.category", {}, "Category"),
+      sortable: true,
+      render: (row) => (row.category ? el("span", "cx-chip", row.category) : el("span", null, "—")),
+    },
+    { key: "scope", label: t("views.cortex.scope", {}, "Scope"), sortable: true },
+    {
+      key: "importance",
+      label: t("views.cortex.importance", {}, "Importance"),
+      sortable: true,
+      render: (row) => {
+        const importance = Number(row.importance);
+        return el("span", null, Number.isFinite(importance) ? importance.toFixed(2) : "—");
+      },
+    },
+    {
+      key: "timestamp",
+      label: t("views.cortex.colWhen", {}, "When"),
+      sortable: true,
+      render: (row) => el("span", "cx-mem-time", relativeTime(row.timestamp) || "—"),
+    },
+  ];
+}
+
+function setMemoryStatus(root, message) {
+  const status = root.querySelector("#cx-memory-status");
+  if (status) status.textContent = message || "";
 }
 
 async function loadMemories(root, query) {
-  const list = root.querySelector("#cx-memory-list");
-  if (!list) return;
-  clearChildren(list);
-  list.appendChild(
-    el(
-      "div",
-      "cx-loading",
-      query
-        ? t("views.cortex.searching", {}, "Searching…")
-        : t("views.cortex.loadingMemories", {}, "Loading memories…"),
-    ),
+  if (!memoryList) return;
+  const trimmed = (query || "").trim();
+  setMemoryStatus(
+    root,
+    trimmed
+      ? t("views.cortex.searching", {}, "Searching…")
+      : t("views.cortex.loadingMemories", {}, "Loading memories…"),
   );
 
   try {
-    const trimmed = (query || "").trim();
     const url = trimmed
       ? `${API_BASE}/memory?query=${encodeURIComponent(trimmed)}&limit=${MEMORY_LIST_LIMIT}`
       : `${API_BASE}/memory?limit=${MEMORY_LIST_LIMIT}`;
     const payload = await fetchJson(url);
-    const rows = payload?.results || payload?.items || [];
-
-    clearChildren(list);
-    if (rows.length === 0) {
-      list.appendChild(
-        el(
-          "div",
-          "cx-empty",
-          trimmed
-            ? t("views.cortex.noSearchResults", {}, "No memories match this search.")
-            : t("views.cortex.noMemories", {}, "No memories stored yet."),
-        ),
-      );
-      return;
-    }
-    for (const row of rows) list.appendChild(buildMemoryItem(root, row));
+    const rows = (payload?.results || payload?.items || []).map((row, i) => ({
+      ...row,
+      _rid: row.id || `mem-${i}`,
+    }));
+    memoryList.update(rows);
+    setMemoryStatus(
+      root,
+      rows.length === 0 && trimmed
+        ? t("views.cortex.noSearchResults", {}, "No memories match this search.")
+        : "",
+    );
   } catch (error) {
     if (error.name === "AbortError") return;
-    clearChildren(list);
-    list.appendChild(
-      el(
-        "div",
-        "cx-empty",
-        t(
-          "views.cortex.lookupFailed",
-          { message: error.message },
-          "Memory lookup failed: {message}",
-        ),
-      ),
+    memoryList.update([]);
+    setMemoryStatus(
+      root,
+      t("views.cortex.lookupFailed", { message: error.message }, "Memory lookup failed: {message}"),
     );
   }
 }
@@ -584,6 +661,23 @@ function setupMemoryBrowser(root, memoryState) {
       { count: stats.totalMemories },
       "{count} memories",
     );
+  }
+
+  const listHost = root.querySelector("#cx-memory-list");
+  if (listHost) {
+    clearChildren(listHost);
+    // Dense detail list (shared v2.1 component). Filtering is server-side via
+    // the search box above, so the component's own filter box stays hidden.
+    memoryList = createDetailList(listHost, {
+      columns: memoryColumns(),
+      getRowId: (row) => row._rid,
+      renderDetail: (row) => buildMemoryDetail(root, row),
+      renderActions: (row) => buildMemoryRowActions(root, row),
+      emptyText: t("views.cortex.noMemories", {}, "No memories stored yet."),
+      filterKeys: ["text", "category", "scope"],
+      defaultSort: { key: "timestamp", dir: "desc" },
+      showFilter: false,
+    });
   }
 
   const search = root.querySelector("#cx-memory-search");
@@ -1027,6 +1121,8 @@ export function init(container) {
   if (abortController) abortController.abort();
   abortController = new AbortController();
   clearTimeout(searchTimer);
+  // The view loader replaces the DOM wholesale; drop the stale list handle.
+  memoryList = null;
 
   const root = container.querySelector("#cortex-view-section");
   if (!root) return;
