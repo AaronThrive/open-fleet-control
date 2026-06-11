@@ -25,6 +25,7 @@
 
 import { t } from "../utils.js";
 import { createDetailList } from "../components/detail-list.js";
+import { openTimelineDrawer } from "../components/timeline-drawer.js";
 
 const REFRESH_INTERVAL_MS = 60000;
 
@@ -284,6 +285,7 @@ function buildList() {
     ],
     getRowId: (row) => row.id,
     renderDetail: buildDetail,
+    renderActions: renderRowActions,
     emptyText: t("views.agents.noMatch", {}, "No agents match the current filter."),
     filterKeys: ["name", "agentId", "source", "node", "model", "status"],
     filterPlaceholder: t("views.agents.filterPlaceholder", {}, "Filter agents…"),
@@ -336,6 +338,25 @@ function renderLastActiveCell(row) {
     undefined,
     t("views.agents.ago", { span: relativeSpan(row.lastActiveAt) }, "{span} ago"),
   );
+}
+
+/**
+ * Trailing actions cell: 🕘 opens the agent's flight-recorder timeline
+ * drawer. detail-list stops click propagation for this cell, so the button
+ * never toggles the row's detail panel.
+ */
+function renderRowActions(row) {
+  const button = el("button", "agents-timeline-btn", "🕘");
+  button.type = "button";
+  button.title = t("views.agents.timelineAction", {}, "Activity timeline");
+  button.setAttribute(
+    "aria-label",
+    t("views.agents.timelineAria", { agent: row.name }, "Open activity timeline for {agent}"),
+  );
+  button.addEventListener("click", () => {
+    openTimelineDrawer({ agentId: row.agentId || row.name, agentName: row.name });
+  });
+  return button;
 }
 
 /** Expanded panel: full agent metadata. */
