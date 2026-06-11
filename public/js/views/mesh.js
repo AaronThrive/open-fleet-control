@@ -36,6 +36,13 @@ let eventSource = null;
 let sseDebounceTimer = null;
 let fetchSeq = 0; // guards against out-of-order responses
 
+// Multi-select bulk operations (v2.2): node ids selected via card checkboxes,
+// acted on through POST /api/fleet/bulk. Selection survives re-renders within
+// a visit; ids of unregistered nodes are pruned on every render.
+const selectedNodes = new Set();
+const nodeNameById = new Map(); // id → hostname, for readable bulk results
+let bulkRefs = null; // { bar, count, results } injected above the grid
+
 // --- Entry point ------------------------------------------------------------
 
 export function init(containerEl) {
@@ -99,6 +106,8 @@ function teardown() {
     eventSource = null;
   }
   refs = null;
+  bulkRefs = null;
+  selectedNodes.clear();
 }
 
 /** The view is active while its root is still attached to the document. */
@@ -460,6 +469,19 @@ function renderNodes(nodes) {
   refs.emptyState.hidden = hasNodes;
   refs.grid.hidden = !hasNodes;
   refs.grid.replaceChildren();
+
+  // Prune selected ids that no longer correspond to a registered node.
+  const liveIds = new Set(nodes.map((n) => n.id).filter(Boolean));
+  for (const id of [...selectedNodes]) {
+    if (!liveIds.has(id)) selectedNodes.delete(id);
+  }
+  nodeNameById.clear();
+  for (const node of nodes) {
+    if (node.id) nodeNameById.set(node.id, node.hostname || node.id);
+  }
+  ensureBulkBar();
+  updateBulkBar();
+
   if (!hasNodes) return;
 
   // Version skew: more than one distinct known version across the fleet.
@@ -495,8 +517,22 @@ function buildNodeCard(node, hasSkew) {
   const health = getHealth(node);
   const card = el("div", "mesh-node-card");
 
-  // Head: status dot, hostname/label, platform badge
+  // Head: select checkbox, status dot, hostname/label, platform badge
   const head = el("div", "mesh-node-head");
+  if (node.id) {
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "mesh-node-select";
+    checkbox.checked = selectedNodes.has(node.id);
+    checkbox.title = t("views.mesh.selectNode", {}, "Select node for bulk actions");
+    checkbox.setAttribute("aria-label", checkbox.title);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) selectedNodes.add(node.id);
+      else selectedNodes.delete(node.id);
+      updateBulkBar();
+    });
+    head.appendChild(checkbox);
+  }
   const dot = el("span", `mesh-status-dot ${health.status}`);
   if (health.status === "unreachable") {
     dot.title = t(
@@ -821,6 +857,158 @@ function guessPlatform(os) {
   if (value.includes("windows")) return "windows-wsl";
   if (value.includes("mac") || value.includes("darwin")) return "macos";
   return "unknown";
+}
+
+// --- Bulk operations bar (multi-select → POST /api/fleet/bulk) ---------------
+
+const BULK_BAR_STYLE_ID = "mesh-bulk-bar-styles";
+const MESH_BULK_ACTIONS = [
+  {
+    action: "health-check",
+    destructive: false,
+    label: () => t("views.mesh.bulkHealthCheck", {}, "🩺 Health check"),
+  },
+  {
+    action: "gateway-status",
+    destructive: false,
+    label: () => t("views.mesh.bulkGatewayStatus", {}, "🚪 Gateway status"),
+  },
+  {
+    action: "kill-stale-sessions",
+    destructive: true,
+    label: () => t("views.mesh.bulkKillStale", {}, "🧹 Kill stale sessions"),
+  },
+];
+
+function injectBulkBarStyles() {
+  if (document.getElementById(BULK_BAR_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = BULK_BAR_STYLE_ID;
+  style.textContent = `
+.mesh-node-select{margin-right:6px;cursor:pointer}
+.mesh-bulk-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+  margin:0 0 10px;padding:8px 10px;border:1px solid var(--border,#2a3346);
+  border-radius:8px;background:var(--bg-panel,rgba(20,26,38,.7));font-size:13px}
+.mesh-bulk-bar[hidden]{display:none}
+.mesh-bulk-count{opacity:.75}
+.mesh-bulk-btn{background:transparent;border:1px solid var(--border,#2a3346);
+  border-radius:6px;color:inherit;cursor:pointer;padding:4px 10px;font-size:12px}
+.mesh-bulk-btn:disabled{opacity:.45;cursor:default}
+.mesh-bulk-btn.danger{border-color:#a33}
+.mesh-bulk-results{margin:0 0 10px;font-size:12px}
+.mesh-bulk-results[hidden]{display:none}
+.mesh-bulk-result-row{display:flex;gap:8px;align-items:baseline;padding:3px 2px}
+.mesh-bulk-result-row .ok{color:#2ecc71}
+.mesh-bulk-result-row .fail{color:#e74c3c}
+.mesh-bulk-result-detail{opacity:.7;white-space:pre-wrap;word-break:break-word}
+`;
+  document.head.appendChild(style);
+}
+
+/** Create the bulk bar + results strip just above the node grid (once per visit). */
+function ensureBulkBar() {
+  if (bulkRefs || !refs || !refs.grid || !refs.grid.parentNode) return;
+  injectBulkBarStyles();
+
+  const bar = el("div", "mesh-bulk-bar");
+  bar.hidden = true;
+  const count = el("span", "mesh-bulk-count", "");
+  bar.appendChild(count);
+
+  const buttons = [];
+  for (const entry of MESH_BULK_ACTIONS) {
+    const btn = el("button", `mesh-bulk-btn${entry.destructive ? " danger" : ""}`, entry.label());
+    btn.type = "button";
+    btn.addEventListener("click", () => runMeshBulk(entry, buttons));
+    bar.appendChild(btn);
+    buttons.push(btn);
+  }
+
+  const clear = el("button", "mesh-bulk-btn", t("views.mesh.bulkClear", {}, "Clear selection"));
+  clear.type = "button";
+  clear.addEventListener("click", () => {
+    selectedNodes.clear();
+    refs.grid
+      .querySelectorAll(".mesh-node-select")
+      .forEach((checkbox) => (checkbox.checked = false));
+    updateBulkBar();
+  });
+  bar.appendChild(clear);
+
+  const results = el("div", "mesh-bulk-results");
+  results.hidden = true;
+
+  refs.grid.parentNode.insertBefore(bar, refs.grid);
+  refs.grid.parentNode.insertBefore(results, refs.grid);
+  bulkRefs = { bar, count, results, buttons };
+}
+
+function updateBulkBar() {
+  if (!bulkRefs) return;
+  const n = selectedNodes.size;
+  bulkRefs.bar.hidden = n === 0;
+  bulkRefs.count.textContent = t("views.mesh.bulkSelected", { n }, "{n} node(s) selected");
+  if (n === 0) {
+    bulkRefs.results.hidden = true;
+    bulkRefs.results.replaceChildren();
+  }
+}
+
+async function runMeshBulk(entry, buttons) {
+  if (!bulkRefs || selectedNodes.size === 0) return;
+  if (entry.destructive) {
+    const confirmText = t(
+      "views.mesh.bulkConfirmKillStale",
+      { n: selectedNodes.size },
+      "Run stale-session cleanup on {n} node(s)? This removes stale session entries.",
+    );
+    if (!window.confirm(confirmText)) return;
+  }
+
+  buttons.forEach((btn) => (btn.disabled = true));
+  bulkRefs.results.hidden = false;
+  bulkRefs.results.replaceChildren(
+    el("div", "mesh-muted", t("views.mesh.bulkRunning", {}, "Running bulk action…")),
+  );
+
+  try {
+    const payload = await fetchJson("/api/fleet/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: entry.action, targets: [...selectedNodes] }),
+    });
+    if (!bulkRefs) return;
+    renderMeshBulkResults(payload);
+  } catch (err) {
+    if (!bulkRefs) return;
+    bulkRefs.results.replaceChildren(
+      el(
+        "div",
+        "mesh-error",
+        t("views.mesh.bulkFailed", { message: err.message }, "Bulk action failed: {message}"),
+      ),
+    );
+  } finally {
+    if (bulkRefs) buttons.forEach((btn) => (btn.disabled = false));
+  }
+}
+
+function renderMeshBulkResults(payload) {
+  bulkRefs.results.replaceChildren();
+  const results = Array.isArray(payload && payload.results) ? payload.results : [];
+  if (results.length === 0) {
+    bulkRefs.results.appendChild(
+      el("div", "mesh-muted", t("views.mesh.bulkNoResults", {}, "No results returned")),
+    );
+    return;
+  }
+  for (const result of results) {
+    const row = el("div", "mesh-bulk-result-row");
+    row.appendChild(el("span", result.ok ? "ok" : "fail", result.ok ? "✓" : "✗"));
+    row.appendChild(el("span", "", nodeNameById.get(result.target) || String(result.target)));
+    row.appendChild(el("span", "mesh-bulk-result-detail", String(result.detail || "")));
+    bulkRefs.results.appendChild(row);
+  }
 }
 
 // --- Small helpers ------------------------------------------------------------
