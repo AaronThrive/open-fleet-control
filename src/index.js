@@ -60,7 +60,7 @@ if (cliPort) {
 // ============================================================================
 const { getVersion } = require("./utils");
 const { CONFIG, getOpenClawDir } = require("./config");
-const { handleJobsRequest, isJobsRoute, setCronFallback } = require("./jobs");
+const { handleJobsRequest, isJobsRoute, setCronFallback, setAuditRecorder } = require("./jobs");
 const { runOpenClaw, runOpenClawAsync, extractJSON } = require("./openclaw");
 const {
   getSystemVitals,
@@ -199,6 +199,34 @@ const state = createStateModule({
 // REST routes. SSE events: fleet.mesh, fleet.chat, fleet.kanban,
 // fleet.evolution, fleet.alert (minimal payloads; clients refetch detail).
 const fleet = createFleetRuntime({ config: CONFIG.fleet, broadcast: broadcastSSE });
+
+// ----------------------------------------------------------------------
+// Audit helpers for the legacy (non-fleet) mutating routes below. Same
+// conventions as src/fleet-routes.js: actor identity comes from the
+// Tailscale-User-Login header (fallback "anonymous") and audit writes are
+// best-effort — a failed audit write never fails the mutation.
+// ----------------------------------------------------------------------
+
+/** Identity from the Tailscale Serve header (fallback "anonymous"). */
+function getRequestUser(req) {
+  const login = req.headers["tailscale-user-login"];
+  return typeof login === "string" && login.trim().length > 0
+    ? login.trim().toLowerCase()
+    : "anonymous";
+}
+
+/** Best-effort audit record — an audit failure never fails the request. */
+function recordAudit(user, action, target, detail) {
+  try {
+    fleet.audit.record({ user, action, target, detail });
+  } catch (e) {
+    console.error("[Audit] Record failed:", e.message);
+  }
+}
+
+// Jobs routes (src/jobs.js) audit through the shared fleet trail; the
+// recorder is injected so the jobs module stays decoupled from the runtime.
+setAuditRecorder((entry) => fleet.audit.record(entry));
 
 // Settings service — persists the editable fleet config subset to
 // config/dashboard.local.json and hot-applies alerts changes by rebuilding
@@ -498,6 +526,7 @@ const server = http.createServer((req, res) => {
           return;
         }
 
+        recordAudit(getRequestUser(req), "topic.status", topicId, { status: newStatus });
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(result, null, 2));
       } catch (e) {
@@ -526,6 +555,9 @@ const server = http.createServer((req, res) => {
       return;
     }
     const result = executeAction(action, { runOpenClaw, extractJSON, PORT });
+    // Unknown/rejected actions are logged too (success:false) — attempted
+    // actions are part of the trail.
+    recordAudit(getRequestUser(req), "action.execute", action, { success: result.success });
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(result, null, 2));
   } else if (pathname === "/api/events") {
@@ -763,11 +795,7 @@ const server = http.createServer((req, res) => {
       return;
     }
     const pid = parseInt(pathname.match(TERMINAL_KILL_RE)[1], 10);
-    const login = req.headers["tailscale-user-login"];
-    const user =
-      typeof login === "string" && login.trim().length > 0
-        ? login.trim().toLowerCase()
-        : "anonymous";
+    const user = getRequestUser(req);
     const verdict = killRateLimiter.check(`${user}|${req.socket?.remoteAddress || "unknown"}`);
     if (!verdict.allowed) {
       res.writeHead(429, { "Content-Type": "application/json" });
@@ -778,16 +806,10 @@ const server = http.createServer((req, res) => {
       .killTerminalSession(pid)
       .then((result) => {
         if (result.success) {
-          try {
-            fleet.audit.record({
-              user,
-              action: "session.kill",
-              target: String(pid),
-              detail: { source: "terminal", signal: result.signal },
-            });
-          } catch (e) {
-            console.error("[SessionControl] Audit record failed:", e.message);
-          }
+          recordAudit(user, "session.kill", String(pid), {
+            source: "terminal",
+            signal: result.signal,
+          });
         }
         res.writeHead(result.error ? result.code || 500 : 200, {
           "Content-Type": "application/json",
@@ -846,6 +868,13 @@ const server = http.createServer((req, res) => {
             });
           }
           if (saveOperators(DATA_DIR, data)) {
+            // Field NAMES only — operator records may carry contact details.
+            recordAudit(
+              getRequestUser(req),
+              "operator.save",
+              newOp.id != null ? String(newOp.id) : null,
+              { op: existingIdx >= 0 ? "update" : "create", fields: Object.keys(newOp) },
+            );
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ success: true, operator: newOp }));
           } else {
@@ -898,6 +927,10 @@ const server = http.createServer((req, res) => {
           };
 
           if (savePrivacySettings(DATA_DIR, merged)) {
+            // Field NAMES only — hidden topic/session lists stay private.
+            recordAudit(getRequestUser(req), "privacy.update", null, {
+              fields: Object.keys(updates),
+            });
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ success: true, settings: merged }));
           } else {

@@ -10,6 +10,14 @@
  * Data source: GET /api/fleet/audit?user=&action=&since=&until=&limit=
  * (newest-first entries: { id, ts, user, action, target, detail }).
  *
+ * On top of the server-side filters the view adds:
+ *   - an action-type filter populated dynamically from the entries present
+ *     (accumulated across loads — never hardcoded),
+ *   - actor suggestions (datalist) from the actors present,
+ *   - client-side free-text search over user/action/target/detail,
+ *   - client-side pagination of the (search-filtered) result set,
+ *   - a count summary ("N entries, M actions, K actors").
+ *
  * All entry values are rendered via textContent — never innerHTML — so the
  * trail is XSS-safe even with hostile user/target/detail strings.
  */
@@ -18,6 +26,7 @@ import { t } from "../utils.js";
 
 const AUTO_REFRESH_MS = 60000;
 const FILTER_DEBOUNCE_MS = 350;
+const PAGE_SIZE = 50;
 
 /** Action prefix → badge CSS suffix (palette defined in the partial). */
 const ACTION_CATEGORIES = {
@@ -27,7 +36,18 @@ const ACTION_CATEGORIES = {
   gate: "gate",
   node: "node",
   alerts: "alerts",
+  alert: "alerts",
   memory: "memory",
+  settings: "alerts",
+  privacy: "alerts",
+  chat: "brief",
+  topic: "memory",
+  operator: "node",
+  session: "node",
+  cron: "gate",
+  job: "gate",
+  cache: "gate",
+  action: "gate",
 };
 
 // Module-scope state (the module itself is cached by the browser; only
@@ -36,7 +56,77 @@ let refreshTimer = null;
 let debounceTimer = null;
 let requestSeq = 0;
 let currentRows = [];
+let fetchedEntries = [];
+let currentPage = 1;
 const expandedIds = new Set();
+// Facets accumulate across loads so filter options stay stable while the
+// user narrows the query (options are only ever added, never removed).
+const seenActions = new Set();
+const seenActors = new Set();
+
+/* ------------------------------------------------------------------ */
+/* Pure helpers (exported for node:test)                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Case-insensitive free-text match over an entry's user, action, target,
+ * timestamp and JSON-serialized detail. Empty/blank terms match everything.
+ * @param {object} entry - audit entry
+ * @param {string} term - raw search input
+ * @returns {boolean}
+ */
+export function entryMatchesSearch(entry, term) {
+  const needle = String(term ?? "")
+    .trim()
+    .toLowerCase();
+  if (!needle) return true;
+  if (!entry || typeof entry !== "object") return false;
+  let detailText = "";
+  try {
+    detailText = entry.detail == null ? "" : JSON.stringify(entry.detail);
+  } catch (e) {
+    detailText = "";
+  }
+  const haystack = [entry.user, entry.action, entry.target, entry.ts, detailText]
+    .map((v) => (v == null ? "" : String(v)))
+    .join("\n")
+    .toLowerCase();
+  return haystack.includes(needle);
+}
+
+/**
+ * Slice a list into the requested page, clamping the page number into the
+ * valid range (so deleting rows or tightening filters never strands the
+ * user on an empty page).
+ * @param {Array} list
+ * @param {number} page - 1-based requested page
+ * @param {number} pageSize
+ * @returns {{items: Array, page: number, totalPages: number, total: number}}
+ */
+export function paginate(list, page, pageSize) {
+  const all = Array.isArray(list) ? list : [];
+  const size = Number.isFinite(pageSize) && pageSize >= 1 ? Math.floor(pageSize) : PAGE_SIZE;
+  const totalPages = Math.max(1, Math.ceil(all.length / size));
+  const safePage = Math.min(Math.max(1, Math.floor(page) || 1), totalPages);
+  const start = (safePage - 1) * size;
+  return { items: all.slice(start, start + size), page: safePage, totalPages, total: all.length };
+}
+
+/**
+ * Count summary for the visible result set.
+ * @param {Array<object>} entries
+ * @returns {{entries: number, actions: number, actors: number}}
+ */
+export function summarize(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const actions = new Set();
+  const actors = new Set();
+  for (const entry of list) {
+    if (entry && entry.action) actions.add(String(entry.action));
+    if (entry && entry.user) actors.add(String(entry.user));
+  }
+  return { entries: list.length, actions: actions.size, actors: actors.size };
+}
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -77,6 +167,54 @@ function buildQuery(els) {
   if (els.until.value) params.set("until", `${els.until.value}T23:59:59.999`);
   params.set("limit", els.limit.value || "200");
   return params.toString();
+}
+
+/* ------------------------------------------------------------------ */
+/* Dynamic filter options (from the entries present)                   */
+/* ------------------------------------------------------------------ */
+
+function updateFacets(entries) {
+  for (const entry of entries) {
+    if (entry && entry.action) seenActions.add(String(entry.action));
+    if (entry && entry.user) seenActors.add(String(entry.user));
+  }
+}
+
+/** Rebuild the action <select> options (after the "All actions" option). */
+function rebuildActionOptions(els) {
+  const selected = els.action.value;
+  const known = new Set(
+    Array.from(els.action.options)
+      .map((opt) => opt.value)
+      .filter(Boolean),
+  );
+  const wanted = Array.from(seenActions).sort();
+  if (wanted.length === known.size && wanted.every((a) => known.has(a))) return;
+
+  // Keep the first ("All actions") option, replace the rest.
+  while (els.action.options.length > 1) els.action.remove(1);
+  for (const action of wanted) {
+    const opt = document.createElement("option");
+    opt.value = action;
+    opt.textContent = action;
+    els.action.appendChild(opt);
+  }
+  // seenActions only grows, so a previously selected action always survives.
+  els.action.value = selected;
+}
+
+/** Rebuild the actor suggestions datalist. */
+function rebuildActorOptions(els) {
+  const wanted = Array.from(seenActors).sort();
+  const known = Array.from(els.actorOptions.children).map((opt) => opt.value);
+  if (wanted.length === known.length && wanted.every((a, i) => known[i] === a)) return;
+  els.actorOptions.replaceChildren(
+    ...wanted.map((actor) => {
+      const opt = document.createElement("option");
+      opt.value = actor;
+      return opt;
+    }),
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -150,15 +288,40 @@ function buildRow(entry) {
   return row;
 }
 
-function render(els, entries) {
-  currentRows = entries;
-  els.rows.replaceChildren(...entries.map(buildRow));
-  els.countLine.textContent =
-    entries.length === 1
-      ? t("views.logs.countOne", { n: entries.length }, "{n} entry shown")
-      : t("views.logs.countMany", { n: entries.length }, "{n} entries shown");
-  els.table.hidden = entries.length === 0;
-  els.emptyState.style.display = entries.length === 0 ? "" : "none";
+/**
+ * Apply the client-side search + pagination to the fetched entries and
+ * render the current page. Pure presentation — no refetch.
+ */
+function renderCurrent(els) {
+  const term = els.search.value;
+  const filtered = term.trim()
+    ? fetchedEntries.filter((entry) => entryMatchesSearch(entry, term))
+    : fetchedEntries;
+
+  const { items, page, totalPages, total } = paginate(filtered, currentPage, PAGE_SIZE);
+  currentPage = page;
+  currentRows = filtered;
+
+  els.rows.replaceChildren(...items.map(buildRow));
+
+  const summary = summarize(filtered);
+  els.countLine.textContent = t(
+    "views.logs.summary",
+    { n: summary.entries, m: summary.actions, k: summary.actors },
+    "{n} entries, {m} actions, {k} actors",
+  );
+
+  els.table.hidden = total === 0;
+  els.emptyState.style.display = total === 0 ? "" : "none";
+
+  els.pagination.hidden = totalPages <= 1;
+  els.pageInfo.textContent = t(
+    "views.logs.pageInfo",
+    { page, pages: totalPages },
+    "Page {page} / {pages}",
+  );
+  els.pagePrev.disabled = page <= 1;
+  els.pageNext.disabled = page >= totalPages;
 }
 
 function showError(els, message) {
@@ -194,7 +357,11 @@ async function load(els) {
       return;
     }
     clearError(els);
-    render(els, Array.isArray(payload.entries) ? payload.entries : []);
+    fetchedEntries = Array.isArray(payload.entries) ? payload.entries : [];
+    updateFacets(fetchedEntries);
+    rebuildActionOptions(els);
+    rebuildActorOptions(els);
+    renderCurrent(els);
   } catch (error) {
     if (seq !== requestSeq || !els.rows.isConnected) return;
     showError(
@@ -204,7 +371,7 @@ async function load(els) {
   }
 }
 
-/** Download the currently rendered rows as a JSON file (client-side blob). */
+/** Download the current (search-filtered) rows as a JSON file. */
 function exportView() {
   const blob = new Blob([JSON.stringify(currentRows, null, 2)], {
     type: "application/json",
@@ -245,7 +412,10 @@ export function init(container) {
 
   const els = {
     user: container.querySelector("#logs-filter-user"),
+    actorOptions: container.querySelector("#logs-actor-options"),
     action: container.querySelector("#logs-filter-action"),
+    search: container.querySelector("#logs-filter-search"),
+    searchLabel: container.querySelector("#logs-filter-search-label"),
     since: container.querySelector("#logs-filter-since"),
     until: container.querySelector("#logs-filter-until"),
     limit: container.querySelector("#logs-filter-limit"),
@@ -257,21 +427,52 @@ export function init(container) {
     table: container.querySelector("#logs-table"),
     rows: container.querySelector("#logs-rows"),
     emptyState: container.querySelector("#logs-empty-state"),
+    pagination: container.querySelector("#logs-pagination"),
+    pageInfo: container.querySelector("#logs-page-info"),
+    pagePrev: container.querySelector("#logs-page-prev"),
+    pageNext: container.querySelector("#logs-page-next"),
   };
   if (Object.values(els).some((el) => !el)) {
     console.error("[Logs] Partial markup is missing expected elements; aborting init.");
     return;
   }
 
+  // New-element labels (keys are not in the locale files; t() falls back).
+  els.searchLabel.textContent = t("views.logs.filterSearch", {}, "Search");
+  els.search.placeholder = t("views.logs.searchPlaceholder", {}, "free text…");
+  els.pagePrev.textContent = t("views.logs.pagePrev", {}, "← Prev");
+  els.pageNext.textContent = t("views.logs.pageNext", {}, "Next →");
+
   const applyDebounced = () => {
     if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => load(els), FILTER_DEBOUNCE_MS);
+    debounceTimer = setTimeout(() => {
+      currentPage = 1;
+      load(els);
+    }, FILTER_DEBOUNCE_MS);
   };
 
   els.user.addEventListener("input", applyDebounced);
   for (const el of [els.action, els.since, els.until, els.limit]) {
     el.addEventListener("change", applyDebounced);
   }
+
+  // Free-text search filters client-side: instant, no refetch.
+  els.search.addEventListener("input", () => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      currentPage = 1;
+      renderCurrent(els);
+    }, FILTER_DEBOUNCE_MS);
+  });
+
+  els.pagePrev.addEventListener("click", () => {
+    currentPage -= 1;
+    renderCurrent(els);
+  });
+  els.pageNext.addEventListener("click", () => {
+    currentPage += 1;
+    renderCurrent(els);
+  });
 
   els.refreshBtn.addEventListener("click", () => load(els));
   els.emptyRefreshBtn.addEventListener("click", () => load(els));
