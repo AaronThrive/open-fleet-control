@@ -160,17 +160,11 @@
       word-break: break-word;
     }
 
-    /* Two-column body --------------------------------------------------- */
+    /* Stacked body: memory browser first, knowledge graph below ---------- */
     #cortex-view-section .cx-grid {
-      display: grid;
-      grid-template-columns: minmax(320px, 5fr) minmax(360px, 7fr);
+      display: flex;
+      flex-direction: column;
       gap: 16px;
-      align-items: start;
-    }
-    @media (max-width: 1100px) {
-      #cortex-view-section .cx-grid {
-        grid-template-columns: 1fr;
-      }
     }
     #cortex-view-section .cx-card {
       border: 1px solid var(--cx-border);
@@ -257,12 +251,17 @@
       box-shadow: 0 0 0 2px rgba(13, 245, 227, 0.12);
     }
     #cortex-view-section .cx-mem-list {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      max-height: 460px;
+      max-height: 520px;
       overflow-y: auto;
       padding-right: 2px;
+    }
+    #cortex-view-section .cx-mem-status {
+      font-size: 0.72rem;
+      color: var(--cx-muted);
+      margin-bottom: 8px;
+    }
+    #cortex-view-section .cx-mem-status:empty {
+      display: none;
     }
     #cortex-view-section .cx-mem-item {
       border: 1px solid var(--cx-border);
@@ -654,9 +653,10 @@
             data-i18n-placeholder="views.cortex.searchPlaceholder"
             autocomplete="off"
           />
-          <div class="cx-mem-list" id="cx-memory-list">
-            <div class="cx-loading" data-i18n="views.cortex.loadingMemories">Loading memories…</div>
+          <div class="cx-mem-status" id="cx-memory-status" data-i18n="views.cortex.loadingMemories">
+            Loading memories…
           </div>
+          <div class="cx-mem-list" id="cx-memory-list"></div>
           <details class="cx-store" id="cx-store-details">
             <summary data-i18n="views.cortex.storeSummary">Store memory</summary>
             <form class="cx-store-form" id="cx-store-form">
