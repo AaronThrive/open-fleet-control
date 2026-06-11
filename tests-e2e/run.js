@@ -8,13 +8,15 @@
  *   b. mesh: empty state -> API node registration -> node card renders
  *   c. kanban: API task -> card in inbox -> drag to In Progress -> counts
  *   d. evolution: pending lesson -> approve -> gate OFF -> survives restart
- *   e. briefs: API PUT -> listed -> click -> editor shows content
+ *   e. briefs: API PUT -> listed -> row expands preview -> editor shows content
  *   f. logs: audit rows render; action filter narrows to lesson.approve
  *
  * Run with: npm run test:e2e
  */
 
 "use strict";
+
+/* global window, document -- page.evaluate callbacks execute in the browser */
 
 const fs = require("fs");
 const path = require("path");
@@ -62,9 +64,12 @@ function assert(condition, message) {
 
 /** Navigate the SPA to a hash view and give the partial a tick to mount. */
 async function gotoView(view) {
-  await ctx.page.evaluate((v) => {
-    window.location.hash = v;
-  }, view ? `#view-${view}` : "#");
+  await ctx.page.evaluate(
+    (v) => {
+      window.location.hash = v;
+    },
+    view ? `#view-${view}` : "#",
+  );
   await sleep(100);
 }
 
@@ -162,9 +167,7 @@ async function journeyKanban() {
     async () => {
       const counts = await ctx.page.evaluate(() => {
         const read = (status) =>
-          document
-            .querySelector(`.kb-col[data-status="${status}"] .kb-count`)
-            ?.textContent?.trim();
+          document.querySelector(`.kb-col[data-status="${status}"] .kb-count`)?.textContent?.trim();
         return { inbox: read("inbox"), inprogress: read("inprogress") };
       });
       return counts.inbox === "0" && counts.inprogress === "1";
@@ -213,14 +216,23 @@ async function dragCardToColumn(cardSelector, targetStatus) {
 async function journeyEvolution() {
   // Gate defaults ON, so a new lesson lands as 'pending'.
   const gateBefore = await api("/api/fleet/evolution/gate");
-  assert(gateBefore.body?.gate === true, `expected gate ON by default, got ${gateBefore.body?.gate}`);
+  assert(
+    gateBefore.body?.gate === true,
+    `expected gate ON by default, got ${gateBefore.body?.gate}`,
+  );
 
   const seeded = await api("/api/fleet/evolution/lessons", {
     method: "POST",
     body: { title: LESSON_TITLE, body: "Always verify before declaring done.", author: "e2e" },
   });
-  assert(seeded.status === 200 && seeded.body?.lesson?.id, `lesson seed failed: HTTP ${seeded.status}`);
-  assert(seeded.body.lesson.status === "pending", `expected pending lesson, got ${seeded.body.lesson.status}`);
+  assert(
+    seeded.status === 200 && seeded.body?.lesson?.id,
+    `lesson seed failed: HTTP ${seeded.status}`,
+  );
+  assert(
+    seeded.body.lesson.status === "pending",
+    `expected pending lesson, got ${seeded.body.lesson.status}`,
+  );
   ctx.lessonId = seeded.body.lesson.id;
 
   await gotoView("evolution");
@@ -274,10 +286,19 @@ async function journeyBriefs() {
   assert(put.status === 200 && put.body?.success, `brief PUT failed: HTTP ${put.status}`);
 
   await gotoView("briefs");
-  const itemSelector = `.briefs-list-item:has-text("${BRIEF_NAME}")`;
-  await ctx.page.waitForSelector(itemSelector, { state: "visible", timeout: 10000 });
-  await ctx.page.click(itemSelector);
+  // v2.2: briefs render as detail-list rows; clicking a row expands the
+  // rendered markdown preview, and the Edit action opens the editor.
+  const rowSelector = `#briefs-view-section .dl-row:has-text("${BRIEF_NAME}")`;
+  await ctx.page.waitForSelector(rowSelector, { state: "visible", timeout: 10000 });
+  await ctx.page.click(rowSelector);
 
+  const headingText = BRIEF_HEADING.replace(/^#\s*/, "");
+  await ctx.page.waitForSelector(
+    `#briefs-view-section .dl-detail-row .briefs-preview h1:has-text("${headingText}")`,
+    { state: "visible", timeout: 6000 },
+  );
+
+  await ctx.page.click(`#briefs-view-section .dl-detail-row .briefs-edit-btn`);
   await ctx.page.waitForSelector("#briefs-editor", { state: "visible", timeout: 6000 });
   await waitFor(
     async () => {
@@ -295,10 +316,10 @@ async function journeyLogs() {
   await ctx.page.waitForSelector("#logs-view-section", { state: "attached", timeout: 10000 });
 
   // Unfiltered: the earlier mutations produced several audit entries.
-  await waitFor(
-    async () => (await ctx.page.locator(".logs-row").count()) >= 3,
-    { label: "at least 3 unfiltered audit rows", timeoutMs: 10000 },
-  );
+  await waitFor(async () => (await ctx.page.locator(".logs-row").count()) >= 3, {
+    label: "at least 3 unfiltered audit rows",
+    timeoutMs: 10000,
+  });
 
   // Filter by action=lesson.approve (change event applies the filter).
   await ctx.page.selectOption("#logs-filter-action", "lesson.approve");

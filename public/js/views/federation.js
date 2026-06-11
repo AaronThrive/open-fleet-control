@@ -1,5 +1,5 @@
 /**
- * Federation View — fleet-of-fleets monitoring + opt-in write actions.
+ * Federation view — fleet-of-fleets as a dense detail list (v2.1 style).
  *
  * Loaded on demand by views.js, which calls init(containerEl) on EVERY
  * visit of the view. The partial HTML is re-injected fresh each visit, so
@@ -12,39 +12,101 @@
  *   PATCH  /api/fleet/federation/remotes/:id  — toggle per-remote allowWrites
  *   DELETE /api/fleet/federation/remotes/:id  — remove a remote
  *   POST   /api/fleet/federation/remotes/:id/actions — whitelisted write proxy
+ *   GET    /api/fleet/federation/remotes/:id/detail  — cached drill-down
  *   SSE    /api/events (event "fleet.federation") — reachability transitions
  *
- * Remotes are read-only by default: this panel only mutates the LOCAL
- * registry unless a remote is explicitly opted in (allowWrites). With writes
- * enabled, the card exposes the remote's pending lessons (approve/reject)
- * and a gate toggle — all proxied through the server-side whitelist.
+ * Rendering: the shared detail-list component — one row per remote (label,
+ * host, reachability, writes badge, node/task counts, last sync) with an
+ * expandable detail panel carrying the drill-down detail (mesh nodes, kanban
+ * columns, recent alerts), the write controls (gate toggle, pending lesson
+ * approve/reject), and the registry actions (toggle allowWrites, remove).
  *
- * Drill-down: clicking a card opens a drawer backed by the cached detail at
- *   GET /api/fleet/federation/remotes/:id/detail
- * showing the remote's mesh nodes (with vitals), kanban column counts with
- * the top cards, and recent alerts. A dead remote serves its last-known
- * cached detail with an "unreachable" notice.
+ * Remotes are read-only by default: this panel only mutates the LOCAL
+ * registry unless a remote is explicitly opted in (allowWrites). All remote
+ * writes go through the server-side whitelisted proxy and are audited on
+ * both sides. All dynamic values render via textContent — XSS-safe.
  */
 
 import { t } from "../utils.js";
+import { createDetailList } from "../components/detail-list.js";
 
 const REFRESH_INTERVAL_MS = 60000; // fallback poll; SSE drives live updates
 const SSE_REFETCH_DEBOUNCE_MS = 300;
 
-// Mirrors the kanban column order for the per-status mini-bars.
+// Mirrors the kanban column order for the per-status detail rows.
 const TASK_STATUS_ORDER = ["inbox", "assigned", "inprogress", "review", "done", "failed"];
 
 // --- Module-level lifecycle state (persists across visits) -----------------
 
 let refs = null; // DOM references for the active visit
+let list = null; // shared detail-list instance
 let refreshTimer = null;
 let eventSource = null;
 let sseDebounceTimer = null;
-let fetchSeq = 0; // guards against out-of-order responses
-let drawerFetchSeq = 0; // guards the drill-down drawer's fetch
-let drawerKeyHandler = null; // document-level Escape handler while open
+let fetchSeq = 0; // guards against out-of-order list responses
+const detailSeq = new Map(); // remoteId -> seq guard for detail-panel fetches
 
-// --- Entry point ------------------------------------------------------------
+/* ------------------------------------------------------------------ */
+/* Pure helpers (exported for node:test)                                */
+/* ------------------------------------------------------------------ */
+
+/** Host (plus port, if any) of a base URL — for compact display. */
+export function baseUrlHost(baseUrl) {
+  try {
+    return new URL(baseUrl).host;
+  } catch (err) {
+    return String(baseUrl || "");
+  }
+}
+
+/** Sum the finite per-status task counts, or null when nothing is known. */
+export function sumTaskCounts(counts) {
+  if (!counts || typeof counts !== "object") return null;
+  let total = null;
+  for (const value of Object.values(counts)) {
+    if (typeof value === "number" && Number.isFinite(value)) total = (total ?? 0) + value;
+  }
+  return total;
+}
+
+/** Flatten a federation remote onto the column keys the list sorts/filters by. */
+export function toRemoteRow(remote) {
+  const status = remote.status && typeof remote.status === "object" ? remote.status : {};
+  const summary = status.summary && typeof status.summary === "object" ? status.summary : null;
+  const mesh = summary && summary.mesh && typeof summary.mesh === "object" ? summary.mesh : null;
+  const nodes =
+    mesh && isFiniteNumber(mesh.online) && isFiniteNumber(mesh.nodes)
+      ? `${mesh.online}/${mesh.nodes}`
+      : "—";
+  return {
+    id: remote.id,
+    label: remote.label || "",
+    host: baseUrlHost(remote.baseUrl),
+    hostname: summary && typeof summary.hostname === "string" ? summary.hostname : "",
+    reachable:
+      status.reachable === true
+        ? "reachable"
+        : status.reachable === false
+          ? "unreachable"
+          : "unknown",
+    writes: remote.allowWrites === true,
+    latencyMs: isFiniteNumber(status.latencyMs) ? status.latencyMs : null,
+    lastChecked: isFiniteNumber(status.lastChecked) ? status.lastChecked : null,
+    nodes,
+    tasks: summary && summary.kanban ? sumTaskCounts(summary.kanban.counts) : null,
+    pending:
+      summary && summary.evolution && isFiniteNumber(summary.evolution.pendingCount)
+        ? summary.evolution.pendingCount
+        : null,
+    remote,
+    status,
+    summary,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Entry point + lifecycle                                              */
+/* ------------------------------------------------------------------ */
 
 export function init(containerEl) {
   teardown();
@@ -60,7 +122,7 @@ export function init(containerEl) {
     loading: root.querySelector("#fed-loading"),
     fetchError: root.querySelector("#fed-fetch-error"),
     body: root.querySelector("#fed-body"),
-    grid: root.querySelector("#fed-grid"),
+    listHost: root.querySelector("#fed-list"),
     emptyState: root.querySelector("#fed-empty-state"),
     emptyCta: root.querySelector("#fed-empty-cta"),
     addForm: root.querySelector("#fed-add-form"),
@@ -69,19 +131,12 @@ export function init(containerEl) {
     addToken: root.querySelector("#fed-add-token"),
     addBtn: root.querySelector("#fed-add-btn"),
     addError: root.querySelector("#fed-add-error"),
-    drawer: root.querySelector("#fed-drawer"),
-    drawerBackdrop: root.querySelector("#fed-drawer-backdrop"),
-    drawerTitle: root.querySelector("#fed-drawer-title"),
-    drawerSub: root.querySelector("#fed-drawer-sub"),
-    drawerBody: root.querySelector("#fed-drawer-body"),
-    drawerClose: root.querySelector("#fed-drawer-close"),
   };
 
   refs.emptyCta?.addEventListener("click", () => refs?.addLabel?.focus());
   refs.addForm?.addEventListener("submit", onAddSubmit);
-  refs.drawerClose?.addEventListener("click", closeDrillDown);
-  refs.drawerBackdrop?.addEventListener("click", closeDrillDown);
 
+  buildList();
   refresh({ initial: true });
 
   refreshTimer = setInterval(() => {
@@ -100,10 +155,6 @@ function teardown() {
     clearInterval(refreshTimer);
     refreshTimer = null;
   }
-  if (drawerKeyHandler) {
-    document.removeEventListener("keydown", drawerKeyHandler);
-    drawerKeyHandler = null;
-  }
   if (sseDebounceTimer) {
     clearTimeout(sseDebounceTimer);
     sseDebounceTimer = null;
@@ -112,6 +163,11 @@ function teardown() {
     eventSource.close();
     eventSource = null;
   }
+  if (list) {
+    list.destroy();
+    list = null;
+  }
+  detailSeq.clear();
   refs = null;
 }
 
@@ -120,7 +176,9 @@ function isActive() {
   return !!(refs && refs.root && document.body.contains(refs.root));
 }
 
-// --- Live updates -----------------------------------------------------------
+/* ------------------------------------------------------------------ */
+/* Live updates                                                         */
+/* ------------------------------------------------------------------ */
 
 function connectSSE() {
   if (typeof EventSource === "undefined") return;
@@ -153,7 +211,9 @@ function connectSSE() {
   }
 }
 
-// --- Data fetching ----------------------------------------------------------
+/* ------------------------------------------------------------------ */
+/* Data fetching                                                        */
+/* ------------------------------------------------------------------ */
 
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
@@ -185,7 +245,9 @@ async function refresh({ initial }) {
   }
 }
 
-// --- Rendering ----------------------------------------------------------------
+/* ------------------------------------------------------------------ */
+/* Rendering                                                            */
+/* ------------------------------------------------------------------ */
 
 function renderFetchError(initial, err) {
   refs.loading.hidden = true;
@@ -207,354 +269,199 @@ function renderState(state) {
   const remotes = Array.isArray(state.remotes) ? state.remotes : [];
   const hasRemotes = remotes.length > 0;
   refs.emptyState.hidden = hasRemotes;
-  refs.grid.hidden = !hasRemotes;
-  refs.grid.replaceChildren();
-  for (const remote of remotes) {
-    refs.grid.appendChild(buildRemoteCard(remote));
-  }
+  refs.listHost.hidden = !hasRemotes;
+  if (list) list.update(remotes.map(toRemoteRow));
 }
 
-function buildRemoteCard(remote) {
-  const status = remote.status && typeof remote.status === "object" ? remote.status : {};
-  const summary = status.summary && typeof status.summary === "object" ? status.summary : null;
-  const card = el("div", "fed-card");
-  // Click-to-drill-down (buttons inside the card keep their own actions).
-  card.title = t("views.federation.drillDownTitle", {}, "Click for remote detail");
-  card.addEventListener("click", (event) => {
-    if (event.target.closest("button")) return;
-    openDrillDown(remote);
-  });
+/* ------------------------------------------------------------------ */
+/* Detail-list configuration                                            */
+/* ------------------------------------------------------------------ */
 
-  // Head: reachability dot, label + host, latency
-  const head = el("div", "fed-card-head");
-  const reachClass =
-    status.reachable === true ? "reachable" : status.reachable === false ? "unreachable" : "";
-  const dot = el("span", `fed-status-dot ${reachClass}`.trim());
-  dot.title =
-    status.reachable === true
-      ? t("views.federation.reachable", {}, "Reachable")
-      : status.reachable === false
-        ? t("views.federation.unreachable", {}, "Unreachable")
-        : t("views.federation.notChecked", {}, "Not checked yet");
-  head.appendChild(dot);
-
-  const names = el("div", "fed-card-names");
-  names.appendChild(
-    el("div", "fed-card-label", remote.label || t("views.federation.unnamed", {}, "unnamed")),
+function reachBadge(row) {
+  const badge = el("span", `fed-reach ${row.reachable}`);
+  badge.appendChild(
+    el(
+      "span",
+      `fed-status-dot ${row.reachable === "reachable" ? "reachable" : row.reachable === "unreachable" ? "unreachable" : ""}`.trim(),
+    ),
   );
-  const hostLine = baseUrlHost(remote.baseUrl);
-  const hostname = summary && summary.hostname ? ` · ${summary.hostname}` : "";
-  names.appendChild(el("div", "fed-card-host", hostLine + hostname));
-  head.appendChild(names);
-
-  const latency = isFiniteNumber(status.latencyMs) ? `${Math.round(status.latencyMs)} ms` : "—";
-  head.appendChild(el("span", "fed-latency", latency));
-
-  // Writes opt-in badge (OFF by default) — click to toggle.
-  const writesOn = remote.allowWrites === true;
-  const writesBadge = el(
-    "button",
-    `fed-writes-badge${writesOn ? " on" : ""}`,
-    writesOn
-      ? t("views.federation.writesOn", {}, "WRITES ON")
-      : t("views.federation.writesOff", {}, "writes off"),
-  );
-  writesBadge.type = "button";
-  writesBadge.title = writesOn
-    ? t("views.federation.writesOnTitle", {}, "Write actions enabled — click to disable")
-    : t("views.federation.writesOffTitle", {}, "Read-only — click to enable write actions");
-  writesBadge.addEventListener("click", () => toggleWrites(remote, writesBadge));
-  head.appendChild(writesBadge);
-  card.appendChild(head);
-
-  // Last-known summary tiles
-  if (summary) {
-    card.appendChild(buildSummaryTiles(summary));
-  } else {
-    card.appendChild(
-      el("div", "fed-muted", t("views.federation.noData", {}, "No data from this remote yet.")),
-    );
-  }
-
-  // Write controls (gate toggle + pending lessons) — only with writes
-  // enabled AND the remote currently reachable.
-  if (writesOn && status.reachable === true) {
-    card.appendChild(buildWriteControls(remote, status, summary));
-  }
-
-  // Last error (when unreachable)
-  if (status.reachable === false && status.lastError) {
-    card.appendChild(
-      el(
-        "div",
-        "fed-card-error",
-        t("views.federation.lastError", { message: status.lastError }, "Last error: {message}"),
-      ),
-    );
-  }
-
-  // Foot: added-by line, last checked, remove
-  const foot = el("div", "fed-card-foot");
-  foot.appendChild(
+  badge.appendChild(
     el(
       "span",
       null,
-      t("views.federation.checked", { value: formatAgo(status.lastChecked) }, "Checked: {value}"),
+      row.reachable === "reachable"
+        ? t("views.federation.reachable", {}, "Reachable")
+        : row.reachable === "unreachable"
+          ? t("views.federation.unreachable", {}, "Unreachable")
+          : t("views.federation.notChecked", {}, "Not checked"),
     ),
   );
-  if (remote.hasToken) {
-    foot.appendChild(el("span", null, t("views.federation.tokenChip", {}, "🔑 token")));
-  }
+  if (row.latencyMs !== null) badge.title = `${Math.round(row.latencyMs)} ms`;
+  return badge;
+}
+
+function writesBadge(row) {
+  return el(
+    "span",
+    `fed-writes-badge${row.writes ? " on" : ""}`,
+    row.writes
+      ? t("views.federation.writesOn", {}, "WRITES ON")
+      : t("views.federation.writesOff", {}, "writes off"),
+  );
+}
+
+function hostCell(row) {
+  const cell = el("span", "fed-host", row.host);
+  if (row.hostname) cell.title = row.hostname;
+  return cell;
+}
+
+/** Per-row actions cell: writes toggle + remove. */
+function buildRowActions(row) {
+  const actions = el("div", "fed-row-actions");
+
+  const toggleBtn = el(
+    "button",
+    "fed-action-btn",
+    row.writes
+      ? t("views.federation.disableWrites", {}, "Disable writes")
+      : t("views.federation.enableWrites", {}, "Enable writes"),
+  );
+  toggleBtn.type = "button";
+  toggleBtn.title = row.writes
+    ? t("views.federation.writesOnTitle", {}, "Write actions enabled — click to disable")
+    : t("views.federation.writesOffTitle", {}, "Read-only — click to enable write actions");
+  toggleBtn.addEventListener("click", () => toggleWrites(row.remote, toggleBtn));
+  actions.appendChild(toggleBtn);
 
   const removeBtn = el("button", "fed-remove-btn", t("actions.remove", {}, "Remove"));
   removeBtn.type = "button";
-  removeBtn.addEventListener("click", () => removeRemote(remote, removeBtn));
-  foot.appendChild(removeBtn);
-  card.appendChild(foot);
+  removeBtn.addEventListener("click", () => removeRemote(row.remote, removeBtn));
+  actions.appendChild(removeBtn);
 
-  return card;
+  return actions;
 }
 
-function buildSummaryTiles(summary) {
-  const tiles = el("div", "fed-tiles");
-
-  // Mesh nodes online/total
-  const meshTile = el("div", "fed-tile");
-  meshTile.appendChild(
-    el("span", "fed-tile-label", t("views.federation.tileNodes", {}, "Nodes online")),
-  );
-  const mesh = summary.mesh;
-  meshTile.appendChild(
-    el(
-      "span",
-      "fed-tile-value",
-      mesh && isFiniteNumber(mesh.online) && isFiniteNumber(mesh.nodes)
-        ? `${mesh.online}/${mesh.nodes}`
-        : "—",
-    ),
-  );
-  tiles.appendChild(meshTile);
-
-  // Tasks by status mini-bars
-  const taskTile = el("div", "fed-tile");
-  taskTile.appendChild(el("span", "fed-tile-label", t("views.federation.tileTasks", {}, "Tasks")));
-  const counts = summary.kanban && summary.kanban.counts ? summary.kanban.counts : null;
-  const taskBars = buildTaskBars(counts);
-  if (taskBars) {
-    taskTile.appendChild(taskBars);
-  } else {
-    taskTile.appendChild(el("span", "fed-tile-value", "—"));
+function buildList() {
+  if (list) {
+    list.destroy();
+    list = null;
   }
-  tiles.appendChild(taskTile);
-
-  // Stale count
-  const staleTile = el("div", "fed-tile");
-  staleTile.appendChild(el("span", "fed-tile-label", t("views.federation.tileStale", {}, "Stale")));
-  staleTile.appendChild(
-    el(
-      "span",
-      "fed-tile-value",
-      summary.kanban && isFiniteNumber(summary.kanban.staleCount)
-        ? String(summary.kanban.staleCount)
-        : "—",
-    ),
-  );
-  tiles.appendChild(staleTile);
-
-  // Evolution gate badge
-  const gateTile = el("div", "fed-tile");
-  gateTile.appendChild(el("span", "fed-tile-label", t("views.federation.tileGate", {}, "Gate")));
-  const gate = summary.evolution ? summary.evolution.gate : null;
-  const gateClass = gate === true ? "on" : gate === false ? "off" : "unknown";
-  const gateText =
-    gate === true
-      ? t("views.federation.gateGated", {}, "Gated")
-      : gate === false
-        ? t("views.federation.gateOpen", {}, "Open")
-        : "—";
-  gateTile.appendChild(el("span", `fed-gate-badge ${gateClass}`, gateText));
-  tiles.appendChild(gateTile);
-
-  // Pending lessons
-  const pendingTile = el("div", "fed-tile");
-  pendingTile.appendChild(
-    el("span", "fed-tile-label", t("views.federation.tilePending", {}, "Pending lessons")),
-  );
-  pendingTile.appendChild(
-    el(
-      "span",
-      "fed-tile-value",
-      summary.evolution && isFiniteNumber(summary.evolution.pendingCount)
-        ? String(summary.evolution.pendingCount)
-        : "—",
-    ),
-  );
-  tiles.appendChild(pendingTile);
-
-  // Recent alerts
-  const alertsTile = el("div", "fed-tile");
-  alertsTile.appendChild(
-    el("span", "fed-tile-label", t("views.federation.tileAlerts", {}, "Alerts")),
-  );
-  alertsTile.appendChild(
-    el(
-      "span",
-      "fed-tile-value",
-      summary.alerts && isFiniteNumber(summary.alerts.recent) ? String(summary.alerts.recent) : "—",
-    ),
-  );
-  tiles.appendChild(alertsTile);
-
-  return tiles;
+  refs.listHost.replaceChildren();
+  list = createDetailList(refs.listHost, {
+    columns: [
+      { key: "label", label: t("views.federation.colLabel", {}, "Label"), sortable: true },
+      {
+        key: "host",
+        label: t("views.federation.colHost", {}, "Host"),
+        sortable: true,
+        render: hostCell,
+      },
+      {
+        key: "reachable",
+        label: t("views.federation.colStatus", {}, "Status"),
+        sortable: true,
+        render: reachBadge,
+      },
+      {
+        key: "writes",
+        label: t("views.federation.colWrites", {}, "Writes"),
+        sortable: true,
+        render: writesBadge,
+      },
+      { key: "nodes", label: t("views.federation.colNodes", {}, "Nodes"), sortable: true },
+      { key: "tasks", label: t("views.federation.colTasks", {}, "Tasks"), sortable: true },
+      {
+        key: "lastChecked",
+        label: t("views.federation.colChecked", {}, "Last sync"),
+        sortable: true,
+        render: (row) => el("span", null, formatAgo(row.lastChecked)),
+      },
+    ],
+    getRowId: (row) => row.id,
+    renderDetail: buildRemoteDetail,
+    renderActions: buildRowActions,
+    emptyText: "",
+    filterKeys: ["label", "host", "hostname", "reachable", "nodes"],
+    filterPlaceholder: t("views.federation.filterPlaceholder", {}, "Filter remotes…"),
+    defaultSort: { key: "label", dir: "asc" },
+  });
 }
 
-/** Mini bar chart of task counts by status. Returns null without data. */
-function buildTaskBars(counts) {
-  if (!counts || typeof counts !== "object") return null;
-  const values = TASK_STATUS_ORDER.map((status) => ({
-    status,
-    count: isFiniteNumber(counts[status]) ? counts[status] : 0,
-  }));
-  const max = Math.max(...values.map((v) => v.count));
-  if (max <= 0) return null;
+/* ------------------------------------------------------------------ */
+/* Detail panel (drill-down + write controls + registry actions)        */
+/* ------------------------------------------------------------------ */
 
-  const wrap = el("div", "fed-taskbars");
-  for (const { status, count } of values) {
-    const bar = el("div", `fed-taskbar ${status}`);
-    bar.style.height = `${Math.max(8, Math.round((count / max) * 100))}%`;
-    if (count === 0) bar.style.opacity = "0.25";
-    bar.title = `${status}: ${count}`;
-    wrap.appendChild(bar);
-  }
-  return wrap;
-}
+function buildRemoteDetail(row) {
+  const panel = el("div", "fed-detail");
 
-/**
- * Gate toggle + pending lessons mini-list for a writes-enabled, reachable
- * remote. All actions go through the server's whitelisted proxy.
- */
-function buildWriteControls(remote, status, summary) {
-  const wrap = el("div", "fed-write-controls");
-  wrap.appendChild(
-    el(
-      "div",
-      "fed-write-controls-title",
-      t("views.federation.remoteActions", {}, "Remote actions"),
-    ),
-  );
-
-  // Gate control mirroring the remote gate state.
-  const gate = summary && summary.evolution ? summary.evolution.gate : null;
-  const gateRow = el("div", "fed-gate-row");
-  gateRow.appendChild(
-    el("span", null, t("views.federation.evolutionGateLabel", {}, "Evolution gate:")),
-  );
-  const gateClass = gate === true ? "on" : gate === false ? "off" : "unknown";
-  gateRow.appendChild(
-    el(
-      "span",
-      `fed-gate-badge ${gateClass}`,
-      gate === true
-        ? t("views.federation.gateGated", {}, "Gated")
-        : gate === false
-          ? t("views.federation.gateOpen", {}, "Open")
-          : "—",
-    ),
-  );
-  if (typeof gate === "boolean") {
-    const gateBtn = el(
-      "button",
-      "fed-action-btn",
-      gate
-        ? t("views.federation.openGate", {}, "Open gate")
-        : t("views.federation.closeGate", {}, "Close gate"),
+  if (row.reachable === "unreachable") {
+    panel.appendChild(
+      el(
+        "div",
+        "fed-detail-warning",
+        t(
+          "views.federation.drillUnreachable",
+          {},
+          "Remote currently unreachable — showing last-known cached detail.",
+        ),
+      ),
     );
-    gateBtn.type = "button";
-    gateBtn.addEventListener("click", () =>
-      proxyAction(remote, "gate.set", { gate: !gate }, gateBtn),
-    );
-    gateRow.appendChild(gateBtn);
-  }
-  wrap.appendChild(gateRow);
-
-  // Pending lessons mini-list with per-lesson approve/reject.
-  const lessons = Array.isArray(status.pendingLessons) ? status.pendingLessons : null;
-  if (lessons && lessons.length > 0) {
-    const list = el("div", "fed-lessons");
-    for (const lesson of lessons) {
-      const row = el("div", "fed-lesson-row");
-      const title = el("span", "fed-lesson-title", lesson.title || lesson.id);
-      title.title = `${lesson.id}${lesson.ts ? ` · ${lesson.ts}` : ""}`;
-      row.appendChild(title);
-      if (lesson.author) row.appendChild(el("span", "fed-lesson-author", lesson.author));
-
-      const approveBtn = el(
-        "button",
-        "fed-action-btn approve",
-        t("views.federation.approve", {}, "Approve"),
+    if (row.status.lastError) {
+      panel.appendChild(
+        el(
+          "div",
+          "fed-card-error",
+          t(
+            "views.federation.lastError",
+            { message: row.status.lastError },
+            "Last error: {message}",
+          ),
+        ),
       );
-      approveBtn.type = "button";
-      approveBtn.addEventListener("click", () =>
-        proxyAction(remote, "lesson.approve", { lessonId: lesson.id }, approveBtn),
-      );
-      row.appendChild(approveBtn);
-
-      const rejectBtn = el(
-        "button",
-        "fed-action-btn reject",
-        t("views.federation.reject", {}, "Reject"),
-      );
-      rejectBtn.type = "button";
-      rejectBtn.addEventListener("click", () =>
-        proxyAction(remote, "lesson.reject", { lessonId: lesson.id }, rejectBtn),
-      );
-      row.appendChild(rejectBtn);
-      list.appendChild(row);
     }
-    wrap.appendChild(list);
-  } else {
-    wrap.appendChild(
+  }
+
+  // Write controls — only with writes enabled AND the remote reachable.
+  if (row.writes && row.reachable === "reachable") {
+    panel.appendChild(buildWriteControls(row.remote, row.status, row.summary));
+  } else if (!row.writes) {
+    panel.appendChild(
       el(
         "div",
         "fed-muted",
-        t("views.federation.noPendingLessons", {}, "No pending lessons on this remote."),
+        t(
+          "views.federation.writesHint",
+          {},
+          "Read-only remote. Use “Enable writes” to allow lesson approve/reject, gate toggle, and kanban task moves against this dashboard (audited on both sides).",
+        ),
       ),
     );
   }
 
-  return wrap;
-}
-
-// --- Drill-down drawer (read-only remote detail) ------------------------------
-
-async function openDrillDown(remote) {
-  if (!refs || !refs.drawer) return;
-  const seq = ++drawerFetchSeq;
-
-  refs.drawer.hidden = false;
-  refs.drawerBackdrop.hidden = false;
-  refs.drawerTitle.textContent = remote.label || baseUrlHost(remote.baseUrl);
-  refs.drawerSub.textContent = baseUrlHost(remote.baseUrl);
-  refs.drawerBody.replaceChildren(
+  // Drill-down detail (cached server-side) — fetched on expand.
+  const drill = el("div", "fed-drill");
+  drill.appendChild(
     el("div", "fed-muted", t("views.federation.drillLoading", {}, "Loading remote detail...")),
   );
+  panel.appendChild(drill);
+  loadDrillDown(row, drill);
 
-  if (!drawerKeyHandler) {
-    drawerKeyHandler = (event) => {
-      if (event.key === "Escape") closeDrillDown();
-    };
-    document.addEventListener("keydown", drawerKeyHandler);
-  }
+  return panel;
+}
 
+async function loadDrillDown(row, host) {
+  const seq = (detailSeq.get(row.id) || 0) + 1;
+  detailSeq.set(row.id, seq);
   try {
     const payload = await fetchJson(
-      `/api/fleet/federation/remotes/${encodeURIComponent(remote.id)}/detail`,
+      `/api/fleet/federation/remotes/${encodeURIComponent(row.id)}/detail`,
     );
-    if (seq !== drawerFetchSeq || !refs || refs.drawer.hidden) return;
-    renderDrillDown(payload);
+    if (detailSeq.get(row.id) !== seq || !host.isConnected) return;
+    renderDrillDown(host, payload);
   } catch (err) {
-    if (seq !== drawerFetchSeq || !refs || refs.drawer.hidden) return;
-    refs.drawerBody.replaceChildren(
+    if (detailSeq.get(row.id) !== seq || !host.isConnected) return;
+    host.replaceChildren(
       el(
         "div",
         "fed-card-error",
@@ -568,38 +475,11 @@ async function openDrillDown(remote) {
   }
 }
 
-function closeDrillDown() {
-  drawerFetchSeq++; // invalidate any in-flight fetch
-  if (drawerKeyHandler) {
-    document.removeEventListener("keydown", drawerKeyHandler);
-    drawerKeyHandler = null;
-  }
-  if (!refs || !refs.drawer) return;
-  refs.drawer.hidden = true;
-  refs.drawerBackdrop.hidden = true;
-  refs.drawerBody.replaceChildren();
-}
-
-function renderDrillDown({ status, detail }) {
-  const body = refs.drawerBody;
-  body.replaceChildren();
-
-  if (status && status.reachable === false) {
-    body.appendChild(
-      el(
-        "div",
-        "fed-detail-warning",
-        t(
-          "views.federation.drillUnreachable",
-          {},
-          "Remote currently unreachable — showing last-known cached detail.",
-        ),
-      ),
-    );
-  }
+function renderDrillDown(host, { detail }) {
+  host.replaceChildren();
 
   if (!detail) {
-    body.appendChild(
+    host.appendChild(
       el(
         "div",
         "fed-muted",
@@ -613,7 +493,7 @@ function renderDrillDown({ status, detail }) {
     return;
   }
 
-  body.appendChild(
+  host.appendChild(
     el(
       "div",
       "fed-detail-stamp",
@@ -624,9 +504,9 @@ function renderDrillDown({ status, detail }) {
       ),
     ),
   );
-  body.appendChild(buildDetailNodes(detail.mesh));
-  body.appendChild(buildDetailBoard(detail.kanban));
-  body.appendChild(buildDetailAlerts(detail.alerts));
+  host.appendChild(buildDetailNodes(detail.mesh));
+  host.appendChild(buildDetailBoard(detail.kanban));
+  host.appendChild(buildDetailAlerts(detail.alerts));
 }
 
 /** Helper: section wrapper with an uppercase title. */
@@ -731,7 +611,105 @@ function buildDetailAlerts(alertsBlock) {
   return section;
 }
 
-// --- Mutations (LOCAL registry + whitelisted remote write proxy) -------------
+/**
+ * Gate toggle + pending lessons mini-list for a writes-enabled, reachable
+ * remote. All actions go through the server's whitelisted proxy.
+ */
+function buildWriteControls(remote, status, summary) {
+  const wrap = el("div", "fed-write-controls");
+  wrap.appendChild(
+    el(
+      "div",
+      "fed-write-controls-title",
+      t("views.federation.remoteActions", {}, "Remote actions"),
+    ),
+  );
+
+  // Gate control mirroring the remote gate state.
+  const gate = summary && summary.evolution ? summary.evolution.gate : null;
+  const gateRow = el("div", "fed-gate-row");
+  gateRow.appendChild(
+    el("span", null, t("views.federation.evolutionGateLabel", {}, "Evolution gate:")),
+  );
+  const gateClass = gate === true ? "on" : gate === false ? "off" : "unknown";
+  gateRow.appendChild(
+    el(
+      "span",
+      `fed-gate-badge ${gateClass}`,
+      gate === true
+        ? t("views.federation.gateGated", {}, "Gated")
+        : gate === false
+          ? t("views.federation.gateOpen", {}, "Open")
+          : "—",
+    ),
+  );
+  if (typeof gate === "boolean") {
+    const gateBtn = el(
+      "button",
+      "fed-action-btn",
+      gate
+        ? t("views.federation.openGate", {}, "Open gate")
+        : t("views.federation.closeGate", {}, "Close gate"),
+    );
+    gateBtn.type = "button";
+    gateBtn.addEventListener("click", () =>
+      proxyAction(remote, "gate.set", { gate: !gate }, gateBtn),
+    );
+    gateRow.appendChild(gateBtn);
+  }
+  wrap.appendChild(gateRow);
+
+  // Pending lessons mini-list with per-lesson approve/reject.
+  const lessons = Array.isArray(status.pendingLessons) ? status.pendingLessons : null;
+  if (lessons && lessons.length > 0) {
+    const lessonList = el("div", "fed-lessons");
+    for (const lesson of lessons) {
+      const row = el("div", "fed-lesson-row");
+      const title = el("span", "fed-lesson-title", lesson.title || lesson.id);
+      title.title = `${lesson.id}${lesson.ts ? ` · ${lesson.ts}` : ""}`;
+      row.appendChild(title);
+      if (lesson.author) row.appendChild(el("span", "fed-lesson-author", lesson.author));
+
+      const approveBtn = el(
+        "button",
+        "fed-action-btn approve",
+        t("views.federation.approve", {}, "Approve"),
+      );
+      approveBtn.type = "button";
+      approveBtn.addEventListener("click", () =>
+        proxyAction(remote, "lesson.approve", { lessonId: lesson.id }, approveBtn),
+      );
+      row.appendChild(approveBtn);
+
+      const rejectBtn = el(
+        "button",
+        "fed-action-btn reject",
+        t("views.federation.reject", {}, "Reject"),
+      );
+      rejectBtn.type = "button";
+      rejectBtn.addEventListener("click", () =>
+        proxyAction(remote, "lesson.reject", { lessonId: lesson.id }, rejectBtn),
+      );
+      row.appendChild(rejectBtn);
+      lessonList.appendChild(row);
+    }
+    wrap.appendChild(lessonList);
+  } else {
+    wrap.appendChild(
+      el(
+        "div",
+        "fed-muted",
+        t("views.federation.noPendingLessons", {}, "No pending lessons on this remote."),
+      ),
+    );
+  }
+
+  return wrap;
+}
+
+/* ------------------------------------------------------------------ */
+/* Mutations (LOCAL registry + whitelisted remote write proxy)          */
+/* ------------------------------------------------------------------ */
 
 /** Toggle the per-remote write opt-in (PATCH), confirming before enabling. */
 async function toggleWrites(remote, button) {
@@ -912,7 +890,9 @@ async function onAddSubmit(event) {
   }
 }
 
-// --- Small helpers ------------------------------------------------------------
+/* ------------------------------------------------------------------ */
+/* Small helpers                                                        */
+/* ------------------------------------------------------------------ */
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -923,15 +903,6 @@ function el(tag, className, text) {
 
 function isFiniteNumber(value) {
   return typeof value === "number" && Number.isFinite(value);
-}
-
-/** Host (plus port, if any) of an https base URL — for compact display. */
-function baseUrlHost(baseUrl) {
-  try {
-    return new URL(baseUrl).host;
-  } catch (err) {
-    return String(baseUrl || "");
-  }
 }
 
 function formatAgo(stamp) {
