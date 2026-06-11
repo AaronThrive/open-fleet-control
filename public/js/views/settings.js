@@ -129,6 +129,15 @@ export function init(containerEl) {
     budgetWeeklyAdd: root.querySelector("#set-budget-weekly-add"),
     budgetsSave: root.querySelector("#set-budgets-save"),
     budgetsError: root.querySelector("#set-budgets-error"),
+    budgetsEnforce: root.querySelector("#set-budgets-enforce"),
+    // Digest
+    digestEnabled: root.querySelector("#set-digest-enabled"),
+    digestSchedule: root.querySelector("#set-digest-schedule"),
+    digestHour: root.querySelector("#set-digest-hour"),
+    digestSinks: root.querySelector("#set-digest-sinks"),
+    digestSave: root.querySelector("#set-digest-save"),
+    digestTest: root.querySelector("#set-digest-test"),
+    digestError: root.querySelector("#set-digest-error"),
     // Gate (live toggle + persisted default)
     gateLive: root.querySelector("#set-gate-live"),
     gateLiveLabel: root.querySelector("#set-gate-live-label"),
@@ -158,6 +167,8 @@ export function init(containerEl) {
   refs.budgetsSave?.addEventListener("click", saveBudgets);
   refs.budgetDailyAdd?.addEventListener("click", () => addBudgetProvider("daily"));
   refs.budgetWeeklyAdd?.addEventListener("click", () => addBudgetProvider("weekly"));
+  refs.digestSave?.addEventListener("click", saveDigest);
+  refs.digestTest?.addEventListener("click", sendTestDigest);
 
   refs.alertsSave.textContent = t("views.settings.saveAlerts", {}, "Save alerts");
   refs.intervalsSave.textContent = t("views.settings.saveIntervals", {}, "Save intervals");
@@ -327,6 +338,7 @@ function populate(settings) {
     { name: "alerts", apply: populateAlertsSection },
     { name: "alertRules", apply: (s) => populateAlertRules(s.alerts || {}) },
     { name: "budgets", apply: (s) => populateBudgets(s.budgets || {}) },
+    { name: "digest", apply: (s) => populateDigest(s.digest || {}) },
     { name: "intervals", apply: populateIntervalsSection },
     { name: "gate", apply: populateGateSection },
   ]);
@@ -354,6 +366,8 @@ function sectionErrorEl(name) {
       return arRefs ? arRefs.error : null;
     case "budgets":
       return refs.budgetsError;
+    case "digest":
+      return refs.digestError;
     case "intervals":
       return refs.intervalsError;
     case "gate":
@@ -627,6 +641,7 @@ function populateBudgets(budgets) {
     weekly: { ...(weekly.perProvider || {}) },
   };
   refs.budgetsEnabled.checked = budgets.enabled === true;
+  if (refs.budgetsEnforce) refs.budgetsEnforce.checked = budgets.enforce?.enabled === true;
   refs.budgetsInterval.value = String(Math.round((budgets.checkIntervalMs ?? 900000) / MIN));
   refs.budgetDailyTotal.value = String(daily.totalUSD ?? 0);
   refs.budgetWeeklyTotal.value = String(weekly.totalUSD ?? 0);
@@ -725,6 +740,7 @@ function saveBudgets() {
     {
       budgets: {
         enabled: refs.budgetsEnabled.checked,
+        enforce: { enabled: refs.budgetsEnforce ? refs.budgetsEnforce.checked : false },
         checkIntervalMs: intervalMin * MIN,
         daily: { totalUSD: dailyTotal, perProvider: { ...budgetProviders.daily } },
         weekly: { totalUSD: weeklyTotal, perProvider: { ...budgetProviders.weekly } },
@@ -732,6 +748,75 @@ function saveBudgets() {
     },
     { button: refs.budgetsSave, errorEl: refs.budgetsError },
   );
+}
+
+// --- Fleet digest --------------------------------------------------------------
+
+function digestSinkInputs() {
+  return refs.digestSinks ? [...refs.digestSinks.querySelectorAll("input[data-sink]")] : [];
+}
+
+function populateDigest(digest) {
+  if (!refs.digestEnabled) return;
+  refs.digestEnabled.checked = digest.enabled === true;
+  refs.digestSchedule.value = digest.schedule === "weekly" ? "weekly" : "daily";
+  refs.digestHour.value = String(digest.hourUtc ?? 8);
+  const sinks = Array.isArray(digest.sinks) ? digest.sinks : ["*"];
+  const all = sinks.includes("*");
+  for (const input of digestSinkInputs()) {
+    input.checked = !all && sinks.includes(input.dataset.sink);
+  }
+}
+
+function saveDigest() {
+  if (!refs.digestEnabled) return;
+  const hour = Number.parseInt(refs.digestHour.value, 10);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    refs.digestError.hidden = false;
+    refs.digestError.textContent = t(
+      "views.settings.digestHourInvalid",
+      {},
+      "Hour must be 0–23 (UTC).",
+    );
+    return;
+  }
+  refs.digestError.hidden = true;
+  const checked = digestSinkInputs()
+    .filter((input) => input.checked)
+    .map((input) => input.dataset.sink);
+  patchSettings(
+    {
+      digest: {
+        enabled: refs.digestEnabled.checked,
+        schedule: refs.digestSchedule.value === "weekly" ? "weekly" : "daily",
+        hourUtc: hour,
+        sinks: checked.length ? checked : ["*"],
+      },
+    },
+    { button: refs.digestSave, errorEl: refs.digestError },
+  );
+}
+
+async function sendTestDigest() {
+  if (!refs.digestTest) return;
+  refs.digestTest.disabled = true;
+  try {
+    const res = await fetch("/api/fleet/digest/test", { method: "POST" });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || body.success === false) {
+      throw new Error(body.error || `HTTP ${res.status}`);
+    }
+    showToast(t("views.settings.digestTestSent", {}, "Test digest sent"), "success");
+  } catch (err) {
+    refs.digestError.hidden = false;
+    refs.digestError.textContent = t(
+      "views.settings.digestTestFailed",
+      { message: err.message },
+      `Test digest failed: ${err.message}`,
+    );
+  } finally {
+    refs.digestTest.disabled = false;
+  }
 }
 
 // --- Webhook mutations (applied immediately) ----------------------------------

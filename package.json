@@ -1,6 +1,6 @@
 {
   "name": "open-fleet-control",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "🦞 Open Fleet Control — AI agent fleet mission control. Spawn more Overlords!",
   "main": "lib/server.js",
   "type": "commonjs",

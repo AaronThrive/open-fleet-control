@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.2.0 — 2026-06-11
+
+- Overview and Memory are separate tabs; System Vitals merged into the Overview's uniform
+  compact cards (skeleton placeholders, no dangling dashes); the giant About block removed —
+  a compact About now lives at the bottom of Settings
+- Sessions page converted to a max-visibility detail list (status/tokens/burn/cost columns,
+  deep detail panel with lazy cost/cache/tools data, raw JSON expander); Federation and
+  Briefs converted to detail lists too (briefs keep the full editor)
+- Validation gate has one control surface: a Settings card (top-bar switcher and Evolution
+  page button removed; Evolution shows read-only state)
+- Settings "Restarting…" hang fixed (root cause: missing [hidden] CSS guard rendered the
+  overlay permanently); restart now reliably reloads on success and reports timeouts
+- Quick actions actually work: Clean Stale Sessions had a triple fault (action-name
+  mismatch, count-only handler, nonexistent CLI suggestion) — now runs a real
+  `sessions cleanup --enforce` with honest result summaries
+- Fleet bulk operations: POST /api/fleet/bulk (kill-stale-sessions / health-check /
+  gateway-status / dispatch-task / chat-broadcast across up to 50 targets, per-target
+  results, audited) + Ctrl+K command palette + mesh multi-select bulk bar
+- Agent Flight Recorder: per-agent unified timeline (sessions, dispatches, cron runs,
+  audit, tokens) in a drawer off the Agents page; per-agent session stores read directly
+  so all agents get correct attribution
+- Editable Org Chart tab: drag-and-drop agent tree with unassigned tray, titles, keyboard
+  move mode, kanban-grade state safety
+- Cortex gauges rebuilt per engine with honest states: headroom = subscription-window
+  meter (it is a quota meter, not a compressor) with explicit stale-poll state; lean-ctx =
+  throughput card; lossless-claw = historical badge when idle; "active context engine"
+  strip; knowledge-graph provenance line (pages from gbrain/Obsidian export, link count,
+  extract hint)
+- Scheduled fleet digest (daily/weekly via existing alert sinks, test-send button) and
+  budget guardrails: dispatch blocking at 100% with operator ack; budgets finally read
+  real spend (root cause: the usage provider was never wired into the fleet runtime)
+- Tokens page enriched: per-window / per-model / per-day / by-source detail lists
+- Fixed a pre-existing console error from the home page's SSE handler on non-dashboard views
+
 ## 2.1.0 — 2026-06-11
 
 - Detail lists everywhere: Cron, AI Jobs, Agents, Cerebro, Operators, Cortex memory, and Logs use the shared dense detail-list component (sortable, filterable, expandable rows) instead of card grids

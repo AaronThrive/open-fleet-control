@@ -202,6 +202,9 @@ Fleet Control slots into the `openclaw-stack` appliance as two extra Compose con
 
 ## 🚀 Roadmap
 
+- **Fleet-of-fleets (v2.3)** — client fleets on their own tailnets shared into the master
+  dashboard via Tailscale node sharing; federation gains a client grouping layer so the
+  mesh and board group by client → nodes → agents.
 - **Graph edge extraction scheduling** — periodic gbrain edge extraction runs managed (and visualized) from the Cortex panel.
 - **Multi-turn dispatch** — let a dispatched kanban card continue across agent turns (auto-redispatch with continuation context) instead of one turn per dispatch.
 - **Federation write-actions for briefs and chat** — extend the opt-in `allowWrites` proxy beyond task.move / lesson / gate.

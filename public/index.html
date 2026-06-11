@@ -1637,5 +1637,12 @@
 
     <!-- Toast notifications container -->
     <div id="toast-container" class="toast-container"></div>
+
+    <!-- Fleet command palette (Ctrl+K / Cmd+K): bulk operations + nav jumps -->
+    <script type="module">
+      import { initCommandPalette } from "/js/command-palette.js";
+      const palette = initCommandPalette();
+      document.querySelector("header .header-left")?.appendChild(palette.createButton());
+    </script>
   </body>
 </html>
