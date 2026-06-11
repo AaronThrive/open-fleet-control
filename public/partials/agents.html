@@ -83,29 +83,9 @@
     cursor: pointer;
   }
 
-  /* Node groups */
-  #agents-view-section .agents-node-group {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  #agents-view-section .agents-node-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 0.82rem;
-    font-weight: 600;
-    color: var(--text);
-  }
-  #agents-view-section .agents-node-header .agents-node-icon {
-    font-size: 0.9rem;
-  }
-  #agents-view-section .agents-node-count {
-    font-size: 0.7rem;
-    font-weight: 400;
-    color: var(--text-muted);
-  }
+  /* "via federation" transport badge (rendered inside the node cell) */
   #agents-view-section .agents-node-badge {
+    margin-left: 6px;
     font-size: 0.64rem;
     font-weight: 500;
     text-transform: uppercase;
@@ -118,30 +98,21 @@
     white-space: nowrap;
   }
 
-  /* Agent cards */
-  #agents-view-section .agents-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 12px;
-  }
-  #agents-view-section .agent-card {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 14px 16px;
-    border-radius: 10px;
-    background: var(--card-hover);
-    border: 1px solid var(--border);
-    transition: border-color 0.15s ease;
-  }
-  #agents-view-section .agent-card:hover {
-    border-color: rgba(var(--accent-rgb), 0.4);
-  }
-  #agents-view-section .agent-card-head {
-    display: flex;
+  /* Detail-list cells */
+  #agents-view-section .agents-name-cell {
+    display: inline-flex;
     align-items: center;
     gap: 8px;
     min-width: 0;
+  }
+  #agents-view-section .agents-name-text {
+    font-weight: 600;
+    color: var(--text);
+  }
+  #agents-view-section .agents-id-text {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   #agents-view-section .agent-active-dot {
     width: 10px;
@@ -154,53 +125,9 @@
     background: var(--green);
     box-shadow: 0 0 6px rgba(0, 255, 102, 0.7);
   }
-  #agents-view-section .agent-card-names {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-  }
-  #agents-view-section .agent-card-name {
-    font-weight: 600;
-    font-size: 0.9rem;
-    color: var(--text);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  #agents-view-section .agent-card-id {
-    font-size: 0.72rem;
-    color: var(--text-muted);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  #agents-view-section .agent-model-chip {
-    margin-left: auto;
-    flex-shrink: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 45%;
-    font-size: 0.68rem;
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: rgba(var(--accent-2-rgb), 0.1);
-    border: 1px solid rgba(var(--accent-2-rgb), 0.3);
-    color: var(--accent-2);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-
-  /* Stat rows */
-  #agents-view-section .agent-card-stats {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-    font-size: 0.7rem;
-  }
+  /* Status pill */
   #agents-view-section .agent-stat {
+    font-size: 0.7rem;
     padding: 2px 8px;
     border-radius: 999px;
     border: 1px solid var(--border);
@@ -232,25 +159,36 @@
     border: 1px solid rgba(var(--accent-2-rgb), 0.35);
     color: var(--accent-2);
   }
-  #agents-view-section .agent-card-foot {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 0.72rem;
-    color: var(--text-muted);
-    overflow: hidden;
-  }
-  #agents-view-section .agent-workspace {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    direction: rtl; /* truncate from the left — the workspace tail matters */
-    text-align: left;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
   #agents-view-section .agents-muted {
     font-size: 0.78rem;
     color: var(--text-muted);
+  }
+
+  /* Expanded detail panel */
+  #agents-view-section .agents-detail {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 8px 18px;
+  }
+  #agents-view-section .agents-detail-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  #agents-view-section .agents-detail-label {
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+  }
+  #agents-view-section .agents-detail-value {
+    font-size: 0.78rem;
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+  #agents-view-section .agents-detail-value.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 </style>
 <div class="section" id="agents-view-section">
@@ -302,13 +240,8 @@
         </label>
       </div>
 
-      <!-- Node groups (built by views/agents.js) -->
-      <div id="agents-groups"></div>
-
-      <!-- No match for the current filter -->
-      <div class="agents-muted" id="agents-no-match" hidden data-i18n="views.agents.noMatch">
-        No agents match the current filter.
-      </div>
+      <!-- Detail list host (built by views/agents.js via the shared component) -->
+      <div id="agents-list"></div>
 
       <!-- Empty state (no agents configured anywhere) -->
       <div class="empty-state" id="agents-empty-state" hidden>

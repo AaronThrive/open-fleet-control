@@ -1,5 +1,6 @@
 /**
- * Agents View — unified fleet-wide agents roster (READ-ONLY).
+ * Agents View — unified fleet-wide agents roster (READ-ONLY), rendered as a
+ * dense detail list ("neat file list").
  *
  * Loaded on demand by views.js, which calls init(containerEl) on EVERY visit
  * of the view. The partial HTML is re-injected fresh each visit, so init()
@@ -9,8 +10,13 @@
  * Data source: GET /api/agents/fleet — local agents enriched with session
  * activity plus best-effort agents from every online mesh node AND every
  * reachable federation remote (the server caches the aggregation for 60s;
- * the view polls on the same cadence). Federation-sourced node groups carry
- * a "via federation" badge; every card shows its source (openclaw/hermes).
+ * the view polls on the same cadence). Federation-sourced agents carry a
+ * "via federation" badge next to their node; every row shows its source
+ * (openclaw/hermes).
+ *
+ * Rendering: the shared detail-list component (sortable columns, text filter,
+ * expandable full-metadata panel). The node <select> and "active only"
+ * toggle are preserved and applied to the row set before each list.update().
  *
  * All agent data is rendered via textContent / createElement — no innerHTML
  * with remote strings — so hostile agent names/models/workspaces from remote
@@ -18,6 +24,7 @@
  */
 
 import { t } from "../utils.js";
+import { createDetailList } from "../components/detail-list.js";
 
 const REFRESH_INTERVAL_MS = 60000;
 
@@ -26,11 +33,51 @@ const REFRESH_INTERVAL_MS = 60000;
 let refs = null; // DOM references for the active visit
 let refreshTimer = null;
 let fetchSeq = 0; // guards against out-of-order responses
+let list = null; // active detail-list instance
 
 // Filter state survives refreshes within a visit; reset on each init().
 let nodeFilter = "all";
 let activeOnly = false;
 let lastRoster = null;
+
+// --- Pure helpers (exported for node:test) ----------------------------------
+
+/**
+ * Flatten the roster into detail-list rows, applying the node and
+ * active-only filters. Row ids are node-scoped so the same agent id on two
+ * nodes never collides.
+ */
+export function buildAgentRows(roster, { nodeFilter: node = "all", activeOnly: active = false }) {
+  const agents = Array.isArray(roster && roster.agents) ? roster.agents : [];
+  return agents
+    .filter((agent) => node === "all" || agent.node === node)
+    .filter((agent) => !active || agent.active === true)
+    .map((agent) => ({
+      id: `${agent.node || ""}/${agent.id || agent.name || ""}`,
+      agentId: agent.id || "",
+      name: agent.name || agent.id || "unknown",
+      source: agent.source === "hermes" ? "hermes" : "openclaw",
+      node: agent.node || "",
+      via: agent.via === "federation" ? "federation" : "",
+      model: agent.model || "",
+      status: agent.active === true ? "active" : "idle",
+      lastActiveAt: isFiniteNumber(agent.lastActiveAt) ? agent.lastActiveAt : null,
+      agent,
+    }));
+}
+
+/** Compact span ("30s"/"5m"/"3h"/"2d") from an epoch-ms timestamp. */
+export function relativeSpan(epochMs, nowMs = Date.now()) {
+  const deltaSec = Math.max(0, Math.floor((nowMs - epochMs) / 1000));
+  if (deltaSec < 60) return `${deltaSec}s`;
+  if (deltaSec < 3600) return `${Math.floor(deltaSec / 60)}m`;
+  if (deltaSec < 86400) return `${Math.floor(deltaSec / 3600)}h`;
+  return `${Math.floor(deltaSec / 86400)}d`;
+}
+
+function isFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
 
 // --- Entry point ------------------------------------------------------------
 
@@ -57,18 +104,19 @@ export function init(containerEl) {
     filters: root.querySelector("#agents-filters"),
     nodeSelect: root.querySelector("#agents-node-filter"),
     activeToggle: root.querySelector("#agents-active-only"),
-    groups: root.querySelector("#agents-groups"),
-    noMatch: root.querySelector("#agents-no-match"),
+    listHost: root.querySelector("#agents-list"),
     emptyState: root.querySelector("#agents-empty-state"),
   };
 
+  buildList();
+
   refs.nodeSelect?.addEventListener("change", () => {
     nodeFilter = refs.nodeSelect.value || "all";
-    renderGroups();
+    renderRows();
   });
   refs.activeToggle?.addEventListener("change", () => {
     activeOnly = !!refs.activeToggle.checked;
-    renderGroups();
+    renderRows();
   });
 
   refresh({ initial: true });
@@ -86,6 +134,10 @@ function teardown() {
   if (refreshTimer) {
     clearInterval(refreshTimer);
     refreshTimer = null;
+  }
+  if (list) {
+    list.destroy();
+    list = null;
   }
   refs = null;
 }
@@ -157,9 +209,10 @@ function renderRoster(roster) {
 
   refs.filters.hidden = !hasAgents;
   refs.emptyState.hidden = hasAgents;
+  refs.listHost.hidden = !hasAgents;
 
   if (hasAgents) renderNodeFilter(roster);
-  renderGroups();
+  renderRows();
 }
 
 /** Rebuild the node <select> options, preserving the current selection. */
@@ -182,133 +235,146 @@ function renderNodeFilter(roster) {
   refs.nodeSelect.value = nodeFilter;
 }
 
-// --- Rendering: node groups + agent cards -------------------------------------
+// --- Rendering: detail list ----------------------------------------------------
 
-function matchesFilter(agent) {
-  if (activeOnly && !agent.active) return false;
-  return true;
+function renderRows() {
+  if (!refs || !list) return;
+  list.update(buildAgentRows(lastRoster || {}, { nodeFilter, activeOnly }));
 }
 
-function renderGroups() {
-  if (!refs || !lastRoster) return;
-  const byNode =
-    lastRoster.byNode && typeof lastRoster.byNode === "object" ? lastRoster.byNode : {};
-  const nodeNames = Object.keys(byNode)
-    .filter((name) => nodeFilter === "all" || name === nodeFilter)
-    .sort((a, b) => a.localeCompare(b));
-
-  refs.groups.replaceChildren();
-  let visibleTotal = 0;
-
-  for (const name of nodeNames) {
-    const agents = (Array.isArray(byNode[name]) ? byNode[name] : []).filter(matchesFilter);
-    if (agents.length === 0) continue;
-    visibleTotal += agents.length;
-    refs.groups.appendChild(buildNodeGroup(name, agents));
+function buildList() {
+  if (list) {
+    list.destroy();
+    list = null;
   }
-
-  const totalAgents = Array.isArray(lastRoster.agents) ? lastRoster.agents.length : 0;
-  refs.noMatch.hidden = visibleTotal > 0 || totalAgents === 0;
+  refs.listHost.replaceChildren();
+  list = createDetailList(refs.listHost, {
+    columns: [
+      {
+        key: "name",
+        label: t("views.agents.colAgent", {}, "Agent"),
+        sortable: true,
+        render: renderNameCell,
+      },
+      {
+        key: "source",
+        label: t("views.agents.colSource", {}, "Source"),
+        sortable: true,
+        render: (row) => el("span", `agent-source-chip agent-source-${row.source}`, row.source),
+      },
+      {
+        key: "node",
+        label: t("views.agents.colNode", {}, "Node"),
+        sortable: true,
+        render: renderNodeCell,
+      },
+      { key: "model", label: t("views.agents.colModel", {}, "Model"), sortable: true },
+      {
+        key: "status",
+        label: t("views.agents.colStatus", {}, "Status"),
+        sortable: true,
+        render: renderStatusCell,
+      },
+      {
+        key: "lastActiveAt",
+        label: t("views.agents.colLastActive", {}, "Last active"),
+        sortable: true,
+        render: renderLastActiveCell,
+      },
+    ],
+    getRowId: (row) => row.id,
+    renderDetail: buildDetail,
+    emptyText: t("views.agents.noMatch", {}, "No agents match the current filter."),
+    filterKeys: ["name", "agentId", "source", "node", "model", "status"],
+    filterPlaceholder: t("views.agents.filterPlaceholder", {}, "Filter agents…"),
+    defaultSort: { key: "name", dir: "asc" },
+  });
 }
 
-function buildNodeGroup(nodeName, agents) {
-  const group = el("div", "agents-node-group");
+function renderNameCell(row) {
+  const cell = el("span", "agents-name-cell");
+  const dot = el("span", row.status === "active" ? "agent-active-dot active" : "agent-active-dot");
+  dot.title =
+    row.status === "active"
+      ? t("views.agents.activeTooltip", {}, "Active in the last 10 minutes")
+      : t("views.agents.idleTooltip", {}, "Idle");
+  cell.appendChild(dot);
+  cell.appendChild(el("span", "agents-name-text", row.name));
+  if (row.agentId && row.agentId !== row.name) {
+    cell.appendChild(el("span", "agents-id-text", row.agentId));
+  }
+  return cell;
+}
 
-  const header = el("div", "agents-node-header");
-  header.appendChild(el("span", "agents-node-icon", "🖥️"));
-  header.appendChild(el("span", "agents-node-name", nodeName));
-  header.appendChild(
-    el(
-      "span",
-      "agents-node-count",
-      t("views.agents.nodeCount", { n: agents.length }, "{n} agents"),
-    ),
-  );
-  // Federation-sourced nodes (reached via a registered federation remote
-  // rather than the mesh) are flagged so operators know the transport.
-  if (agents.some((agent) => agent.via === "federation")) {
-    header.appendChild(
+/** Node name plus the "via federation" transport badge when applicable. */
+function renderNodeCell(row) {
+  const cell = el("span", "agents-node-cell", row.node || "—");
+  if (row.via === "federation") {
+    cell.appendChild(
       el("span", "agents-node-badge", t("views.agents.viaFederation", {}, "via federation")),
     );
   }
-  group.appendChild(header);
-
-  const grid = el("div", "agents-grid");
-  for (const agent of agents) {
-    grid.appendChild(buildCard(agent));
-  }
-  group.appendChild(grid);
-
-  return group;
+  return cell;
 }
 
-function buildCard(agent) {
-  const card = el("div", "agent-card");
-
-  // Head: active dot, name/id, model chip
-  const head = el("div", "agent-card-head");
-
-  const dot = el("span", agent.active ? "agent-active-dot active" : "agent-active-dot");
-  dot.title = agent.active
-    ? t("views.agents.activeTooltip", {}, "Active in the last 10 minutes")
-    : t("views.agents.idleTooltip", {}, "Idle");
-  head.appendChild(dot);
-
-  const names = el("div", "agent-card-names");
-  names.appendChild(el("div", "agent-card-name", agent.name || agent.id || "unknown"));
-  if (agent.name && agent.name !== agent.id) {
-    names.appendChild(el("div", "agent-card-id", agent.id));
-  }
-  head.appendChild(names);
-
-  if (agent.model) {
-    const chip = el("span", "agent-model-chip", agent.model);
-    chip.title = agent.model;
-    head.appendChild(chip);
-  }
-  card.appendChild(head);
-
-  // Stats: source chip, sessions, last active, subagents cap
-  const stats = el("div", "agent-card-stats");
-  const source = agent.source === "hermes" ? "hermes" : "openclaw";
-  stats.appendChild(el("span", `agent-source-chip agent-source-${source}`, source));
-  stats.appendChild(
-    el(
-      "span",
-      "agent-stat",
-      t("views.agents.sessions", { n: agent.sessionCount ?? 0 }, "{n} sessions"),
-    ),
+function renderStatusCell(row) {
+  return el(
+    "span",
+    row.status === "active" ? "agent-stat agent-stat-active" : "agent-stat",
+    row.status === "active"
+      ? t("views.agents.statusActive", {}, "active")
+      : t("views.agents.statusIdle", {}, "idle"),
   );
-  stats.appendChild(
-    el(
-      "span",
-      agent.active ? "agent-stat agent-stat-active" : "agent-stat",
-      isFiniteNumber(agent.lastActiveAt)
-        ? t("views.agents.lastActive", { ago: formatRelative(agent.lastActiveAt) }, "active {ago}")
-        : t("views.agents.never", {}, "never active"),
-    ),
+}
+
+function renderLastActiveCell(row) {
+  if (!isFiniteNumber(row.lastActiveAt)) {
+    return el("span", "agents-muted", t("views.agents.never", {}, "never active"));
+  }
+  return el(
+    "span",
+    undefined,
+    t("views.agents.ago", { span: relativeSpan(row.lastActiveAt) }, "{span} ago"),
   );
+}
+
+/** Expanded panel: full agent metadata. */
+function buildDetail(row) {
+  const agent = row.agent || {};
+  const panel = el("div", "agents-detail");
+  const add = (label, value, mono) => {
+    if (value === undefined || value === null || value === "") return;
+    const item = el("div", "agents-detail-item");
+    item.appendChild(el("span", "agents-detail-label", label));
+    item.appendChild(el("span", `agents-detail-value${mono ? " mono" : ""}`, String(value)));
+    panel.appendChild(item);
+  };
+
+  add(t("views.agents.detailId", {}, "Agent id"), agent.id || row.name, true);
+  add(t("views.agents.detailName", {}, "Name"), agent.name);
+  add(t("views.agents.detailNode", {}, "Node"), row.node || "—");
+  add(
+    t("views.agents.detailTransport", {}, "Transport"),
+    row.via === "federation"
+      ? t("views.agents.viaFederation", {}, "via federation")
+      : t("views.agents.viaMesh", {}, "mesh / local"),
+  );
+  add(t("views.agents.detailSource", {}, "Source"), row.source);
+  add(t("views.agents.detailModel", {}, "Model"), agent.model, true);
+  add(t("views.agents.detailWorkspace", {}, "Workspace"), agent.workspace, true);
+  if (isFiniteNumber(agent.sessionCount)) {
+    add(t("views.agents.detailSessions", {}, "Sessions"), agent.sessionCount);
+  }
   if (isFiniteNumber(agent.subagentsMax)) {
-    stats.appendChild(
-      el(
-        "span",
-        "agent-stat",
-        t("views.agents.subagents", { n: agent.subagentsMax }, "{n} subagents max"),
-      ),
-    );
+    add(t("views.agents.detailSubagents", {}, "Subagents max"), agent.subagentsMax);
   }
-  card.appendChild(stats);
-
-  // Foot: workspace (truncated, full path in tooltip)
-  if (agent.workspace) {
-    const foot = el("div", "agent-card-foot");
-    const workspace = el("span", "agent-workspace", agent.workspace);
-    workspace.title = agent.workspace;
-    foot.appendChild(workspace);
-    card.appendChild(foot);
-  }
-
-  return card;
+  add(
+    t("views.agents.detailLastActive", {}, "Last active"),
+    isFiniteNumber(row.lastActiveAt)
+      ? new Date(row.lastActiveAt).toLocaleString()
+      : t("views.agents.never", {}, "never active"),
+  );
+  return panel;
 }
 
 // --- Small helpers ------------------------------------------------------------
@@ -318,19 +384,4 @@ function el(tag, className, text) {
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
-}
-
-function isFiniteNumber(value) {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-/** Compact "Ns/Nm/Nh/Nd ago" from an epoch-ms timestamp. */
-function formatRelative(epochMs) {
-  const deltaSec = Math.max(0, Math.floor((Date.now() - epochMs) / 1000));
-  let span;
-  if (deltaSec < 60) span = `${deltaSec}s`;
-  else if (deltaSec < 3600) span = `${Math.floor(deltaSec / 60)}m`;
-  else if (deltaSec < 86400) span = `${Math.floor(deltaSec / 3600)}h`;
-  else span = `${Math.floor(deltaSec / 86400)}d`;
-  return t("views.agents.ago", { span }, "{span} ago");
 }
