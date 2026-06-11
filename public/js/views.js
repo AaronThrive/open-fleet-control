@@ -30,6 +30,7 @@
     "settings",
     "docker",
     "agents",
+    "org-chart",
     "cerebro",
     "operators",
   ];
