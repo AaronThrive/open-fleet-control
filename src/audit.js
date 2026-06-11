@@ -11,7 +11,7 @@
  *   lesson.add, lesson.approve, lesson.reject, gate.toggle,
  *   node.register, node.unregister,
  *   alerts.config, memory.write, session.kill,
- *   cron.update, cron.run,
+ *   cron.update, cron.run, org.update,
  *   settings.update, chat.publish, topic.status, operator.save,
  *   action.execute, alert.test, cache.clear,
  *   job.run, job.update, service.restart
@@ -48,6 +48,7 @@ const AUDIT_ACTIONS = [
   "session.kill",
   "cron.update",
   "cron.run",
+  "org.update",
   "settings.update",
   "chat.publish",
   "topic.status",

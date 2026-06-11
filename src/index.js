@@ -96,6 +96,7 @@ const { createStateModule } = require("./state");
 const { createFleetRuntime } = require("./fleet");
 const { createFleetRoutes, isFleetRoute } = require("./fleet-routes");
 const { createDispatch } = require("./dispatch");
+const { createOrgChart } = require("./org-chart");
 const { createSettings } = require("./settings");
 const { createDocker } = require("./docker");
 const { createUsageSources } = require("./usage-sources");
@@ -252,10 +253,20 @@ const dispatch = createDispatch({
   fireAlert: (event) => fleet.fireAlert(event),
 });
 
+// Org chart — owner-defined agent hierarchy (purely organizational), stored
+// at <stateDir>/org-chart.json with kanban-grade safety (validation, atomic
+// writes, rolling backups). Mutations broadcast a minimal fleet.org SSE
+// event; the view refetches GET /api/fleet/org-chart for detail.
+const orgChart = createOrgChart({
+  stateDir: CONFIG.fleet.stateDir,
+  onChange: (event) => broadcastSSE("fleet.org", { type: event.type, ts: Date.now() }),
+});
+
 const fleetRoutes = createFleetRoutes({
   fleet,
   settings,
   dispatch,
+  orgChart,
   // Lazy closure: agentsRoster is constructed further down; routes only call
   // this at request time, long after module evaluation completed.
   rosterFn: () => agentsRoster.getLocalRoster(),
