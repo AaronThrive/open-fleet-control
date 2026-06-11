@@ -37,6 +37,9 @@ describe("secrets module", () => {
       assert.strictEqual(isSecretRef("op://Vault/item/field"), true);
       assert.strictEqual(isSecretRef("  op://Vault/item/field  "), true); // trimmed
       assert.strictEqual(isSecretRef("op://Vault/item/section/field"), true); // section refs
+      // 1Password vault/item names may contain spaces ("CEO Scale").
+      assert.strictEqual(isSecretRef("op://CEO Scale/OPENROUTER_API_KEY/credential"), true);
+      assert.strictEqual(isSecretRef("op://Vault/My Item Name/field"), true);
       assert.strictEqual(isSecretRef("op:/Vault/item"), false);
       // A full <vault>/<item>/<field> path is required.
       assert.strictEqual(isSecretRef("op://Vault"), false);

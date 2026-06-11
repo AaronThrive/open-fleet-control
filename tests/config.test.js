@@ -162,7 +162,11 @@ describe("config module", () => {
         }
       }
       const { loadConfig } = require("../src/config");
-      return loadConfig(options);
+      // Isolate from the developer's real config/dashboard.local.json (which
+      // may legitimately contain op:// refs) so assertions only see the
+      // FLEET_CONFIG_JSON fixture set by each test.
+      const noLocal = require("path").join(require("os").tmpdir(), "ofc-test-no-local.json");
+      return loadConfig({ localPath: noLocal, ...options });
     }
 
     /** Fake secrets layer backed by an injected exec — never runs the real op CLI. */
