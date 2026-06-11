@@ -54,6 +54,37 @@
       font-size: 0.8rem;
       padding: 12px 4px;
     }
+    #cron-view-section [hidden] {
+      display: none !important;
+    }
+    #cron-view-section .cron-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    #cron-view-section .cron-action-btn {
+      font-size: 0.7rem;
+      padding: 4px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text-muted);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+    }
+    #cron-view-section .cron-action-btn:hover:not(:disabled) {
+      border-color: var(--purple);
+      color: var(--text);
+    }
+    #cron-view-section .cron-action-btn.run:hover:not(:disabled) {
+      border-color: var(--green);
+      color: var(--green);
+    }
+    #cron-view-section .cron-action-btn:disabled {
+      opacity: 0.5;
+      cursor: wait;
+    }
   </style>
   <section class="view-panel">
     <div class="view-header">
