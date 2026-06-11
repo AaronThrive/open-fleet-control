@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-/* global window, document -- used inside page.evaluate() browser contexts */
 /**
  * E2E smoke suite — boots the built server (lib/server.js) against fresh
  * temp state/logs/briefs dirs, drives headless system Chrome via
  * playwright-core, and walks the core fleet journeys:
  *
- *   a. dashboard loads (overview section present, LIVE indicator connects)
+ *   a. dashboard loads (shell mounts, LIVE indicator connects)
  *   b. mesh: empty state -> API node registration -> node card renders
  *   c. kanban: API task -> card in inbox -> drag to In Progress -> counts
- *   d. evolution: pending lesson -> approve -> gate OFF -> survives restart
+ *   d. evolution: pending lesson -> approve -> gate OFF via the Settings
+ *      card (the gate control's home) -> survives restart
  *   e. briefs: API PUT -> listed -> click -> editor shows content
  *   f. logs: audit rows render; action filter narrows to lesson.approve
  *
@@ -79,7 +79,10 @@ async function gotoView(view) {
 async function journeyDashboard() {
   await ctx.page.goto(ctx.baseUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
 
-  await ctx.page.waitForSelector("#overview-section", { state: "attached", timeout: 10000 });
+  // The connection indicator is the stable "shell mounted" marker (the
+  // top-bar gate toggle is being retired — the gate control lives in
+  // Settings now).
+  await ctx.page.waitForSelector("#connection-status", { state: "attached", timeout: 10000 });
 
   await waitFor(
     async () => {
@@ -253,16 +256,33 @@ async function journeyEvolution() {
   await ctx.page.click('.evo-tab[data-status="approved"]');
   await ctx.page.waitForSelector(cardSelector, { state: "visible", timeout: 6000 });
 
-  // Toggle the gate OFF via the Evolution view's gate button (the header
-  // toggle was removed; the control now lives with the Evolution/Settings UI).
-  await ctx.page.click("#evo-gate-toggle");
+  // Toggle the gate OFF via the Settings card — the gate control's home.
+  await gotoView("settings");
+  await ctx.page.waitForSelector("#set-gate-live", { state: "visible", timeout: 10000 });
+  await waitFor(async () => ctx.page.locator("#set-gate-live").isChecked(), {
+    label: "settings live gate toggle reflects gate ON",
+    timeoutMs: 6000,
+  });
+  await ctx.page.click("#set-gate-live");
   await waitFor(
     async () => {
       const gate = await api("/api/fleet/evolution/gate");
       return gate.body?.gate === false;
     },
-    { label: "gate=false after evolution gate toggle", timeoutMs: 6000 },
+    { label: "gate=false after settings toggle", timeoutMs: 6000 },
   );
+
+  // The Evolution banner mirrors the new state read-only (no control there).
+  await gotoView("evolution");
+  await waitFor(
+    async () => {
+      const cls = await ctx.page.locator("#evo-gate-banner").getAttribute("class");
+      return (cls || "").includes("off");
+    },
+    { label: "evolution banner shows gate OFF", timeoutMs: 6000 },
+  );
+  const evoToggleCount = await ctx.page.locator("#evo-gate-toggle").count();
+  assert(evoToggleCount === 0, "evolution view must not render a gate control");
 
   // Restart the server on the same state dirs and port: the gate must persist.
   await ctx.server.stop();

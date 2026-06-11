@@ -1,6 +1,13 @@
 <!-- Settings View Partial -->
 <style>
   /* Settings panel styles — scoped under #settings-view-section */
+  /* The hidden attribute must beat the explicit display rules below
+     (UA [hidden] style loses to author display:flex otherwise). Without
+     this, the "Restarting…" overlay and restart banner render permanently
+     the moment the partial mounts. */
+  #settings-view-section [hidden] {
+    display: none !important;
+  }
   #settings-view-section .set-body {
     display: flex;
     flex-direction: column;
@@ -339,6 +346,17 @@
   #settings-view-section .set-budget-usd {
     font-variant-numeric: tabular-nums;
     color: var(--text-muted);
+  }
+
+  /* About card: small version chip on the head row */
+  #settings-view-section .set-about-version {
+    margin-left: auto;
+    font-size: 0.68rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
   }
 </style>
 <div class="section" id="settings-view-section">
@@ -808,7 +826,11 @@
       </div>
 
       <!-- ============================= Gate ============================= -->
-      <div class="set-card">
+      <!-- The validation gate's single control surface: the live toggle
+           replaced both the top-bar switcher and the Evolution-view button.
+           New text here is plain English (no data-i18n for keys absent from
+           the locale bundle); settings.js re-labels via t(key, {}, fallback). -->
+      <div class="set-card" id="set-gate-card">
         <div class="set-card-head">
           <button
             type="button"
@@ -823,6 +845,17 @@
           </button>
           <button type="button" class="set-save-btn" id="set-gate-save">Save gate</button>
         </div>
+        <div class="set-hint" id="set-gate-explain">
+          When the gate is ON, new evolution lessons require manual approval before they are
+          adopted; OFF lets lessons auto-approve (autonomous merge).
+        </div>
+        <div class="set-row">
+          <label class="set-toggle">
+            <input type="checkbox" id="set-gate-live" />
+            <span id="set-gate-live-label">Validation gate</span>
+          </label>
+          <span class="set-muted" id="set-gate-state"></span>
+        </div>
         <div class="set-row">
           <label class="set-toggle">
             <input type="checkbox" id="set-gate-default" />
@@ -834,6 +867,17 @@
         <div class="set-inline-error" id="set-gate-error" hidden></div>
       </div>
 
+      <!-- ============================= About ============================ -->
+      <!-- Compact by design: one head row + one muted line. -->
+      <div class="set-card" id="set-about-card">
+        <div class="set-card-head">
+          <span class="set-card-title" id="set-about-name">ℹ️ Open Fleet Control</span>
+          <span class="set-about-version" id="set-about-version"></span>
+        </div>
+        <div class="set-muted" id="set-about-line">
+          MIT license — built by Aaron May — based on openclaw-command-center
+        </div>
+      </div>
     </div>
   </section>
 </div>

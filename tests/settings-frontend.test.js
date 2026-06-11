@@ -1,11 +1,16 @@
 /**
  * Unit tests for the Settings view's pure logic
  * (public/js/views/settings-core.js): per-section render isolation, restart
- * path accumulation, and the post-restart health polling loop.
+ * path accumulation, the post-restart health polling loop, the bounded
+ * health probe, and the About-card model — plus regression guards on the
+ * settings/evolution partials (the [hidden] CSS override and the gate
+ * control's move into Settings).
  */
 
 const { describe, it } = require("node:test");
 const assert = require("node:assert");
+const fs = require("node:fs");
+const path = require("node:path");
 
 /** The module is browser ESM; node:test loads it via dynamic import. */
 async function core() {
@@ -17,13 +22,10 @@ describe("settings-core pure helpers", () => {
     it("applies every section and reports ok results", async () => {
       const { applySections } = await core();
       const seen = [];
-      const results = applySections(
-        { a: 1 },
-        [
-          { name: "alerts", apply: (s) => seen.push(["alerts", s.a]) },
-          { name: "gate", apply: (s) => seen.push(["gate", s.a]) },
-        ],
-      );
+      const results = applySections({ a: 1 }, [
+        { name: "alerts", apply: (s) => seen.push(["alerts", s.a]) },
+        { name: "gate", apply: (s) => seen.push(["gate", s.a]) },
+      ]);
       assert.deepStrictEqual(seen, [
         ["alerts", 1],
         ["gate", 1],
@@ -74,10 +76,7 @@ describe("settings-core pure helpers", () => {
       const { mergeRestartPaths } = await core();
       const current = new Set(["mesh.intervalMs"]);
       const merged = mergeRestartPaths(current, ["federation.intervalMs", "mesh.intervalMs"]);
-      assert.deepStrictEqual(
-        [...merged].sort(),
-        ["federation.intervalMs", "mesh.intervalMs"],
-      );
+      assert.deepStrictEqual([...merged].sort(), ["federation.intervalMs", "mesh.intervalMs"]);
       assert.deepStrictEqual([...current], ["mesh.intervalMs"]);
       assert.notStrictEqual(merged, current);
     });
@@ -169,5 +168,121 @@ describe("settings-core pure helpers", () => {
       assert.strictEqual(healthy, false);
       assert.strictEqual(calls, 5);
     });
+  });
+
+  describe("makeHealthCheck()", () => {
+    it("returns true for an ok response and false otherwise", async () => {
+      const { makeHealthCheck } = await core();
+      const ok = makeHealthCheck({ fetchFn: async () => ({ ok: true }) });
+      assert.strictEqual(await ok(), true);
+      const notOk = makeHealthCheck({ fetchFn: async () => ({ ok: false }) });
+      assert.strictEqual(await notOk(), false);
+    });
+
+    it("never throws: a rejecting fetch reads as still-down", async () => {
+      const { makeHealthCheck } = await core();
+      const check = makeHealthCheck({
+        fetchFn: async () => {
+          throw new Error("ECONNREFUSED");
+        },
+      });
+      assert.strictEqual(await check(), false);
+    });
+
+    it("caps every probe: a hung fetch aborts after timeoutMs (false, not a wedge)", async () => {
+      const { makeHealthCheck } = await core();
+      // Fake fetch that never settles on its own but honors the abort signal
+      // (same contract as the real fetch on a dead connection).
+      const hungFetch = (url, { signal }) =>
+        new Promise((resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("AbortError")));
+        });
+      const check = makeHealthCheck({ fetchFn: hungFetch, timeoutMs: 20 });
+      const started = Date.now();
+      assert.strictEqual(await check(), false);
+      assert.ok(Date.now() - started < 2000, "probe must resolve near timeoutMs, not hang");
+    });
+
+    it("passes the url and no-store cache mode to fetch", async () => {
+      const { makeHealthCheck } = await core();
+      const seen = [];
+      const check = makeHealthCheck({
+        fetchFn: async (url, options) => {
+          seen.push({ url, cache: options.cache });
+          return { ok: true };
+        },
+      });
+      await check();
+      assert.deepStrictEqual(seen, [{ url: "/api/health", cache: "no-store" }]);
+    });
+  });
+
+  describe("aboutModel()", () => {
+    it("normalizes the /api/about payload", async () => {
+      const { aboutModel } = await core();
+      assert.deepStrictEqual(
+        aboutModel({ name: "OpenFleetControl", version: "2.1.0", license: "MIT" }),
+        { name: "OpenFleetControl", version: "v2.1.0", license: "MIT" },
+      );
+    });
+
+    it("falls back to known constants on a missing or malformed payload", async () => {
+      const { aboutModel } = await core();
+      const fallback = { name: "Open Fleet Control", version: "", license: "MIT" };
+      assert.deepStrictEqual(aboutModel(null), fallback);
+      assert.deepStrictEqual(aboutModel("nope"), fallback);
+      assert.deepStrictEqual(aboutModel({ name: "  ", version: 42, license: "" }), fallback);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Partial regression guards (string-level: the partials are plain HTML)
+// ---------------------------------------------------------------------------
+
+const PARTIALS_DIR = path.join(__dirname, "..", "public", "partials");
+
+describe("settings/evolution partial regression guards", () => {
+  const settingsHtml = fs.readFileSync(path.join(PARTIALS_DIR, "settings.html"), "utf8");
+  const evolutionHtml = fs.readFileSync(path.join(PARTIALS_DIR, "evolution.html"), "utf8");
+
+  it("settings partial forces [hidden] to win over author display rules", () => {
+    // Root cause of the "Restarting… sits there" bug: without this rule the
+    // author `display: flex` on .set-restart-overlay beats the UA's
+    // [hidden] { display: none }, so the overlay rendered permanently.
+    assert.match(
+      settingsHtml,
+      /#settings-view-section\s+\[hidden\]\s*\{\s*display:\s*none\s*!important;/,
+    );
+  });
+
+  it("settings partial hosts the live gate control and the About card", () => {
+    assert.ok(settingsHtml.includes('id="set-gate-live"'), "live gate toggle missing");
+    assert.ok(settingsHtml.includes('id="set-gate-state"'), "gate state line missing");
+    assert.ok(settingsHtml.includes('id="set-about-card"'), "About card missing");
+    assert.ok(settingsHtml.includes('id="set-about-version"'), "About version chip missing");
+    // Compact About card sits at the very bottom of the settings body.
+    assert.ok(
+      settingsHtml.indexOf('id="set-about-card"') > settingsHtml.indexOf('id="set-gate-card"'),
+      "About card must come after the gate card",
+    );
+  });
+
+  it("evolution partial no longer carries a gate control (read-only banner)", () => {
+    assert.ok(!evolutionHtml.includes("evo-gate-toggle"), "evolution gate toggle must be gone");
+    assert.ok(evolutionHtml.includes('id="evo-gate-banner"'), "read-only banner must remain");
+    assert.ok(evolutionHtml.includes('id="evo-gate-hint"'), "settings pointer hint missing");
+  });
+
+  it("evolution view js no longer PUTs the gate", () => {
+    const evolutionJs = fs.readFileSync(
+      path.join(__dirname, "..", "public", "js", "views", "evolution.js"),
+      "utf8",
+    );
+    assert.ok(!evolutionJs.includes("putGate"), "putGate must be removed from the evolution view");
+    assert.ok(
+      !/method:\s*"PUT"/.test(evolutionJs),
+      "evolution view must not issue PUT requests anymore",
+    );
   });
 });
