@@ -44,10 +44,6 @@ function el(tag, className, text) {
   return node;
 }
 
-function isCronHidden(job) {
-  return typeof window.isCronHidden === "function" ? window.isCronHidden(job) : false;
-}
-
 /** Toast using the dashboard's global .toast styles. */
 function showToast(message, kind) {
   let host = document.querySelector(".toast-container");
@@ -210,18 +206,6 @@ function buildCard(els, job) {
     ),
   );
   meta.appendChild(el("div", "cron-next", `⏭ ${job.nextRun || "—"}`));
-
-  if (typeof window.quickHideCron === "function") {
-    const hideBtn = el("button", "hide-btn", "👁️");
-    hideBtn.type = "button";
-    hideBtn.title = t("views.cron.hideJob", {}, "Hide cron job");
-    hideBtn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      window.quickHideCron(job.id || job.name || "", job.name || "");
-      card.remove();
-    });
-    meta.appendChild(hideBtn);
-  }
   card.appendChild(meta);
 
   // Write actions are openclaw-source only; Hermes jobs are read-only.
@@ -311,7 +295,7 @@ function syncAgentFilter(els, jobs) {
 
 function render(els, jobs) {
   currentJobs = Array.isArray(jobs) ? jobs : [];
-  const visible = currentJobs.filter((job) => !isCronHidden(job));
+  const visible = currentJobs;
   els.headerCount.textContent = visible.length;
   syncAgentFilter(els, visible);
 

@@ -11,22 +11,33 @@
  *         {success, applied, restartRequired: ["mesh.intervalMs", ...]}
  *   POST  /api/fleet/settings/test-alert      — fires a test alert through
  *         the saved sink config, returns {success, result: {dispatched, delivered}}
- *   GET   /api/privacy                        — privacy settings (src/privacy.js):
- *         {hiddenTopics, hiddenSessions, hiddenCrons, hideHostname}
- *   POST  /api/privacy                        — merge-update privacy settings,
- *         returns {success, settings}
+ *   POST  /api/fleet/admin/restart            — audited service restart,
+ *         returns {success, restartingInMs}; systemd respawns the process
  *
  * Saves are per-section and optimistic-with-server-truth: the PATCH response's
  * `applied` object re-populates the form, so the UI always converges on what
  * the server actually persisted. Webhook secrets are write-only — the server
  * only ever reports hasSecret, never the secret itself.
  *
- * Settings returned in `restartRequired` only take effect after
- * `systemctl --user restart open-fleet-control`; they accumulate in an amber
- * banner until the page is reloaded against a restarted service.
+ * Resilience: the settings fetch carries a timeout (a hung request can no
+ * longer wedge the page on "Loading settings…"), and each card populates
+ * independently via applySections() — a section that fails to render shows
+ * its own inline error chip while the rest of the page keeps working.
+ *
+ * Settings returned in `restartRequired` only take effect after a service
+ * restart; they accumulate in a calm info banner ("✅ Saved. These take
+ * effect after a restart: …") with a "🔄 Restart service" button that calls
+ * the admin restart route, shows a "Restarting…" overlay, and polls
+ * /api/health until the service answers again.
  */
 
 import { t } from "../utils.js";
+import {
+  applySections,
+  formatRestartPaths,
+  mergeRestartPaths,
+  pollUntilHealthy,
+} from "./settings-core.js";
 
 const ALERT_RULES = [
   "nodeOffline",
@@ -45,7 +56,6 @@ const MIN = 60000;
 
 let refs = null; // DOM references for the active visit
 let restartPaths = new Set(); // accumulated restartRequired paths (until restart)
-let privacySettings = null; // last privacy settings fetched from the server
 // Editable per-provider budget maps ({provider: usd}); rows mutate this local
 // state and "Save budgets" submits it as a FULL replacement.
 let budgetProviders = { daily: {}, weekly: {} };
@@ -68,6 +78,10 @@ export function init(containerEl) {
     body: root.querySelector("#set-body"),
     restartBanner: root.querySelector("#set-restart-banner"),
     restartPathsEl: root.querySelector("#set-restart-paths"),
+    restartMsg: root.querySelector("#set-restart-msg"),
+    restartBtn: root.querySelector("#set-restart-btn"),
+    restartOverlay: root.querySelector("#set-restart-overlay"),
+    restartOverlayMsg: root.querySelector("#set-restart-overlay-msg"),
     // Alerts section
     alertsEnabled: root.querySelector("#set-alerts-enabled"),
     rules: root.querySelector("#set-rules"),
@@ -117,16 +131,6 @@ export function init(containerEl) {
     gateDefault: root.querySelector("#set-gate-default"),
     gateSave: root.querySelector("#set-gate-save"),
     gateError: root.querySelector("#set-gate-error"),
-    // Privacy
-    privHideHostname: root.querySelector("#set-priv-hide-hostname"),
-    privTopics: root.querySelector("#set-priv-topics"),
-    privTopicsEmpty: root.querySelector("#set-priv-topics-empty"),
-    privSessions: root.querySelector("#set-priv-sessions"),
-    privSessionsEmpty: root.querySelector("#set-priv-sessions-empty"),
-    privCrons: root.querySelector("#set-priv-crons"),
-    privCronsEmpty: root.querySelector("#set-priv-crons-empty"),
-    privacySave: root.querySelector("#set-privacy-save"),
-    privacyError: root.querySelector("#set-privacy-error"),
   };
 
   buildRuleToggles();
@@ -139,7 +143,7 @@ export function init(containerEl) {
   refs.gateSave?.addEventListener("click", saveGate);
   refs.ntfyTest?.addEventListener("click", sendTestAlert);
   refs.whAdd?.addEventListener("click", addWebhook);
-  refs.privacySave?.addEventListener("click", savePrivacy);
+  refs.restartBtn?.addEventListener("click", restartService);
   refs.budgetsSave?.addEventListener("click", saveBudgets);
   refs.budgetDailyAdd?.addEventListener("click", () => addBudgetProvider("daily"));
   refs.budgetWeeklyAdd?.addEventListener("click", () => addBudgetProvider("weekly"));
@@ -152,13 +156,22 @@ export function init(containerEl) {
   }
   refs.ntfyTest.textContent = t("views.settings.ntfyTest", {}, "Send test alert");
   refs.whAdd.textContent = t("views.settings.webhookAdd", {}, "Add webhook");
-  if (refs.privacySave) {
-    refs.privacySave.textContent = t("views.settings.savePrivacy", {}, "Save privacy");
+  if (refs.restartMsg) {
+    refs.restartMsg.textContent = t(
+      "views.settings.restartInfo",
+      {},
+      "Saved. These take effect after a restart:",
+    );
+  }
+  if (refs.restartBtn) {
+    refs.restartBtn.textContent = t("views.settings.restartService", {}, "🔄 Restart service");
+  }
+  if (refs.restartOverlayMsg) {
+    refs.restartOverlayMsg.textContent = t("views.settings.restarting", {}, "Restarting…");
   }
 
   renderRestartBanner();
   refresh();
-  refreshPrivacy();
 }
 
 /** Wire collapsible section headers (chevron + title toggles the card body). */
@@ -180,8 +193,24 @@ function teardown() {
 
 // --- Data fetching ----------------------------------------------------------
 
-async function fetchJson(url, options) {
-  const response = await fetch(url, options);
+// Every request is bounded: a slow or hung backend rejects after this long
+// instead of leaving the page stuck on "Loading settings…" forever.
+const FETCH_TIMEOUT_MS = 10000;
+
+async function fetchJson(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  try {
+    response = await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err && err.name === "AbortError") {
+      throw new Error(t("views.settings.requestTimeout", {}, "Request timed out"));
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   let payload = null;
   try {
     payload = await response.json();
@@ -197,24 +226,40 @@ async function fetchJson(url, options) {
 
 async function refresh() {
   if (!refs) return;
+  refs.loading.hidden = false;
+  refs.fetchError.hidden = true;
+  let settings;
   try {
-    const settings = await fetchJson("/api/fleet/settings");
-    if (!refs) return;
-    refs.loading.hidden = true;
-    refs.fetchError.hidden = true;
-    refs.body.hidden = false;
-    populate(settings);
+    settings = await fetchJson("/api/fleet/settings");
   } catch (err) {
     if (!refs) return;
     console.error("[Settings] Failed to load settings:", err);
     refs.loading.hidden = true;
-    refs.fetchError.hidden = false;
-    refs.fetchError.textContent = t(
-      "views.settings.loadError",
-      { message: err.message },
-      "Failed to load settings: {message}",
-    );
+    showFetchError(err.message);
+    return;
   }
+  if (!refs) return;
+  refs.loading.hidden = true;
+  refs.fetchError.hidden = true;
+  refs.body.hidden = false;
+  populate(settings);
+}
+
+/** Top-level fetch error chip with an inline Retry button. */
+function showFetchError(message) {
+  refs.fetchError.hidden = false;
+  refs.fetchError.replaceChildren(
+    el(
+      "span",
+      null,
+      t("views.settings.loadError", { message }, "Failed to load settings: {message}"),
+    ),
+  );
+  const retry = el("button", "set-action-btn", t("views.settings.retry", {}, "Retry"));
+  retry.type = "button";
+  retry.style.marginLeft = "10px";
+  retry.addEventListener("click", refresh);
+  refs.fetchError.appendChild(retry);
 }
 
 // --- Form population (server truth → inputs) ---------------------------------
@@ -248,7 +293,54 @@ function buildWebhookEventToggles() {
   }
 }
 
+/**
+ * Populate every card from server truth. Sections run isolated through
+ * applySections(): one failing card shows its own inline error chip while
+ * the others still render — a single bad section can no longer wedge the
+ * whole page.
+ */
 function populate(settings) {
+  const results = applySections(settings || {}, [
+    { name: "alerts", apply: populateAlertsSection },
+    { name: "alertRules", apply: (s) => populateAlertRules(s.alerts || {}) },
+    { name: "budgets", apply: (s) => populateBudgets(s.budgets || {}) },
+    { name: "intervals", apply: populateIntervalsSection },
+    { name: "gate", apply: populateGateSection },
+  ]);
+  for (const result of results) {
+    const errorEl = sectionErrorEl(result.name);
+    if (!errorEl) continue;
+    errorEl.hidden = result.ok;
+    if (!result.ok) {
+      console.error(`[Settings] Section "${result.name}" failed to render:`, result.error);
+      errorEl.textContent = t(
+        "views.settings.sectionError",
+        { message: result.error },
+        "This section failed to render: {message}",
+      );
+    }
+  }
+}
+
+/** Inline error chip element for a populate section (null when missing). */
+function sectionErrorEl(name) {
+  switch (name) {
+    case "alerts":
+      return refs.alertsError;
+    case "alertRules":
+      return arRefs ? arRefs.error : null;
+    case "budgets":
+      return refs.budgetsError;
+    case "intervals":
+      return refs.intervalsError;
+    case "gate":
+      return refs.gateError;
+    default:
+      return null;
+  }
+}
+
+function populateAlertsSection(settings) {
   const alerts = settings.alerts || {};
   const sinks = alerts.sinks || {};
   const slack = sinks.slack || {};
@@ -270,17 +362,17 @@ function populate(settings) {
   setOpBadge(refs.ntfyTopicBadge, ntfy.topic);
 
   renderWebhooks(Array.isArray(sinks.webhooks) ? sinks.webhooks : []);
+}
 
-  populateAlertRules(alerts); // "Alert rules" card (v2)
-
-  populateBudgets(settings.budgets || {});
-
+function populateIntervalsSection(settings) {
   refs.meshInterval.value = String(Math.round((settings.mesh?.intervalMs ?? 15000) / SEC));
   refs.fedInterval.value = String(Math.round((settings.federation?.intervalMs ?? 30000) / SEC));
   refs.watchdogThreshold.value = String(
     Math.round((settings.watchdog?.thresholdMs ?? 1800000) / MIN),
   );
+}
 
+function populateGateSection(settings) {
   refs.gateDefault.checked = settings.validationGate?.default !== false;
 }
 
@@ -550,116 +642,6 @@ function saveBudgets() {
   );
 }
 
-// --- Privacy (GET/POST /api/privacy, src/privacy.js schema) -------------------
-
-const PRIVACY_LISTS = [
-  { key: "hiddenTopics", listRef: "privTopics", emptyRef: "privTopicsEmpty" },
-  { key: "hiddenSessions", listRef: "privSessions", emptyRef: "privSessionsEmpty" },
-  { key: "hiddenCrons", listRef: "privCrons", emptyRef: "privCronsEmpty" },
-];
-
-async function refreshPrivacy() {
-  if (!refs || !refs.privHideHostname) return;
-  try {
-    const settings = await fetchJson("/api/privacy");
-    if (!refs) return;
-    privacySettings = settings;
-    populatePrivacy(settings);
-  } catch (err) {
-    if (!refs || !refs.privacyError) return;
-    console.error("[Settings] Failed to load privacy settings:", err);
-    refs.privacyError.hidden = false;
-    refs.privacyError.textContent = t(
-      "views.settings.privacyLoadError",
-      { message: err.message },
-      "Failed to load privacy settings: {message}",
-    );
-  }
-}
-
-function populatePrivacy(settings) {
-  refs.privHideHostname.checked = settings.hideHostname === true;
-  for (const { key, listRef, emptyRef } of PRIVACY_LISTS) {
-    const items = Array.isArray(settings[key]) ? settings[key] : [];
-    renderPrivacyList(key, refs[listRef], refs[emptyRef], items);
-  }
-}
-
-function renderPrivacyList(key, listEl, emptyEl, items) {
-  if (!listEl || !emptyEl) return;
-  listEl.replaceChildren();
-  emptyEl.hidden = items.length > 0;
-
-  for (const item of items) {
-    const row = el("div", "set-priv-row");
-    const value = el("span", "set-priv-value", String(item));
-    value.title = String(item);
-    row.appendChild(value);
-
-    const removeBtn = el("button", "set-action-btn danger", t("actions.remove", {}, "Remove"));
-    removeBtn.type = "button";
-    removeBtn.addEventListener("click", () => removePrivacyItem(key, item, removeBtn));
-    row.appendChild(removeBtn);
-
-    listEl.appendChild(row);
-  }
-}
-
-/** POST a privacy update; the server merges and returns the persisted settings. */
-async function postPrivacy(update, { button, successMessage }) {
-  if (button) button.disabled = true;
-  if (refs.privacyError) refs.privacyError.hidden = true;
-  try {
-    const payload = await fetchJson("/api/privacy", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(update),
-    });
-    if (!refs) return null;
-    if (payload && payload.settings) {
-      privacySettings = payload.settings;
-      populatePrivacy(payload.settings);
-    }
-    showToast(successMessage, "success");
-    return payload;
-  } catch (err) {
-    if (refs && refs.privacyError) {
-      refs.privacyError.hidden = false;
-      refs.privacyError.textContent = t(
-        "views.settings.saveFailed",
-        { message: err.message },
-        "Save failed: {message}",
-      );
-    }
-    return null;
-  } finally {
-    if (refs && button) button.disabled = false;
-  }
-}
-
-function savePrivacy() {
-  postPrivacy(
-    { hideHostname: refs.privHideHostname.checked },
-    {
-      button: refs.privacySave,
-      successMessage: t("views.settings.privacySaved", {}, "Privacy settings saved."),
-    },
-  );
-}
-
-/** Remove one hidden item (unhide) — applies immediately, like webhooks. */
-async function removePrivacyItem(key, item, button) {
-  const current =
-    privacySettings && Array.isArray(privacySettings[key]) ? privacySettings[key] : [];
-  await postPrivacy(
-    { [key]: current.filter((entry) => entry !== item) },
-    {
-      button,
-      successMessage: t("views.settings.privacyUnhidden", {}, "Item is visible again."),
-    },
-  );
-}
-
 // --- Webhook mutations (applied immediately) ----------------------------------
 
 function selectedWebhookEvents() {
@@ -753,19 +735,90 @@ async function sendTestAlert() {
   }
 }
 
-// --- Restart banner -----------------------------------------------------------
+// --- Restart banner + service restart flow ------------------------------------
 
 function noteRestartRequired(paths) {
-  if (!Array.isArray(paths)) return;
-  restartPaths = new Set([...restartPaths, ...paths]);
+  restartPaths = mergeRestartPaths(restartPaths, paths);
   renderRestartBanner();
 }
 
 function renderRestartBanner() {
   if (!refs) return;
-  const list = [...restartPaths].sort();
-  refs.restartBanner.hidden = list.length === 0;
-  refs.restartPathsEl.textContent = list.join(", ");
+  refs.restartBanner.hidden = restartPaths.size === 0;
+  refs.restartPathsEl.textContent = formatRestartPaths(restartPaths);
+}
+
+/** Quick /api/health probe (short timeout so the poll loop stays snappy). */
+async function healthCheck() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2000);
+  try {
+    const response = await fetch("/api/health", { signal: controller.signal, cache: "no-store" });
+    return response.ok;
+  } catch (err) {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Confirm → POST /api/fleet/admin/restart → "Restarting…" overlay → poll
+ * /api/health until the respawned service answers → reload settings and
+ * clear the restart banner. The server exits ~300ms after responding and
+ * systemd (Restart=on-failure, RestartSec=5) brings it back.
+ */
+async function restartService() {
+  if (!refs) return;
+  const confirmText = t(
+    "views.settings.restartConfirm",
+    {},
+    "Restart the dashboard service now? The dashboard will be unavailable for a few seconds.",
+  );
+  if (!window.confirm(confirmText)) return;
+
+  refs.restartBtn.disabled = true;
+  try {
+    await fetchJson("/api/fleet/admin/restart", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+  } catch (err) {
+    if (!refs) return;
+    refs.restartBtn.disabled = false;
+    showToast(
+      t("views.settings.restartFailed", { message: err.message }, "Restart failed: {message}"),
+      "error",
+    );
+    return;
+  }
+
+  if (refs.restartOverlay) refs.restartOverlay.hidden = false;
+  const healthy = await pollUntilHealthy({
+    check: healthCheck,
+    timeoutMs: 60000,
+    intervalMs: 1000,
+  });
+  if (!refs) return; // user navigated away while polling
+
+  refs.restartBtn.disabled = false;
+  if (refs.restartOverlay) refs.restartOverlay.hidden = true;
+  if (healthy) {
+    restartPaths = new Set();
+    renderRestartBanner();
+    showToast(t("views.settings.restarted", {}, "Service restarted."), "success");
+    refresh();
+  } else {
+    showToast(
+      t(
+        "views.settings.restartTimeout",
+        {},
+        "The service did not come back in time — reload the page manually.",
+      ),
+      "error",
+    );
+  }
 }
 
 // --- Small helpers ------------------------------------------------------------
