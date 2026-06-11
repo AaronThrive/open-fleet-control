@@ -77,7 +77,6 @@ describe("audit module", () => {
         "chat.publish",
         "topic.status",
         "operator.save",
-        "privacy.update",
         "action.execute",
         "alert.test",
         "cache.clear",

@@ -14,8 +14,6 @@
  *  - "not initialized" fallback with mkdir init commands (path-aware)
  *  - topic status updates (resolve / park / reactivate) via
  *    POST /api/cerebro/topic/:id/status, verified by a re-fetch
- *  - privacy hide/unhide via the global window.quickHideTopic /
- *    window.isTopicHidden helpers when present
  *
  * All dynamic values render via textContent — XSS-safe.
  */
@@ -48,14 +46,11 @@ export function initCommands(cerebroPath) {
   return [`mkdir -p ${base}/topics`, `mkdir -p ${base}/orphans`];
 }
 
-/**
- * Flatten the API payload's recentTopics into detail-list rows, dropping
- * privacy-hidden topics. `isHidden` receives the topic name.
- */
-export function buildTopicRows(cerebro, isHidden = () => false) {
+/** Flatten the API payload's recentTopics into detail-list rows. */
+export function buildTopicRows(cerebro) {
   const topics = Array.isArray(cerebro?.recentTopics) ? cerebro.recentTopics : [];
   return topics
-    .filter((topic) => topic && topic.name && !isHidden(topic.name))
+    .filter((topic) => topic && topic.name)
     .map((topic) => ({
       name: topic.name,
       title: topic.title || topic.name,
@@ -80,10 +75,6 @@ function el(tag, className, text) {
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
-}
-
-function isTopicHidden(name) {
-  return typeof window.isTopicHidden === "function" ? window.isTopicHidden(name) : false;
 }
 
 function showToast(message, kind) {
@@ -177,12 +168,6 @@ function buildActions(els, row) {
       updateTopicStatus(els, row.name, "active"),
     );
   }
-  if (typeof window.quickHideTopic === "function") {
-    addBtn("👁️", t("views.cerebro.actionHide", {}, "Hide topic"), () => {
-      window.quickHideTopic(row.name, row.title);
-      if (els.lastData) render(els, els.lastData);
-    });
-  }
   return wrap;
 }
 
@@ -244,7 +229,7 @@ function render(els, cerebro) {
   els.initialized.hidden = false;
 
   const allTopics = Array.isArray(cerebro.recentTopics) ? cerebro.recentTopics : [];
-  const rows = buildTopicRows(cerebro, isTopicHidden);
+  const rows = buildTopicRows(cerebro);
   const total = cerebro.topics?.total ?? allTopics.length;
   els.count.textContent = countText(total, rows.length, allTopics.length - rows.length);
 

@@ -67,10 +67,6 @@ function el(tag, className, text) {
   return node;
 }
 
-function isSessionHidden(session) {
-  return typeof window.isSessionHidden === "function" ? window.isSessionHidden(session) : false;
-}
-
 function channelIcon(channel) {
   const icons = {
     slack: "💬",
@@ -154,27 +150,13 @@ function buildCard(session, els) {
   killBtn.title = t("views.sessions.openclawKillUnavailable", {}, OPENCLAW_KILL_TOOLTIP);
   header.appendChild(killBtn);
 
-  if (typeof window.quickHideSession === "function") {
-    const hideBtn = el("button", "hide-btn", "👁️");
-    hideBtn.type = "button";
-    hideBtn.title = t("views.sessions.hideSession", {}, "Hide session");
-    hideBtn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      window.quickHideSession(session.sessionKey || "", session.label || "");
-      card.remove();
-    });
-    header.appendChild(hideBtn);
-  }
   card.appendChild(header);
 
   if (session.topic) {
     const topics = session.topic
       .split(", ")
       .map((topic) => topic.trim())
-      .filter(
-        (topic) =>
-          topic && !(typeof window.isTopicHidden === "function" && window.isTopicHidden(topic)),
-      );
+      .filter((topic) => topic);
     if (topics.length > 0) {
       const wrap = el("div", "card-topics");
       for (const topic of topics) {
@@ -901,7 +883,7 @@ function renderStatusCounts(els, counts) {
 }
 
 function renderGrid(els, sessions) {
-  const visible = (sessions || []).filter((session) => !isSessionHidden(session));
+  const visible = sessions || [];
   const total = pagination?.total ?? visible.length;
   els.headerCount.textContent = total;
 
