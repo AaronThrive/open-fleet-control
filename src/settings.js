@@ -32,6 +32,7 @@
  *               taskStale, lessonPending},
  *       flap:  {consecutive, minDurationMs},
  *       mutes: [{rule?, node?, until?}],
+ *       routing: {<rule>: ["*"] | ["slack"|"ntfy"|"webhooks", ...]},
  *       sinks: {
  *         slack: {enabled, gatewayUrl, channel},
  *         ntfy:  {enabled, server, topic},
@@ -58,6 +59,8 @@
  *       enabled?, rules?: {<rule>: bool, ...},
  *       flap?:  {consecutive?, minDurationMs?},        // merged per-field
  *       mutes?: [{rule?, node?, until?}],              // FULL replacement
+ *       routing?: {<rule>: [sinks]},                   // merged per rule;
+ *                                                      // each list replaces
  *       sinks: {
  *         slack?: {enabled?, gatewayUrl?, channel?},
  *         ntfy?:  {enabled?, server?, topic?},
@@ -83,6 +86,8 @@
  *   - ntfy.topic: [A-Za-z0-9_-], ≤ 256 chars (empty allowed = sink inert).
  *   - webhook events: ["*"] or a subset of the known alert rule names.
  *   - flap.consecutive: integer 1..20; flap.minDurationMs: integer 0..1h.
+ *   - routing: keys must be known rule names; values non-empty arrays of
+ *     "slack"/"ntfy"/"webhooks" (or ["*"] = all sinks, the default).
  *   - mutes: ≤ 50 entries; each needs rule (known rule name) and/or node
  *     (non-empty string ≤ 120 chars); until is optional (ISO string or epoch
  *     ms, normalized to ISO on persist).
@@ -129,6 +134,11 @@ const ALERT_RULES = [
   "lessonPending",
   "budgetBreach",
 ];
+
+// Sink names addressable from alerts.routing (see "Alert rule sink routing"
+// section below). "webhooks" targets the whole webhook group; per-webhook
+// `events` filters still apply on top.
+const ALERT_SINK_NAMES = ["slack", "ntfy", "webhooks"];
 
 // Budgets validation bounds (fleet.budgets — see src/budgets.js).
 const BUDGET_USD_MAX = 1000000;
@@ -288,7 +298,11 @@ function validatePatch(patch) {
   const result = {};
 
   if (patch.alerts !== undefined) {
-    requireKnownKeys(patch.alerts, ["enabled", "rules", "flap", "mutes", "sinks"], "alerts");
+    requireKnownKeys(
+      patch.alerts,
+      ["enabled", "rules", "flap", "mutes", "routing", "sinks"],
+      "alerts",
+    );
     const alerts = {};
     if (patch.alerts.enabled !== undefined) {
       alerts.enabled = requireBool(patch.alerts.enabled, "alerts.enabled");
@@ -305,6 +319,9 @@ function validatePatch(patch) {
     }
     if (patch.alerts.mutes !== undefined) {
       alerts.mutes = validateMutes(patch.alerts.mutes);
+    }
+    if (patch.alerts.routing !== undefined) {
+      alerts.routing = validateAlertRouting(patch.alerts.routing);
     }
     if (patch.alerts.sinks !== undefined) {
       requireKnownKeys(patch.alerts.sinks, ["slack", "ntfy", "webhooks"], "alerts.sinks");
@@ -506,6 +523,57 @@ function validateMutes(mutes) {
   });
 }
 
+// --- Alert rule sink routing (alerts.routing) — v2 alert-rules-ui ----------
+//
+// PATCH shape: alerts.routing = {<rule>: ["*"] | [<sink>, ...]} where <sink>
+// is one of ALERT_SINK_NAMES. Each rule entry is a FULL replacement; rules
+// absent from the patch keep their stored value. ["*"] (the default) routes
+// the rule to every configured sink.
+
+/** Validate + normalize an alerts.routing patch (per-rule full replacement). */
+function validateAlertRouting(routing) {
+  requireKnownKeys(routing, ALERT_RULES, "alerts.routing");
+  const out = {};
+  for (const [rule, sinks] of Object.entries(routing)) {
+    if (!Array.isArray(sinks) || sinks.length === 0) {
+      throw badRequest(`alerts.routing.${rule} must be a non-empty array of sink names`);
+    }
+    const seen = new Set();
+    for (const sink of sinks) {
+      if (sink !== "*" && !ALERT_SINK_NAMES.includes(sink)) {
+        throw badRequest(`alerts.routing.${rule}: unknown sink "${String(sink)}"`);
+      }
+      seen.add(sink);
+    }
+    // "*" routes to everything — collapse mixed entries; otherwise keep a
+    // deduped subset in canonical ALERT_SINK_NAMES order.
+    out[rule] = seen.has("*") ? ["*"] : ALERT_SINK_NAMES.filter((sink) => seen.has(sink));
+  }
+  if (Object.keys(out).length === 0) {
+    throw badRequest("alerts.routing must set at least one rule");
+  }
+  return out;
+}
+
+/**
+ * Effective alerts.routing: every known rule present, defaulting to ["*"].
+ * Hand-edited garbage (unknown sinks, non-arrays, empty lists, unknown
+ * rules) normalizes to safe defaults instead of breaking get().
+ */
+function normalizeAlertRouting(raw) {
+  const src = isPlainObject(raw) ? raw : {};
+  return Object.fromEntries(
+    ALERT_RULES.map((rule) => {
+      const entry = src[rule];
+      if (!Array.isArray(entry) || entry.includes("*")) return [rule, ["*"]];
+      const known = ALERT_SINK_NAMES.filter((sink) => entry.includes(sink));
+      return [rule, known.length > 0 ? known : ["*"]];
+    }),
+  );
+}
+
+// --- Sink patch validation ---------------------------------------------------
+
 function validateSlackPatch(slack) {
   requireKnownKeys(slack, ["enabled", "gatewayUrl", "channel"], "alerts.sinks.slack");
   const out = {};
@@ -668,6 +736,7 @@ function buildEffective(fleet) {
         minDurationMs: pickInt(flap.minDurationMs, d.alerts.flap.minDurationMs),
       },
       mutes: normalizeMutes(alerts.mutes),
+      routing: normalizeAlertRouting(alerts.routing),
       sinks: {
         slack: {
           enabled: pickBool(slack.enabled, d.alerts.sinks.slack.enabled),
@@ -908,6 +977,10 @@ function createSettings({ configPath, onChange, onBudgetsChange } = {}) {
       }
       if (validated.alerts.mutes) {
         alertsNext.mutes = validated.alerts.mutes; // full replacement by contract
+      }
+      if (validated.alerts.routing) {
+        // Merged per rule; each rule's sink list is a full replacement.
+        alertsNext.routing = { ...before.alerts.routing, ...validated.alerts.routing };
       }
       if (validated.alerts.sinks) {
         const sinksBefore = isPlainObject(alertsBefore.sinks) ? alertsBefore.sinks : {};

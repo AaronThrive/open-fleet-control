@@ -893,3 +893,112 @@ describe("createNodeAlertTracker (flap suppression + recovery)", () => {
     assert.strictEqual(fired.length, 1);
   });
 });
+
+describe("per-rule sink routing (config.routing)", () => {
+  // All three sink kinds configured so routing decisions are observable.
+  function allSinksConfig(routing) {
+    return baseConfig({
+      sinks: {
+        slack: { enabled: true, gatewayUrl: "https://gateway.example/slack", channel: "#ops" },
+        ntfy: { enabled: true, server: "https://ntfy.example", topic: "fleet" },
+        webhooks: [{ url: "https://hooks.example/a", events: ["*"] }],
+      },
+      ...(routing !== undefined ? { routing } : {}),
+    });
+  }
+
+  it("dispatches to all sinks when no routing is configured", async () => {
+    const { calls, fetchFn } = makeFetch();
+    const alerts = createAlerts({ config: allSinksConfig(), fetchFn });
+    await alerts.fire(baseEvent);
+    assert.deepStrictEqual(calls.map((c) => c.url).sort(), [
+      "https://gateway.example/slack",
+      "https://hooks.example/a",
+      "https://ntfy.example/fleet",
+    ]);
+  });
+
+  it('treats ["*"] as all sinks', async () => {
+    const { calls, fetchFn } = makeFetch();
+    const alerts = createAlerts({ config: allSinksConfig({ nodeOffline: ["*"] }), fetchFn });
+    await alerts.fire(baseEvent);
+    assert.strictEqual(calls.length, 3);
+  });
+
+  it("restricts a routed rule to the listed sinks only", async () => {
+    const { calls, fetchFn } = makeFetch();
+    const alerts = createAlerts({ config: allSinksConfig({ nodeOffline: ["ntfy"] }), fetchFn });
+    const result = await alerts.fire(baseEvent);
+    assert.strictEqual(result.fired, true);
+    assert.strictEqual(result.dispatched, 1);
+    assert.deepStrictEqual(
+      calls.map((c) => c.url),
+      ["https://ntfy.example/fleet"],
+    );
+  });
+
+  it("leaves rules absent from routing on all sinks", async () => {
+    const { calls, fetchFn } = makeFetch();
+    const alerts = createAlerts({ config: allSinksConfig({ taskFailed: ["slack"] }), fetchFn });
+    await alerts.fire(baseEvent); // nodeOffline not routed → all sinks
+    assert.strictEqual(calls.length, 3);
+  });
+
+  it("still applies per-webhook event filters under webhooks routing", async () => {
+    const { calls, fetchFn } = makeFetch();
+    const config = baseConfig({
+      sinks: {
+        slack: { enabled: true, gatewayUrl: "https://gateway.example/slack", channel: "#ops" },
+        webhooks: [
+          { url: "https://hooks.example/node", events: ["nodeOffline"] },
+          { url: "https://hooks.example/task", events: ["taskFailed"] },
+        ],
+      },
+      routing: { nodeOffline: ["webhooks"] },
+    });
+    const alerts = createAlerts({ config, fetchFn });
+    await alerts.fire(baseEvent);
+    assert.deepStrictEqual(
+      calls.map((c) => c.url),
+      ["https://hooks.example/node"],
+    );
+  });
+
+  it("ignores malformed routing values (fails open to all sinks)", async () => {
+    const { calls, fetchFn } = makeFetch();
+    const alerts = createAlerts({
+      config: allSinksConfig({ nodeOffline: "ntfy" }), // not an array
+      fetchFn,
+    });
+    await alerts.fire(baseEvent);
+    assert.strictEqual(calls.length, 3);
+  });
+});
+
+describe("analytics()", () => {
+  it("returns the empty rollup shape when no logsDir is configured", () => {
+    const alerts = createAlerts({ config: baseConfig(), fetchFn: makeFetch().fetchFn });
+    const result = alerts.analytics();
+    assert.strictEqual(result.total, 0);
+    assert.strictEqual(result.days, 14);
+    assert.strictEqual(result.perDay.length, 14);
+    assert.deepStrictEqual(result.flaps, []);
+    assert.deepStrictEqual(result.topNodes, []);
+    assert.deepStrictEqual(result.topRules, []);
+  });
+
+  it("rolls up fired alerts from the persistent history", async () => {
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), "ofc-alerts-analytics-"));
+    const alerts = createAlerts({
+      config: { enabled: true, rules: {}, sinks: { webhooks: [] } },
+      logsDir,
+      fetchFn: makeFetch().fetchFn,
+    });
+    await alerts.fire({ type: "nodeOffline", severity: "critical", node: "hermes-1" });
+    await alerts.fire({ type: "nodeRecovered", severity: "info", node: "hermes-1" });
+    const result = alerts.analytics();
+    assert.strictEqual(result.total, 2);
+    assert.deepStrictEqual(result.flaps, [{ rule: "nodeOffline", node: "hermes-1", cycles: 1 }]);
+    assert.deepStrictEqual(result.topNodes, [{ node: "hermes-1", count: 2 }]);
+  });
+});
