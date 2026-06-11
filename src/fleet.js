@@ -133,7 +133,7 @@ function createFleetRuntime({ config, broadcast }) {
     const { value: resolvedAlerts, failures } = defaultSecrets.resolveDeepSync(alertsConfig || {});
     for (const failure of failures) {
       console.warn(
-        `[Fleet] 1Password ref ${failure.ref} (alerts.${failure.path}) failed: ${failure.error} — sink value left empty`,
+        `[Fleet] 1Password ref ${failure.ref} (alerts.${failure.path}) failed: ${failure.error} — keeping the reference in place`,
       );
     }
     alerts = createAlerts({ config: resolvedAlerts, logsDir });

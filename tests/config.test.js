@@ -152,6 +152,71 @@ describe("config module", () => {
     });
   });
 
+  describe("op:// secret resolution at config load", () => {
+    const SECRET = "RESOLVED-hunter2";
+
+    function freshLoadConfig(options) {
+      for (const key of Object.keys(require.cache)) {
+        if (key.includes("config.js")) {
+          delete require.cache[key];
+        }
+      }
+      const { loadConfig } = require("../src/config");
+      return loadConfig(options);
+    }
+
+    /** Fake secrets layer backed by an injected exec — never runs the real op CLI. */
+    function fakeSecrets({ fail = null } = {}) {
+      const { createSecrets } = require("../src/secrets");
+      const calls = [];
+      const execSyncFn = (cmd, args) => {
+        calls.push({ cmd, args });
+        if (fail) throw fail;
+        return `${SECRET}\n`;
+      };
+      return { secrets: createSecrets({ execSyncFn }), calls };
+    }
+
+    it("resolves op:// refs anywhere in the fleet config (ntfy topic, openrouter key)", () => {
+      process.env.FLEET_CONFIG_JSON = JSON.stringify({
+        alerts: { sinks: { ntfy: { enabled: true, topic: "op://Vault/ntfy/topic" } } },
+        usage: { openrouterKey: "op://Vault/openrouter/key" },
+      });
+      const { secrets } = fakeSecrets();
+      const config = freshLoadConfig({ secrets });
+
+      assert.strictEqual(config.fleet.alerts.sinks.ntfy.topic, SECRET);
+      assert.strictEqual(config.fleet.usage.openrouterKey, SECRET);
+      // Non-ref strings pass through untouched.
+      assert.strictEqual(config.fleet.alerts.sinks.ntfy.enabled, true);
+      assert.strictEqual(config.auth.mode, "none");
+    });
+
+    it("keeps the literal op:// string in place when resolution fails", () => {
+      process.env.FLEET_CONFIG_JSON = JSON.stringify({
+        usage: { openrouterKey: "op://Vault/openrouter/key" },
+      });
+      const err = new Error("denied");
+      err.status = 1;
+      const { secrets } = fakeSecrets({ fail: err });
+      const config = freshLoadConfig({ secrets });
+
+      // Downstream code sees an obviously-invalid credential, never undefined.
+      assert.strictEqual(config.fleet.usage.openrouterKey, "op://Vault/openrouter/key");
+      // …and the failure is surfaced in the secrets status (ref only, no value).
+      const status = secrets.getStatus();
+      assert.strictEqual(status.failed, 1);
+      assert.strictEqual(status.refs[0].ref, "op://Vault/openrouter/key");
+    });
+
+    it("never spawns a resolver process when the config contains no refs", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const { secrets, calls } = fakeSecrets();
+      freshLoadConfig({ secrets });
+      assert.strictEqual(calls.length, 0);
+    });
+  });
+
   describe("fleet.agents source config", () => {
     function freshLoadConfig() {
       for (const key of Object.keys(require.cache)) {

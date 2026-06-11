@@ -63,7 +63,11 @@ async function safe(promise) {
  * @param {string} [config.nineRouterDb] - default ~/.openclaw/9router/data/db/data.sqlite
  * @param {string} [config.headroomStats] - default ~/.headroom/subscription_state.json
  * @param {string} [config.openrouterKey] - OpenRouter API key (no env fallback here;
- *                                          the orchestrator wires it from env/config)
+ *                                          the orchestrator wires it from env/config).
+ *                                          May be an op://vault/item/field 1Password
+ *                                          ref — resolved lazily before each API call.
+ * @param {object} [config.secrets] - secrets resolver for op:// keys (default:
+ *                                    shared resolver; injectable for tests)
  * @param {function} [config.psFn] [config.execFn] [config.fetchFn]
  *                   [config.sqliteLoader] [config.nowFn] - injectable deps for tests
  */
@@ -94,6 +98,7 @@ function createUsageSources(config = {}) {
   const openrouter = createOpenRouterSource({
     apiKey: config.openrouterKey,
     fetchFn: config.fetchFn,
+    secrets: config.secrets,
   });
 
   const sources = { claudeCode, codex, nineRouter, headroom, openrouter };
