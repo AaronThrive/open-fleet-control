@@ -806,25 +806,6 @@ main {
   color: var(--text-muted);
 }
 
-/* Quick hide button on cards */
-.hide-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  opacity: 0;
-  padding: 4px 6px;
-  font-size: 0.85rem;
-  transition: opacity 0.15s;
-  flex-shrink: 0;
-}
-.session-card:hover .hide-btn,
-.cron-card:hover .hide-btn {
-  opacity: 0.5;
-}
-.hide-btn:hover {
-  opacity: 1 !important;
-}
-
 .card-stats {
   display: flex;
   gap: 16px;
@@ -901,10 +882,6 @@ main {
 .topic-action-btn.reactivate:hover {
   border-color: var(--accent);
   color: var(--accent);
-}
-.topic-action-btn.hide:hover {
-  border-color: var(--red);
-  color: var(--red);
 }
 
 /* Toast notifications */

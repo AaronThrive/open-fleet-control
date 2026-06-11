@@ -10,7 +10,7 @@
  *   brief.write, brief.delete,
  *   lesson.add, lesson.approve, lesson.reject, gate.toggle,
  *   node.register, node.unregister,
- *   alerts.config, memory.write, session.kill
+ *   alerts.config, memory.write, session.kill, service.restart
  *
  * Rotation: when audit.jsonl reaches 50MB it is renamed to
  * `audit.<date>.jsonl` (ISO timestamp, filesystem-safe) and a fresh file is
@@ -44,6 +44,7 @@ const AUDIT_ACTIONS = [
   "session.kill",
   "cron.update",
   "cron.run",
+  "service.restart",
 ];
 
 const ACTIVE_LOG = "audit.jsonl";

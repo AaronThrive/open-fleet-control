@@ -999,170 +999,14 @@
       </div>
     </div>
 
-    <!-- Privacy Settings Modal -->
-    <div
-      id="privacy-modal-overlay"
-      class="detail-overlay hidden"
-      onclick="closePrivacyModal()"
-    ></div>
-    <div id="privacy-modal" class="detail-panel hidden" style="max-width: 550px">
-      <div class="detail-header">
-        <h2>🔒 Privacy Settings</h2>
-        <button class="close-btn" onclick="closePrivacyModal()">✕</button>
-      </div>
-      <div class="detail-content" id="privacy-modal-content">
-        <div style="margin-bottom: 16px">
-          <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 12px">
-            Hide topics and sessions from display for privacy during demos/screenshots. Settings are
-            stored in your browser only.
-          </p>
-        </div>
-
-        <!-- Hidden Topics Section -->
-        <div
-          style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border)"
-        >
-          <label style="font-size: 0.95rem; font-weight: 600; display: block; margin-bottom: 12px"
-            >🏷️ Hidden Topics
-            <span id="privacy-topics-count" style="color: var(--text-muted); font-weight: normal"
-              >(0)</span
-            ></label
-          >
-          <div style="display: flex; gap: 8px; margin-bottom: 12px">
-            <input
-              type="text"
-              id="privacy-add-topic"
-              placeholder="Topic name..."
-              style="
-                flex: 1;
-                padding: 8px 12px;
-                background: var(--bg);
-                border: 1px solid var(--border);
-                border-radius: 6px;
-                color: var(--text);
-                font-size: 0.9rem;
-              "
-            />
-            <button class="btn-primary" onclick="addHiddenTopic()">Add</button>
-          </div>
-          <div id="hidden-topics-list" style="min-height: 30px">
-            <em style="color: var(--text-muted); font-size: 0.85rem">No topics hidden</em>
-          </div>
-        </div>
-
-        <!-- Hidden Sessions Section -->
-        <div
-          style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border)"
-        >
-          <label style="font-size: 0.95rem; font-weight: 600; display: block; margin-bottom: 12px"
-            >📋 Hidden Sessions
-            <span id="privacy-sessions-count" style="color: var(--text-muted); font-weight: normal"
-              >(0)</span
-            ></label
-          >
-          <div style="display: flex; gap: 8px; margin-bottom: 12px">
-            <input
-              type="text"
-              id="privacy-add-session"
-              placeholder="Session label or key..."
-              style="
-                flex: 1;
-                padding: 8px 12px;
-                background: var(--bg);
-                border: 1px solid var(--border);
-                border-radius: 6px;
-                color: var(--text);
-                font-size: 0.9rem;
-              "
-            />
-            <button class="btn-primary" onclick="addHiddenSession()">Add</button>
-          </div>
-          <div id="hidden-sessions-list" style="min-height: 30px">
-            <em style="color: var(--text-muted); font-size: 0.85rem">No sessions hidden</em>
-          </div>
-          <p style="color: var(--text-muted); font-size: 0.75rem; margin-top: 8px">
-            💡 Tip: You can also click the 👁️ icon on any session card to hide it quickly.
-          </p>
-        </div>
-
-        <!-- Hidden Cron Jobs Section -->
-        <div
-          style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border)"
-        >
-          <label style="font-size: 0.95rem; font-weight: 600; display: block; margin-bottom: 12px"
-            >⏰ Hidden Cron Jobs
-            <span id="privacy-crons-count" style="color: var(--text-muted); font-weight: normal"
-              >(0)</span
-            ></label
-          >
-          <div style="display: flex; gap: 8px; margin-bottom: 12px">
-            <input
-              type="text"
-              id="privacy-add-cron"
-              placeholder="Cron job name..."
-              style="
-                flex: 1;
-                padding: 8px 12px;
-                background: var(--bg);
-                border: 1px solid var(--border);
-                border-radius: 6px;
-                color: var(--text);
-                font-size: 0.9rem;
-              "
-            />
-            <button class="btn-primary" onclick="addHiddenCron()">Add</button>
-          </div>
-          <div id="hidden-crons-list" style="min-height: 30px">
-            <em
-              style="color: var(--text-muted); font-size: 0.85rem"
-              data-i18n="privacy.noCronHidden"
-              >No cron jobs hidden</em
-            >
-          </div>
-        </div>
-
-        <!-- Display Options Section -->
-        <div
-          style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border)"
-        >
-          <label style="font-size: 0.95rem; font-weight: 600; display: block; margin-bottom: 12px"
-            >🖥️ Display Options</label
-          >
-          <label
-            style="
-              display: flex;
-              align-items: center;
-              gap: 10px;
-              cursor: pointer;
-              font-size: 0.9rem;
-            "
-          >
-            <input
-              type="checkbox"
-              id="privacy-hide-hostname"
-              onchange="toggleHideHostname()"
-              style="width: 18px; height: 18px; cursor: pointer"
-            />
-            <span>Hide system hostname</span>
-          </label>
-        </div>
-
-        <div>
-          <button class="btn-secondary" onclick="clearAllPrivacySettings()" style="width: 100%">
-            Clear All Privacy Settings
-          </button>
-        </div>
-      </div>
-    </div>
-
     <script>
       // State
       // The full sessions/cron/vitals/LLM sections live on their own pages
       // (js/views/*.js); home only keeps compact overview chips plus the
       // memory/cerebro/operators sections and the global modals.
       let memoryFilters = { type: "all", age: "all" };
-      let sessionsData = []; // last sessions slice (operator modal + privacy refresh)
-      let cronData = []; // last cron slice (privacy refresh)
+      let sessionsData = []; // last sessions slice (operator modal)
+      let cronData = []; // last cron slice (overview chips)
       let sidebarCollapsed = false;
 
       const i18nText = (key, params = {}, fallback = key) =>
@@ -1436,7 +1280,7 @@
 
       // Slim home renderers: the full sessions/cron grids moved to their own
       // pages (#view-sessions / #view-cron). Home keeps the data slices for
-      // the operator modal + privacy refresh and updates the overview chips.
+      // the operator modal and updates the overview chips.
       // Defensive: absent/null fields render as "—", never as a fake 0.
       function renderSessions(sessions, pagination, statusCounts) {
         sessionsData = Array.isArray(sessions) ? sessions : [];
@@ -1740,9 +1584,6 @@
 
       // Cerebro rendering
       function renderCerebro(cerebro) {
-        // Store for re-rendering when privacy settings change
-        window.lastCerebroData = cerebro;
-
         const notInitEl = document.getElementById("cerebro-not-initialized");
         const initEl = document.getElementById("cerebro-initialized");
 
@@ -1766,17 +1607,8 @@
         if (notInitEl) notInitEl.style.display = "none";
         if (initEl) initEl.style.display = "block";
 
-        // Calculate hidden topics count from current view
         const allTopics = cerebro.recentTopics || [];
-        const hiddenTopicsCount = allTopics.filter((t) => isTopicHidden(t.name)).length;
-        const visibleTopicsCount = allTopics.length - hiddenTopicsCount;
-
-        // Update counts with hidden breakdown (updates dynamically on hide/unhide)
-        const countText =
-          hiddenTopicsCount > 0
-            ? `${cerebro.topics.total} topics (${visibleTopicsCount} visible, ${hiddenTopicsCount} hidden)`
-            : `${cerebro.topics.total} topics`;
-        $set("cerebro-count", "textContent", countText);
+        $set("cerebro-count", "textContent", `${cerebro.topics.total} topics`);
         $set("nav-cerebro-count", "textContent", cerebro.topics.total);
 
         $set("cerebro-active", "textContent", cerebro.topics.active || 0);
@@ -1787,9 +1619,9 @@
         $set("cerebro-threads", "textContent", cerebro.threads || 0);
         $set("cerebro-orphans", "textContent", cerebro.orphans || 0);
 
-        // Recent topics with action buttons (filtered by privacy settings)
+        // Recent topics with action buttons
         const recentEl = document.getElementById("cerebro-recent-topics");
-        const visibleTopics = allTopics.filter((t) => !isTopicHidden(t.name));
+        const visibleTopics = allTopics;
 
         if (visibleTopics.length > 0) {
           smartUpdate(
@@ -1805,19 +1637,16 @@
                       ? "var(--accent)"
                       : "var(--text-muted)";
 
-                // Action buttons based on status (always include hide button)
-                const hideBtn = `<button class="topic-action-btn hide" onclick="quickHideTopic('${escapeHtml(t.name).replace(/'/g, "\\'")}', '${escapeHtml(t.title || t.name).replace(/'/g, "\\'")}'); event.stopPropagation();" title="Hide topic">👁️</button>`;
+                // Action buttons based on status
                 let actionButtons = "";
                 if (t.status === "active") {
                   actionButtons = `
                             <button class="topic-action-btn resolve" onclick="updateTopicStatus('${escapeHtml(t.name)}', 'resolved')" title="Mark as resolved">✓</button>
                             <button class="topic-action-btn park" onclick="updateTopicStatus('${escapeHtml(t.name)}', 'parked')" title="Park topic">⏸</button>
-                            ${hideBtn}
                         `;
                 } else {
                   actionButtons = `
                             <button class="topic-action-btn reactivate" onclick="updateTopicStatus('${escapeHtml(t.name)}', 'active')" title="Reactivate topic">↩</button>
-                            ${hideBtn}
                         `;
                 }
 
@@ -2059,430 +1888,6 @@
         setTimeout(() => {
           document.getElementById("operator-modal").classList.add("hidden");
           document.getElementById("operator-modal-overlay").classList.add("hidden");
-        }, 200);
-      }
-
-      // Privacy Settings - Topics, Sessions, Crons, Display Options
-      // Server-side storage with localStorage as cache/fallback
-      const HIDDEN_TOPICS_KEY = "openclawHiddenTopics";
-      const HIDDEN_SESSIONS_KEY = "openclawHiddenSessions";
-      const HIDDEN_CRONS_KEY = "openclawHiddenCrons";
-      const HIDE_HOSTNAME_KEY = "openclawHideHostname";
-      const PRIVACY_CACHE_KEY = "openclawPrivacyCache";
-
-      // In-memory cache of privacy settings (populated from server on load)
-      let privacySettingsCache = null;
-
-      // Load privacy settings from server (called on page load)
-      async function loadPrivacyFromServer() {
-        try {
-          const res = await fetch("/api/privacy");
-          if (res.ok) {
-            const settings = await res.json();
-            privacySettingsCache = settings;
-            // Update localStorage cache
-            localStorage.setItem(PRIVACY_CACHE_KEY, JSON.stringify(settings));
-            // Migrate old localStorage data if server is empty
-            if (
-              (!settings.hiddenTopics || settings.hiddenTopics.length === 0) &&
-              (!settings.hiddenSessions || settings.hiddenSessions.length === 0) &&
-              (!settings.hiddenCrons || settings.hiddenCrons.length === 0)
-            ) {
-              await migrateLocalStorageToServer();
-            }
-            return settings;
-          }
-        } catch (e) {
-          console.warn("Failed to load privacy from server, using localStorage cache:", e.message);
-        }
-        // Fallback to localStorage cache
-        try {
-          const cached = localStorage.getItem(PRIVACY_CACHE_KEY);
-          if (cached) {
-            privacySettingsCache = JSON.parse(cached);
-            return privacySettingsCache;
-          }
-        } catch (e) {}
-        // Final fallback - empty settings
-        privacySettingsCache = {
-          hiddenTopics: [],
-          hiddenSessions: [],
-          hiddenCrons: [],
-          hideHostname: false,
-        };
-        return privacySettingsCache;
-      }
-
-      // Save privacy settings to server (debounced)
-      let privacySaveTimeout = null;
-      async function savePrivacyToServer() {
-        // Debounce saves to avoid excessive API calls
-        if (privacySaveTimeout) clearTimeout(privacySaveTimeout);
-        privacySaveTimeout = setTimeout(async () => {
-          try {
-            const res = await fetch("/api/privacy", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(privacySettingsCache),
-            });
-            if (res.ok) {
-              // Update localStorage cache
-              localStorage.setItem(PRIVACY_CACHE_KEY, JSON.stringify(privacySettingsCache));
-              console.log("[Privacy] Settings saved to server");
-            } else {
-              console.warn("[Privacy] Failed to save to server:", await res.text());
-            }
-          } catch (e) {
-            console.warn("[Privacy] Failed to save to server:", e.message);
-          }
-        }, 500);
-      }
-
-      // Migrate old localStorage data to server (one-time migration)
-      async function migrateLocalStorageToServer() {
-        const oldTopics = getLocalHiddenItems(HIDDEN_TOPICS_KEY);
-        const oldSessions = getLocalHiddenItems(HIDDEN_SESSIONS_KEY);
-        const oldCrons = getLocalHiddenItems(HIDDEN_CRONS_KEY);
-        const oldHostname = localStorage.getItem(HIDE_HOSTNAME_KEY) === "true";
-
-        if (oldTopics.length || oldSessions.length || oldCrons.length || oldHostname) {
-          console.log("[Privacy] Migrating localStorage data to server...");
-          privacySettingsCache = {
-            hiddenTopics: oldTopics,
-            hiddenSessions: oldSessions,
-            hiddenCrons: oldCrons,
-            hideHostname: oldHostname,
-          };
-          await savePrivacyToServer();
-          // Clear old localStorage keys after migration
-          localStorage.removeItem(HIDDEN_TOPICS_KEY);
-          localStorage.removeItem(HIDDEN_SESSIONS_KEY);
-          localStorage.removeItem(HIDDEN_CRONS_KEY);
-          localStorage.removeItem(HIDE_HOSTNAME_KEY);
-        }
-      }
-
-      // Generic localStorage helpers (for migration/fallback only)
-      function getLocalHiddenItems(key) {
-        try {
-          const stored = localStorage.getItem(key);
-          if (!stored) return [];
-          const parsed = JSON.parse(stored);
-          return parsed.map((item) => (typeof item === "string" ? { id: item, name: item } : item));
-        } catch (e) {
-          return [];
-        }
-      }
-
-      // Topic-specific functions (use in-memory cache backed by server)
-      function getHiddenTopics() {
-        return privacySettingsCache?.hiddenTopics || [];
-      }
-      function setHiddenTopics(topics) {
-        if (!privacySettingsCache) privacySettingsCache = {};
-        privacySettingsCache.hiddenTopics = topics;
-        savePrivacyToServer();
-      }
-      function isTopicHidden(topicId) {
-        const hidden = getHiddenTopics();
-        const normalized = (topicId || "").toLowerCase().trim();
-        return hidden.some((h) => (h.id || "").toLowerCase().trim() === normalized);
-      }
-
-      // Session-specific functions
-      function getHiddenSessions() {
-        return privacySettingsCache?.hiddenSessions || [];
-      }
-      function setHiddenSessions(sessions) {
-        if (!privacySettingsCache) privacySettingsCache = {};
-        privacySettingsCache.hiddenSessions = sessions;
-        savePrivacyToServer();
-      }
-      function isSessionHidden(session) {
-        const hidden = getHiddenSessions();
-        const key = (session.sessionKey || session.key || "").toLowerCase().trim();
-        return hidden.some((h) => (h.id || "").toLowerCase().trim() === key);
-      }
-
-      // Cron-specific functions
-      function getHiddenCrons() {
-        return privacySettingsCache?.hiddenCrons || [];
-      }
-      function setHiddenCrons(crons) {
-        if (!privacySettingsCache) privacySettingsCache = {};
-        privacySettingsCache.hiddenCrons = crons;
-        savePrivacyToServer();
-      }
-      function isCronHidden(cron) {
-        const hidden = getHiddenCrons();
-        const id = (cron.id || cron.jobId || "").toLowerCase().trim();
-        // Match on id only (exact match)
-        return hidden.some((h) => (h.id || "").toLowerCase().trim() === id);
-      }
-
-      // Add functions (manual entry - uses input as both id and name)
-      function addHiddenTopic() {
-        const input = document.getElementById("privacy-add-topic");
-        const topic = (input.value || "").trim();
-        if (!topic) return;
-
-        const hidden = getHiddenTopics();
-        if (!hidden.some((h) => (h.id || "").toLowerCase() === topic.toLowerCase())) {
-          hidden.push({ id: topic, name: topic });
-          setHiddenTopics(hidden);
-        }
-        input.value = "";
-        renderPrivacyLists();
-        refreshAllViews();
-      }
-
-      function addHiddenSession() {
-        const input = document.getElementById("privacy-add-session");
-        const session = (input.value || "").trim();
-        if (!session) return;
-
-        const hidden = getHiddenSessions();
-        if (!hidden.some((h) => (h.id || "").toLowerCase() === session.toLowerCase())) {
-          hidden.push({ id: session, name: session });
-          setHiddenSessions(hidden);
-        }
-        input.value = "";
-        renderPrivacyLists();
-        refreshAllViews();
-      }
-
-      function addHiddenCron() {
-        const input = document.getElementById("privacy-add-cron");
-        const cron = (input.value || "").trim();
-        if (!cron) return;
-
-        const hidden = getHiddenCrons();
-        if (!hidden.some((h) => (h.id || "").toLowerCase() === cron.toLowerCase())) {
-          hidden.push({ id: cron, name: cron });
-          setHiddenCrons(hidden);
-        }
-        input.value = "";
-        renderPrivacyLists();
-        refreshAllViews();
-      }
-
-      // Quick-hide from card (called by hide icon on cards)
-      // Stores id for matching, name for display
-      function quickHideTopic(id, name) {
-        const hidden = getHiddenTopics();
-        if (!hidden.some((h) => (h.id || "").toLowerCase() === id.toLowerCase())) {
-          hidden.push({ id: id, name: name || id });
-          setHiddenTopics(hidden);
-        }
-        refreshAllViews();
-        showToast(`Topic "${name || id}" hidden. Open Privacy Settings to unhide.`);
-      }
-
-      function quickHideSession(id, name) {
-        const hidden = getHiddenSessions();
-        if (!hidden.some((h) => (h.id || "").toLowerCase() === id.toLowerCase())) {
-          hidden.push({ id: id, name: name || id });
-          setHiddenSessions(hidden);
-        }
-        refreshAllViews();
-        showToast(`Session "${name || id}" hidden. Open Privacy Settings to unhide.`);
-      }
-
-      function quickHideCron(id, name) {
-        const hidden = getHiddenCrons();
-        if (!hidden.some((h) => (h.id || "").toLowerCase() === id.toLowerCase())) {
-          hidden.push({ id: id, name: name || id });
-          setHiddenCrons(hidden);
-        }
-        refreshAllViews();
-        showToast(`Cron job "${name || id}" hidden. Open Privacy Settings to unhide.`);
-      }
-
-      // Remove functions (by id)
-      function removeHiddenTopic(id) {
-        const hidden = getHiddenTopics();
-        const filtered = hidden.filter((h) => (h.id || "").toLowerCase() !== id.toLowerCase());
-        setHiddenTopics(filtered);
-        renderPrivacyLists();
-        refreshAllViews();
-      }
-
-      function removeHiddenSession(id) {
-        const hidden = getHiddenSessions();
-        const filtered = hidden.filter((h) => (h.id || "").toLowerCase() !== id.toLowerCase());
-        setHiddenSessions(filtered);
-        renderPrivacyLists();
-        refreshAllViews();
-      }
-
-      function removeHiddenCron(id) {
-        const hidden = getHiddenCrons();
-        const filtered = hidden.filter((h) => (h.id || "").toLowerCase() !== id.toLowerCase());
-        setHiddenCrons(filtered);
-        renderPrivacyLists();
-        refreshAllViews();
-      }
-
-      // Clear all
-      function clearAllPrivacySettings() {
-        setHiddenTopics([]);
-        setHiddenSessions([]);
-        setHiddenCrons([]);
-        setHideHostname(false);
-        renderPrivacyLists();
-        // Update checkbox
-        const hostnameCheckbox = document.getElementById("privacy-hide-hostname");
-        if (hostnameCheckbox) hostnameCheckbox.checked = false;
-        refreshAllViews();
-      }
-
-      // Hostname privacy (use server-backed cache)
-      function isHostnameHidden() {
-        return privacySettingsCache?.hideHostname || false;
-      }
-
-      function setHideHostname(hide) {
-        if (!privacySettingsCache) privacySettingsCache = {};
-        privacySettingsCache.hideHostname = hide;
-        savePrivacyToServer();
-      }
-
-      function toggleHideHostname() {
-        const checkbox = document.getElementById("privacy-hide-hostname");
-        setHideHostname(checkbox.checked);
-        updateHostnameDisplay();
-      }
-
-      function updateHostnameDisplay() {
-        const hostnameEl = document.getElementById("ov-hostname");
-        if (hostnameEl) {
-          if (isHostnameHidden()) {
-            hostnameEl.style.filter = "blur(8px)";
-            hostnameEl.style.userSelect = "none";
-            hostnameEl.title = "Hidden for privacy";
-          } else {
-            hostnameEl.style.filter = "";
-            hostnameEl.style.userSelect = "";
-            hostnameEl.title = "";
-          }
-        }
-      }
-
-      // Refresh all views after privacy change
-      function refreshAllViews() {
-        if (window.lastCerebroData) renderCerebro(window.lastCerebroData);
-        renderSessions(sessionsData);
-        if (cronData && cronData.length > 0) renderCron(cronData);
-        updateHostnameDisplay();
-      }
-
-      // Render all privacy lists
-      function renderPrivacyLists() {
-        renderHiddenTopicsList();
-        renderHiddenSessionsList();
-        renderHiddenCronsList();
-      }
-
-      function renderHiddenTopicsList() {
-        const container = document.getElementById("hidden-topics-list");
-        if (!container) return;
-        const hidden = getHiddenTopics();
-
-        // Update count in heading
-        const countEl = document.getElementById("privacy-topics-count");
-        if (countEl) countEl.textContent = `(${hidden.length})`;
-
-        if (hidden.length === 0) {
-          container.innerHTML =
-            '<em style="color: var(--text-muted); font-size: 0.85rem;">No topics hidden</em>';
-          return;
-        }
-
-        // Display name, but remove by id
-        container.innerHTML = hidden
-          .map(
-            (item) => `
-          <div style="display: inline-flex; align-items: center; padding: 4px 10px; background: var(--bg); border-radius: 12px; margin: 2px; font-size: 0.85rem;">
-            <span>${escapeHtml(item.name || item.id)}</span>
-            <button onclick="removeHiddenTopic('${escapeHtml(item.id).replace(/'/g, "\\'")}')" style="background: none; border: none; color: var(--error); cursor: pointer; margin-left: 6px; font-size: 0.9rem;" title="${i18nText("actions.remove", {}, "Remove")}">✕</button>
-          </div>
-        `,
-          )
-          .join("");
-      }
-
-      function renderHiddenSessionsList() {
-        const container = document.getElementById("hidden-sessions-list");
-        if (!container) return;
-        const hidden = getHiddenSessions();
-
-        // Update count in heading
-        const countEl = document.getElementById("privacy-sessions-count");
-        if (countEl) countEl.textContent = `(${hidden.length})`;
-
-        if (hidden.length === 0) {
-          container.innerHTML =
-            '<em style="color: var(--text-muted); font-size: 0.85rem;">No sessions hidden</em>';
-          return;
-        }
-
-        // Display name, but remove by id
-        container.innerHTML = hidden
-          .map(
-            (item) => `
-          <div style="display: inline-flex; align-items: center; padding: 4px 10px; background: var(--bg); border-radius: 12px; margin: 2px; font-size: 0.85rem;">
-            <span>${escapeHtml(item.name || item.id)}</span>
-            <button onclick="removeHiddenSession('${escapeHtml(item.id).replace(/'/g, "\\'")}')" style="background: none; border: none; color: var(--error); cursor: pointer; margin-left: 6px; font-size: 0.9rem;" title="${i18nText("actions.remove", {}, "Remove")}">✕</button>
-          </div>
-        `,
-          )
-          .join("");
-      }
-
-      function renderHiddenCronsList() {
-        const container = document.getElementById("hidden-crons-list");
-        if (!container) return;
-        const hidden = getHiddenCrons();
-
-        // Update count in heading
-        const countEl = document.getElementById("privacy-crons-count");
-        if (countEl) countEl.textContent = `(${hidden.length})`;
-
-        if (hidden.length === 0) {
-          container.innerHTML = `<em style="color: var(--text-muted); font-size: 0.85rem;">${i18nText("privacy.noCronHidden", {}, "No cron jobs hidden")}</em>`;
-          return;
-        }
-
-        // Display name, but remove by id
-        container.innerHTML = hidden
-          .map(
-            (item) => `
-          <div style="display: inline-flex; align-items: center; padding: 4px 10px; background: var(--bg); border-radius: 12px; margin: 2px; font-size: 0.85rem;">
-            <span>${escapeHtml(item.name || item.id)}</span>
-            <button onclick="removeHiddenCron('${escapeHtml(item.id).replace(/'/g, "\\'")}')" style="background: none; border: none; color: var(--error); cursor: pointer; margin-left: 6px; font-size: 0.9rem;" title="${i18nText("actions.remove", {}, "Remove")}">✕</button>
-          </div>
-        `,
-          )
-          .join("");
-      }
-
-      function openPrivacyModal() {
-        document.getElementById("privacy-modal").classList.remove("hidden");
-        document.getElementById("privacy-modal").classList.add("visible");
-        document.getElementById("privacy-modal-overlay").classList.remove("hidden");
-        document.getElementById("privacy-modal-overlay").classList.add("visible");
-        renderPrivacyLists();
-        // Set checkbox state
-        const hostnameCheckbox = document.getElementById("privacy-hide-hostname");
-        if (hostnameCheckbox) hostnameCheckbox.checked = isHostnameHidden();
-      }
-
-      function closePrivacyModal() {
-        document.getElementById("privacy-modal").classList.remove("visible");
-        document.getElementById("privacy-modal-overlay").classList.remove("visible");
-        setTimeout(() => {
-          document.getElementById("privacy-modal").classList.add("hidden");
-          document.getElementById("privacy-modal-overlay").classList.add("hidden");
         }, 200);
       }
 
@@ -3111,10 +2516,6 @@
 
       // Init - try SSE first, fall back to polling
       async function init() {
-        // Load privacy settings from server first (before rendering any data)
-        await loadPrivacyFromServer();
-        console.log("[Privacy] Settings loaded from server");
-
         connectSSE();
         // Populate version badge from server (single source of truth: package.json)
         fetch("/api/about")
@@ -3127,15 +2528,6 @@
         // Fetch data after short delay to ensure DOM is ready
         // This fixes a race condition on initial page load
         setTimeout(fetchData, 100);
-
-        // Apply privacy settings on load
-        updateHostnameDisplay();
-
-        // Initialize privacy checkbox state
-        const hostnameCheckbox = document.getElementById("privacy-hide-hostname");
-        if (hostnameCheckbox) {
-          hostnameCheckbox.checked = isHostnameHidden();
-        }
 
         // Set up savings window selector
         const windowSelect = document.getElementById("savings-window-select");
@@ -3155,9 +2547,6 @@
 
         window.addEventListener("i18n:updated", () => {
           fetchData();
-          renderHiddenCronsList();
-          renderHiddenSessionsList();
-          renderHiddenTopicsList();
         });
       }
 

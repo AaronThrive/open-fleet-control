@@ -70,7 +70,6 @@ const {
   getOptionalDeps,
 } = require("./vitals");
 const { checkAuth, getUnauthorizedPage } = require("./auth");
-const { loadPrivacySettings, savePrivacySettings } = require("./privacy");
 const {
   loadOperators,
   saveOperators,
@@ -876,45 +875,6 @@ const server = http.createServer((req, res) => {
     const memory = state.getMemoryStats();
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ memory }, null, 2));
-  } else if (pathname === "/api/privacy") {
-    if (req.method === "GET") {
-      const settings = loadPrivacySettings(DATA_DIR);
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(settings, null, 2));
-    } else if (req.method === "POST" || req.method === "PUT") {
-      let body = "";
-      req.on("data", (chunk) => (body += chunk));
-      req.on("end", () => {
-        try {
-          const updates = JSON.parse(body);
-          const current = loadPrivacySettings(DATA_DIR);
-
-          const merged = {
-            version: current.version || 1,
-            hiddenTopics: updates.hiddenTopics ?? current.hiddenTopics ?? [],
-            hiddenSessions: updates.hiddenSessions ?? current.hiddenSessions ?? [],
-            hiddenCrons: updates.hiddenCrons ?? current.hiddenCrons ?? [],
-            hideHostname: updates.hideHostname ?? current.hideHostname ?? false,
-          };
-
-          if (savePrivacySettings(DATA_DIR, merged)) {
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ success: true, settings: merged }));
-          } else {
-            res.writeHead(500, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Failed to save privacy settings" }));
-          }
-        } catch (e) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Invalid JSON: " + e.message }));
-        }
-      });
-      return;
-    } else {
-      res.writeHead(405, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Method not allowed" }));
-    }
-    return;
   } else if (pathname === "/api/docker") {
     // Docker route handlers write the full JSON response themselves.
     const dockerHandler = docker.routes[`${req.method} ${pathname}`];
