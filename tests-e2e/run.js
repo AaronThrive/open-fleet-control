@@ -1,10 +1,11 @@
 #!/usr/bin/env node
+/* global window, document -- used inside page.evaluate() browser contexts */
 /**
  * E2E smoke suite — boots the built server (lib/server.js) against fresh
  * temp state/logs/briefs dirs, drives headless system Chrome via
  * playwright-core, and walks the core fleet journeys:
  *
- *   a. dashboard loads (gate toggle present, LIVE indicator connects)
+ *   a. dashboard loads (overview section present, LIVE indicator connects)
  *   b. mesh: empty state -> API node registration -> node card renders
  *   c. kanban: API task -> card in inbox -> drag to In Progress -> counts
  *   d. evolution: pending lesson -> approve -> gate OFF -> survives restart
@@ -62,9 +63,12 @@ function assert(condition, message) {
 
 /** Navigate the SPA to a hash view and give the partial a tick to mount. */
 async function gotoView(view) {
-  await ctx.page.evaluate((v) => {
-    window.location.hash = v;
-  }, view ? `#view-${view}` : "#");
+  await ctx.page.evaluate(
+    (v) => {
+      window.location.hash = v;
+    },
+    view ? `#view-${view}` : "#",
+  );
   await sleep(100);
 }
 
@@ -75,7 +79,7 @@ async function gotoView(view) {
 async function journeyDashboard() {
   await ctx.page.goto(ctx.baseUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
 
-  await ctx.page.waitForSelector("#validation-gate-toggle", { state: "attached", timeout: 10000 });
+  await ctx.page.waitForSelector("#overview-section", { state: "attached", timeout: 10000 });
 
   await waitFor(
     async () => {
@@ -162,9 +166,7 @@ async function journeyKanban() {
     async () => {
       const counts = await ctx.page.evaluate(() => {
         const read = (status) =>
-          document
-            .querySelector(`.kb-col[data-status="${status}"] .kb-count`)
-            ?.textContent?.trim();
+          document.querySelector(`.kb-col[data-status="${status}"] .kb-count`)?.textContent?.trim();
         return { inbox: read("inbox"), inprogress: read("inprogress") };
       });
       return counts.inbox === "0" && counts.inprogress === "1";
@@ -213,14 +215,23 @@ async function dragCardToColumn(cardSelector, targetStatus) {
 async function journeyEvolution() {
   // Gate defaults ON, so a new lesson lands as 'pending'.
   const gateBefore = await api("/api/fleet/evolution/gate");
-  assert(gateBefore.body?.gate === true, `expected gate ON by default, got ${gateBefore.body?.gate}`);
+  assert(
+    gateBefore.body?.gate === true,
+    `expected gate ON by default, got ${gateBefore.body?.gate}`,
+  );
 
   const seeded = await api("/api/fleet/evolution/lessons", {
     method: "POST",
     body: { title: LESSON_TITLE, body: "Always verify before declaring done.", author: "e2e" },
   });
-  assert(seeded.status === 200 && seeded.body?.lesson?.id, `lesson seed failed: HTTP ${seeded.status}`);
-  assert(seeded.body.lesson.status === "pending", `expected pending lesson, got ${seeded.body.lesson.status}`);
+  assert(
+    seeded.status === 200 && seeded.body?.lesson?.id,
+    `lesson seed failed: HTTP ${seeded.status}`,
+  );
+  assert(
+    seeded.body.lesson.status === "pending",
+    `expected pending lesson, got ${seeded.body.lesson.status}`,
+  );
   ctx.lessonId = seeded.body.lesson.id;
 
   await gotoView("evolution");
@@ -242,14 +253,15 @@ async function journeyEvolution() {
   await ctx.page.click('.evo-tab[data-status="approved"]');
   await ctx.page.waitForSelector(cardSelector, { state: "visible", timeout: 6000 });
 
-  // Toggle the gate OFF via the header switch.
-  await ctx.page.click("#validation-gate-toggle");
+  // Toggle the gate OFF via the Evolution view's gate button (the header
+  // toggle was removed; the control now lives with the Evolution/Settings UI).
+  await ctx.page.click("#evo-gate-toggle");
   await waitFor(
     async () => {
       const gate = await api("/api/fleet/evolution/gate");
       return gate.body?.gate === false;
     },
-    { label: "gate=false after header toggle", timeoutMs: 6000 },
+    { label: "gate=false after evolution gate toggle", timeoutMs: 6000 },
   );
 
   // Restart the server on the same state dirs and port: the gate must persist.
@@ -295,10 +307,10 @@ async function journeyLogs() {
   await ctx.page.waitForSelector("#logs-view-section", { state: "attached", timeout: 10000 });
 
   // Unfiltered: the earlier mutations produced several audit entries.
-  await waitFor(
-    async () => (await ctx.page.locator(".logs-row").count()) >= 3,
-    { label: "at least 3 unfiltered audit rows", timeoutMs: 10000 },
-  );
+  await waitFor(async () => (await ctx.page.locator(".logs-row").count()) >= 3, {
+    label: "at least 3 unfiltered audit rows",
+    timeoutMs: 10000,
+  });
 
   // Filter by action=lesson.approve (change event applies the filter).
   await ctx.page.selectOption("#logs-filter-action", "lesson.approve");
