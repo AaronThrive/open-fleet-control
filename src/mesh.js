@@ -28,6 +28,49 @@ const STATE_REFRESH_EVERY_N_POLLS = 4;
 const VALID_PLATFORMS = ["linux", "windows-wsl", "macos", "unknown"];
 const HOSTNAME_PATTERN = /^[a-z0-9-]+$/;
 const MAX_LABEL_LENGTH = 120;
+const DEFAULT_NODE_PORT = 443;
+
+/**
+ * Effective port of a node record, for identity comparisons.
+ * Registries written before the instance-identity fix may carry records
+ * without a port field (or with a malformed one) — those are treated as the
+ * https default (443), which is exactly what validateNodeInput() would have
+ * assigned them at registration time. This keeps old records matching/merging
+ * sanely against new registrations.
+ *
+ * @param {object|null} record - node-like record ({hostname, port?})
+ * @returns {number}
+ */
+function instancePort(record) {
+  const port = record ? record.port : undefined;
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : DEFAULT_NODE_PORT;
+}
+
+/**
+ * Stable instance identity key: "<hostname>:<port>". Two dashboards on the
+ * same host (e.g. oc-bot-1:3333 and hermes economy on :3334) get distinct
+ * keys, while a legacy record without a port keys identically to a fresh
+ * default-port registration.
+ *
+ * @param {object} record - node-like record ({hostname, port?})
+ * @returns {string}
+ */
+function nodeInstanceKey(record) {
+  return `${record.hostname}:${instancePort(record)}`;
+}
+
+/**
+ * Migration-safe instance comparison: same hostname AND same effective port
+ * (missing/malformed ports default to 443 on either side).
+ *
+ * @param {object|null} a
+ * @param {object|null} b
+ * @returns {boolean}
+ */
+function isSameInstance(a, b) {
+  if (!a || typeof a !== "object" || !b || typeof b !== "object") return false;
+  return a.hostname === b.hostname && instancePort(a) === instancePort(b);
+}
 
 /**
  * Compose a node URL at runtime: https://<hostname>.<magicDnsSuffix>[:port]<path>
@@ -263,12 +306,13 @@ function createMesh(options = {}) {
 
   /**
    * Register a fleet node. Validates all inputs; throws on invalid input
-   * or duplicate hostname. Returns the persisted node record.
+   * or duplicate INSTANCE (hostname + port — two dashboards on one host with
+   * different ports are distinct nodes). Returns the persisted node record.
    */
   function registerNode(input) {
     const validated = validateNodeInput(input);
-    if (nodes.some((n) => n.hostname === validated.hostname)) {
-      throw new Error(`Node already registered: ${validated.hostname}`);
+    if (nodes.some((n) => isSameInstance(n, validated))) {
+      throw new Error(`Node already registered: ${nodeInstanceKey(validated)}`);
     }
     const record = {
       id: crypto.randomUUID(),
@@ -281,11 +325,16 @@ function createMesh(options = {}) {
   }
 
   /**
-   * Unregister a node by id or hostname. Throws when not found.
+   * Unregister a node by id, instance key ("hostname:port"), or bare
+   * hostname (first match — kept for backward compatibility with callers
+   * predating multi-instance hosts). Throws when not found.
    * Returns the removed record.
    */
   function unregisterNode(idOrHostname) {
-    const target = nodes.find((n) => n.id === idOrHostname || n.hostname === idOrHostname);
+    const target = nodes.find(
+      (n) =>
+        n.id === idOrHostname || nodeInstanceKey(n) === idOrHostname || n.hostname === idOrHostname,
+    );
     if (!target) {
       throw new Error(`Unknown node: ${idOrHostname}`);
     }
@@ -618,6 +667,8 @@ module.exports = {
   createMesh,
   composeNodeUrl,
   validateNodeInput,
+  nodeInstanceKey,
+  isSameInstance,
   extractNodeCosts,
   extractNodeVitals,
   LATENCY_SAMPLE_LIMIT,
