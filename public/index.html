@@ -7,112 +7,76 @@
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <link rel="stylesheet" href="css/dashboard.css" />
     <style>
-      /* Header VALIDATION GATE toggle */
-      .gate-toggle {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 5px 12px;
-        border: 1px solid var(--border);
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        letter-spacing: 0.5px;
-        color: var(--text-muted);
-        cursor: pointer;
-        user-select: none;
-        transition:
-          color 0.2s,
-          border-color 0.2s,
-          box-shadow 0.2s;
-      }
-      .gate-toggle .gate-track {
-        position: relative;
-        width: 28px;
-        height: 14px;
-        border-radius: 7px;
-        background: var(--border);
-        transition: background 0.2s;
-      }
-      .gate-toggle .gate-knob {
-        position: absolute;
-        top: 2px;
-        left: 2px;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: var(--text-muted);
-        transition:
-          left 0.2s,
-          background 0.2s;
-      }
-      .gate-toggle.on {
-        color: var(--green);
-        border-color: var(--green);
-        box-shadow: 0 0 8px rgba(0, 255, 102, 0.45);
-      }
-      .gate-toggle.on .gate-track {
-        background: rgba(0, 255, 102, 0.5);
-      }
-      .gate-toggle.on .gate-knob {
-        left: 16px;
-        background: var(--green);
-      }
-      .gate-toggle.off {
-        color: var(--yellow);
-        border-color: var(--yellow);
-        box-shadow: 0 0 8px rgba(255, 178, 36, 0.35);
-      }
-      .gate-toggle.off .gate-track {
-        background: rgba(255, 178, 36, 0.5);
-      }
-      .gate-toggle.off .gate-knob {
-        background: var(--yellow);
-      }
-      .gate-toggle.unknown {
-        opacity: 0.5;
-      }
-
-      /* Compact home overview chips (full sections live on their own pages) */
+      /* Compact home overview cards (vitals merged in; full sections live on
+         their own pages). Uniform grid, quiet styling, skeleton placeholders
+         while data loads instead of dangling "-" values. */
       .overview-chips {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
+        gap: 8px;
       }
       .overview-chip {
         display: flex;
         flex-direction: column;
-        align-items: center;
-        gap: 2px;
-        min-width: 92px;
-        padding: 10px 14px;
+        gap: 3px;
+        padding: 10px 12px;
         background: var(--bg);
         border: 1px solid var(--border);
         border-radius: 8px;
         text-decoration: none;
         color: var(--text);
-        transition:
-          border-color 0.15s,
-          transform 0.15s;
+        min-width: 0;
+        transition: border-color 0.15s;
       }
-      .overview-chip:hover {
+      a.overview-chip:hover {
         border-color: var(--accent);
-        transform: translateY(-1px);
-      }
-      .overview-chip .ov-icon {
-        font-size: 1rem;
-      }
-      .overview-chip .ov-value {
-        font-size: 1.05rem;
-        font-weight: 700;
-        color: var(--accent);
       }
       .overview-chip .ov-label {
-        font-size: 0.65rem;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 0.62rem;
         text-transform: uppercase;
-        letter-spacing: 0.05em;
+        letter-spacing: 0.06em;
         color: var(--text-muted);
-        text-align: center;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .overview-chip .ov-value {
+        font-size: 1rem;
+        font-weight: 700;
+        line-height: 1.2;
+        color: var(--text);
+      }
+      .overview-chip .ov-sub {
+        font-size: 0.65rem;
+        color: var(--text-muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-height: 0.85em;
+      }
+      /* Skeleton placeholder shown until the first data lands */
+      .ov-skel {
+        display: inline-block;
+        color: transparent !important;
+        min-width: 42px;
+        max-width: 56px;
+        min-height: 1.05em;
+        background: var(--border);
+        border-radius: 4px;
+        user-select: none;
+        animation: ov-skel-pulse 1.4s ease-in-out infinite;
+      }
+      @keyframes ov-skel-pulse {
+        0%,
+        100% {
+          opacity: 0.4;
+        }
+        50% {
+          opacity: 0.85;
+        }
       }
     </style>
     <script src="js/lib/morphdom.min.js"></script>
@@ -141,18 +105,6 @@
           <h1 class="page-title" data-i18n="app.title">OpenFleetControl</h1>
         </div>
         <div style="display: flex; align-items: center; gap: 12px">
-          <div
-            class="gate-toggle unknown"
-            id="validation-gate-toggle"
-            role="switch"
-            aria-checked="false"
-            tabindex="0"
-            title="Validation gate: loading..."
-          >
-            <!-- title is owned by the gate script below (gate.titleOn/Off/Loading) -->
-            <span data-i18n="gate.label">VALIDATION GATE</span>
-            <span class="gate-track"><span class="gate-knob"></span></span>
-          </div>
           <div class="status-pill" id="connection-status" title="SSE connection status">
             <div class="pulse" id="connection-pulse"></div>
             <span id="gateway-status" data-i18n="app.connecting">Connecting...</span>
@@ -243,9 +195,9 @@
 
       <!-- Legend & Filters -->
       <main>
-        <!-- Overview: compact home summary. The bulky sections (vitals, LLM
-             gauges, sessions, cron, sub-agents) now live on their own pages
-             (#view-vitals, #view-llm-usage, #view-sessions, #view-cron,
+        <!-- Overview: compact home summary with system vitals merged in.
+             The bulky sections (LLM gauges, sessions, cron, sub-agents) live
+             on their own pages (#view-llm-usage, #view-sessions, #view-cron,
              #view-tokens) loaded by js/views.js. -->
         <div class="section" id="overview-section">
           <div class="vitals-panel">
@@ -257,55 +209,55 @@
               <div class="vitals-uptime">Uptime: <span id="ov-uptime">-</span></div>
             </div>
             <div class="overview-chips">
-              <a class="overview-chip" href="/#view-vitals" title="System Vitals">
-                <span class="ov-icon">⚡</span>
-                <span class="ov-value" id="ov-cpu">-%</span>
-                <span class="ov-label">CPU</span>
-              </a>
-              <a class="overview-chip" href="/#view-vitals" title="System Vitals">
-                <span class="ov-icon">🧠</span>
-                <span class="ov-value" id="ov-mem">-%</span>
-                <span class="ov-label">Mem</span>
-              </a>
-              <a class="overview-chip" href="/#view-vitals" title="System Vitals">
-                <span class="ov-icon">💾</span>
-                <span class="ov-value" id="ov-disk">-%</span>
-                <span class="ov-label">Disk</span>
-              </a>
-              <a class="overview-chip" href="/#view-vitals" title="System Vitals">
-                <span class="ov-icon">🌡️</span>
-                <span class="ov-value" id="ov-temp">-</span>
-                <span class="ov-label">Temp</span>
-              </a>
+              <div class="overview-chip" title="CPU usage and load average">
+                <span class="ov-label">⚡ CPU</span>
+                <span class="ov-value ov-skel" id="ov-cpu"></span>
+                <span class="ov-sub" id="ov-cpu-sub"></span>
+              </div>
+              <div class="overview-chip" title="Memory used">
+                <span class="ov-label">🧠 Memory</span>
+                <span class="ov-value ov-skel" id="ov-mem"></span>
+                <span class="ov-sub" id="ov-mem-sub"></span>
+              </div>
+              <div class="overview-chip" title="Disk used">
+                <span class="ov-label">💾 Disk</span>
+                <span class="ov-value ov-skel" id="ov-disk"></span>
+                <span class="ov-sub" id="ov-disk-sub"></span>
+              </div>
+              <div class="overview-chip" title="CPU temperature">
+                <span class="ov-label">🌡️ Temp</span>
+                <span class="ov-value ov-skel" id="ov-temp"></span>
+                <span class="ov-sub" id="ov-temp-sub"></span>
+              </div>
               <a class="overview-chip" href="/#view-sessions" title="Sessions">
-                <span class="ov-icon">📡</span>
-                <span class="ov-value" id="ov-sessions-count">-</span>
-                <span class="ov-label" id="ov-sessions-live">Sessions</span>
+                <span class="ov-label">📡 Sessions</span>
+                <span class="ov-value ov-skel" id="ov-sessions-count"></span>
+                <span class="ov-sub" id="ov-sessions-live"></span>
               </a>
               <a class="overview-chip" href="/#view-sessions" title="Active sub-agents">
-                <span class="ov-icon">🦞</span>
-                <span class="ov-value" id="ov-subagent-count">-</span>
-                <span class="ov-label">Sub-agents</span>
+                <span class="ov-label">🦞 Sub-agents</span>
+                <span class="ov-value ov-skel" id="ov-subagent-count"></span>
+                <span class="ov-sub"></span>
               </a>
               <a class="overview-chip" href="/#view-cron" title="Cron Jobs">
-                <span class="ov-icon">⏰</span>
-                <span class="ov-value" id="ov-cron-count">-</span>
-                <span class="ov-label" id="ov-cron-enabled">Cron</span>
+                <span class="ov-label">⏰ Cron</span>
+                <span class="ov-value ov-skel" id="ov-cron-count"></span>
+                <span class="ov-sub" id="ov-cron-enabled"></span>
               </a>
-              <a class="overview-chip" href="/#view-llm-usage" title="LLM Fuel Gauges">
-                <span class="ov-icon">🔮</span>
-                <span class="ov-value" id="ov-llm-session">-%</span>
-                <span class="ov-label">Session</span>
+              <a class="overview-chip" href="/#view-llm-usage" title="LLM fuel — session window">
+                <span class="ov-label">🔮 LLM Session</span>
+                <span class="ov-value ov-skel" id="ov-llm-session"></span>
+                <span class="ov-sub"></span>
               </a>
-              <a class="overview-chip" href="/#view-llm-usage" title="LLM Fuel Gauges">
-                <span class="ov-icon">📅</span>
-                <span class="ov-value" id="ov-llm-weekly">-%</span>
-                <span class="ov-label">Weekly</span>
+              <a class="overview-chip" href="/#view-llm-usage" title="LLM fuel — weekly window">
+                <span class="ov-label">📅 LLM Weekly</span>
+                <span class="ov-value ov-skel" id="ov-llm-weekly"></span>
+                <span class="ov-sub"></span>
               </a>
               <a class="overview-chip" href="/#view-tokens" title="Tokens &amp; Cost">
-                <span class="ov-icon">🎫</span>
-                <span class="ov-value" id="ov-tokens-24h">-</span>
-                <span class="ov-label">Tokens 24h</span>
+                <span class="ov-label">🎫 Tokens 24h</span>
+                <span class="ov-value ov-skel" id="ov-tokens-24h"></span>
+                <span class="ov-sub"></span>
               </a>
             </div>
           </div>
@@ -332,255 +284,10 @@
           </button>
         </div>
 
-        <!-- Memory Section -->
-        <div class="section" id="memory-section">
-          <div class="section-header">
-            <div class="section-title">
-              🧠 Memory <span class="section-count" id="memory-count">0 files</span>
-            </div>
-          </div>
-
-          <!-- Memory Filters -->
-          <div class="section-filters">
-            <div class="filter-group">
-              <span class="filter-label">Type:</span>
-              <button
-                class="filter-btn active"
-                data-filter="all"
-                data-group="memory-type"
-                onclick="setMemoryFilter('type', 'all')"
-              >
-                All
-              </button>
-              <button
-                class="filter-btn"
-                data-filter="daily"
-                data-group="memory-type"
-                onclick="setMemoryFilter('type', 'daily')"
-              >
-                📅 Daily Logs
-              </button>
-              <button
-                class="filter-btn"
-                data-filter="state"
-                data-group="memory-type"
-                onclick="setMemoryFilter('type', 'state')"
-              >
-                📊 State Files
-              </button>
-            </div>
-            <div class="filter-group">
-              <span class="filter-label">Age:</span>
-              <button
-                class="filter-btn active"
-                data-filter="all"
-                data-group="memory-age"
-                onclick="setMemoryFilter('age', 'all')"
-              >
-                All
-              </button>
-              <button
-                class="filter-btn"
-                data-filter="today"
-                data-group="memory-age"
-                onclick="setMemoryFilter('age', 'today')"
-              >
-                Today
-              </button>
-              <button
-                class="filter-btn"
-                data-filter="week"
-                data-group="memory-age"
-                onclick="setMemoryFilter('age', 'week')"
-              >
-                This Week
-              </button>
-              <button
-                class="filter-btn"
-                data-filter="older"
-                data-group="memory-age"
-                onclick="setMemoryFilter('age', 'older')"
-              >
-                Older
-              </button>
-            </div>
-          </div>
-
-          <div class="vitals-panel">
-            <div class="vitals-grid">
-              <!-- MEMORY.md -->
-              <div class="vital-card">
-                <div class="vital-header">
-                  <span class="vital-label">📜 MEMORY.md</span>
-                </div>
-                <div class="vital-detail" style="margin-top: 8px">
-                  <div class="vital-detail-item">
-                    <span class="vital-detail-value" id="memory-md-size">-</span>
-                    <span class="vital-detail-label">size</span>
-                  </div>
-                  <div class="vital-detail-item">
-                    <span class="vital-detail-value" id="memory-md-lines">-</span>
-                    <span class="vital-detail-label">lines</span>
-                  </div>
-                </div>
-                <div style="margin-top: 12px; font-size: 0.75rem; color: var(--text-muted)">
-                  Long-term curated memories
-                </div>
-              </div>
-
-              <!-- Daily Files -->
-              <div class="vital-card">
-                <div class="vital-header">
-                  <span class="vital-label">📅 Daily Notes</span>
-                </div>
-                <div class="vital-detail" style="margin-top: 8px">
-                  <div class="vital-detail-item">
-                    <span class="vital-detail-value" id="memory-total-files">-</span>
-                    <span class="vital-detail-label">files</span>
-                  </div>
-                  <div class="vital-detail-item">
-                    <span class="vital-detail-value" id="memory-total-size">-</span>
-                    <span class="vital-detail-label">total</span>
-                  </div>
-                </div>
-                <div style="margin-top: 12px; font-size: 0.75rem; color: var(--text-muted)">
-                  Raw logs by date
-                </div>
-              </div>
-
-              <!-- Recent Files -->
-              <div class="vital-card" style="grid-column: span 2">
-                <div class="vital-header">
-                  <span class="vital-label">🕐 Recent Memory Files</span>
-                </div>
-                <div id="memory-recent-files" style="margin-top: 8px">
-                  <em style="color: var(--text-muted); font-size: 0.8rem">Loading...</em>
-                </div>
-              </div>
-            </div>
-
-            <div
-              style="
-                margin-top: 16px;
-                padding-top: 16px;
-                border-top: 1px solid var(--border);
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 12px;
-                flex-wrap: wrap;
-              "
-            >
-              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
-                <span style="font-size: 0.8rem; color: var(--text-muted)">
-                  🧠 Long-term memories:
-                </span>
-                <span id="memory-cortex-total" style="font-size: 0.85rem; font-weight: 600">–</span>
-                <span
-                  id="memory-cortex-scopes"
-                  style="display: inline-flex; gap: 6px; flex-wrap: wrap"
-                ></span>
-              </div>
-              <a
-                href="/#view-cortex"
-                style="
-                  font-size: 0.8rem;
-                  color: var(--accent);
-                  text-decoration: none;
-                  font-weight: 600;
-                  white-space: nowrap;
-                "
-                >Open Memory Browser →</a
-              >
-            </div>
-            <script>
-              // Live long-term memory summary (cortex stats). Self-contained:
-              // builds DOM via textContent only, fails quietly to "offline".
-              (function () {
-                const totalEl = document.getElementById("memory-cortex-total");
-                const scopesEl = document.getElementById("memory-cortex-scopes");
-                if (!totalEl || !scopesEl) return;
-                fetch("/api/fleet/cortex")
-                  .then((res) => (res.ok ? res.json() : null))
-                  .then((state) => {
-                    const stats = state && state.memory && state.memory.stats;
-                    if (!stats || typeof stats.totalMemories !== "number") {
-                      totalEl.textContent = "offline";
-                      totalEl.style.color = "var(--text-muted)";
-                      return;
-                    }
-                    totalEl.textContent = `${stats.totalMemories} memories`;
-                    const scopes = Object.entries(stats.byScope || {})
-                      .sort((a, b) => b[1] - a[1])
-                      .slice(0, 4);
-                    for (const [scope, count] of scopes) {
-                      const chip = document.createElement("span");
-                      chip.textContent = `${scope} · ${count}`;
-                      chip.style.cssText =
-                        "border: 1px solid var(--border); border-radius: 999px; " +
-                        "padding: 1px 8px; font-size: 0.7rem; color: var(--text-muted)";
-                      scopesEl.appendChild(chip);
-                    }
-                  })
-                  .catch(() => {
-                    totalEl.textContent = "offline";
-                    totalEl.style.color = "var(--text-muted)";
-                  });
-              })();
-            </script>
-          </div>
-        </div>
-
-        <!-- Cerebro and Operators moved to their own tabs: #view-cerebro and
-             #view-operators (public/js/views/cerebro.js + operators.js). -->
-
-        <!-- About Section -->
-        <div class="section" id="about-section">
-          <div class="section-header">
-            <div class="section-title">ℹ️ About</div>
-          </div>
-          <div class="vitals-panel">
-            <div style="text-align: center; padding: 20px 0">
-              <div style="font-size: 3rem; margin-bottom: 12px">🦞</div>
-              <h2 style="font-size: 1.5rem; font-weight: 600; margin-bottom: 8px">
-                OpenFleetControl
-              </h2>
-              <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 20px">
-                A Starcraft-inspired dashboard for OpenClaw orchestration
-              </p>
-
-              <div style="display: flex; justify-content: center; gap: 12px; margin-bottom: 24px">
-                <span
-                  style="
-                    padding: 4px 12px;
-                    background: var(--bg);
-                    border-radius: 12px;
-                    font-size: 0.75rem;
-                  "
-                  id="app-version"
-                  >v...</span
-                >
-                <span
-                  style="
-                    padding: 4px 12px;
-                    background: rgba(63, 185, 80, 0.15);
-                    color: var(--green);
-                    border-radius: 12px;
-                    font-size: 0.75rem;
-                  "
-                  >MIT License</span
-                >
-              </div>
-
-              <div style="margin-bottom: 24px">
-                <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 8px">
-                  BUILT BY
-                </div>
-                <span style="color: var(--accent); font-size: 1rem">Aaron May</span>
-              </div>
-            </div>
-          </div>
-        </div>
+        <!-- Memory moved to its own tab: #view-memory (public/js/views/memory.js).
+             Cerebro and Operators moved to their own tabs: #view-cerebro and
+             #view-operators (public/js/views/cerebro.js + operators.js).
+             About now lives at the bottom of the Settings page (#view-settings). -->
       </main>
 
       <div class="refresh-bar">
@@ -768,15 +475,11 @@
       </div>
     </div>
 
-      </div>
-    </div>
-
     <script>
       // State
-      // The full sessions/cron/vitals/LLM/cerebro/operators sections live on
-      // their own pages (js/views/*.js); home only keeps compact overview
-      // chips plus the memory section and the global modals.
-      let memoryFilters = { type: "all", age: "all" };
+      // The full sessions/cron/memory/LLM/cerebro/operators sections live on
+      // their own pages (js/views/*.js); home only keeps the compact overview
+      // cards (with vitals merged in) plus the global modals.
       let sessionsData = []; // last sessions slice
       let cronData = []; // last cron slice (overview chips)
       let sidebarCollapsed = false;
@@ -895,28 +598,6 @@
         });
       });
 
-      // Memory filters
-      function setMemoryFilter(group, value) {
-        memoryFilters[group] = value;
-
-        document.querySelectorAll(`[data-group="memory-${group}"]`).forEach((btn) => {
-          btn.classList.toggle("active", btn.dataset.filter === value);
-        });
-        applyMemoryFilters();
-      }
-
-      function applyMemoryFilters() {
-        document.querySelectorAll(".memory-item").forEach((item) => {
-          const type = item.dataset.type;
-          const age = item.dataset.age;
-
-          let showType = memoryFilters.type === "all" || type === memoryFilters.type;
-          let showAge = memoryFilters.age === "all" || age === memoryFilters.age;
-
-          item.classList.toggle("hidden-by-filter", !(showType && showAge));
-        });
-      }
-
       // Extract links from text
       function extractLinks(text) {
         const links = [];
@@ -989,7 +670,6 @@
         if (state.capacity) renderCapacity(state.capacity);
         if (state.llmUsage) renderLlmUsage(state.llmUsage);
         if (state.cron) renderCron(state.cron);
-        if (state.memory) renderMemory(state.memory);
         if (state.subagents) renderSubagents(state.subagents);
       }
 
@@ -1011,15 +691,12 @@
           fetch("/api/cron")
             .then((r) => r.json())
             .catch(() => null),
-          fetch("/api/memory")
-            .then((r) => r.json())
-            .catch(() => null),
           fetch("/api/subagents")
             .then((r) => r.json())
             .catch(() => null),
         ];
 
-        const [vitals, sessions, llm, cron, memory, subagents] = await Promise.all(promises);
+        const [vitals, sessions, llm, cron, subagents] = await Promise.all(promises);
 
         if (vitals?.vitals) renderVitals(vitals.vitals);
         if (sessions?.sessions)
@@ -1027,7 +704,6 @@
         if (sessions?.tokenStats) renderTokenStats(sessions.tokenStats);
         if (llm) renderLlmUsage(llm);
         if (cron?.cron) renderCron(cron.cron);
-        if (memory?.memory) renderMemory(memory.memory);
         if (subagents?.subagents) renderSubagents(subagents.subagents);
 
         const now = new Date().toLocaleTimeString();
@@ -1052,25 +728,23 @@
         const live =
           statusCounts?.live ??
           (Array.isArray(sessions) ? sessions.filter((s) => s.active).length : null);
-        $set("ov-sessions-count", "textContent", total ?? "—");
+        setOv("ov-sessions-count", total ?? "—");
         $set(
           "ov-sessions-live",
           "textContent",
-          live == null
-            ? i18nText("overview.sessions", {}, "Sessions")
-            : i18nText("overview.sessionsLive", { live }, "{live} live"),
+          live == null ? "" : i18nText("overview.sessionsLive", { live }, "{live} live"),
         );
       }
 
       function renderCron(cron) {
         if (!Array.isArray(cron)) {
-          $set("ov-cron-count", "textContent", "—");
-          $set("ov-cron-enabled", "textContent", i18nText("overview.cron", {}, "Cron"));
+          setOv("ov-cron-count", "—");
+          $set("ov-cron-enabled", "textContent", "");
           return;
         }
         cronData = cron;
         const enabled = cronData.filter((c) => c.enabled !== false).length;
-        $set("ov-cron-count", "textContent", cronData.length);
+        setOv("ov-cron-count", cronData.length);
         $set(
           "ov-cron-enabled",
           "textContent",
@@ -1130,7 +804,7 @@
         $set("nav-monthly-cost", "textContent", stats.estMonthlyCost || "-");
         $set("nav-avg-tokens", "textContent", stats.avgTokensPerSession || "-");
         $set("nav-avg-cost", "textContent", stats.avgCostPerSession || "-");
-        $set("ov-tokens-24h", "textContent", stats.total ?? "—");
+        setOv("ov-tokens-24h", stats.total ?? "—");
 
         // Load preference and update selector
         const savedWindow = getSavingsWindowPref();
@@ -1168,24 +842,44 @@
         }
       }
 
-      // Slim home vitals: the full vitals panel moved to #view-vitals.
-      // Home shows hostname/uptime plus CPU/Mem/Disk/Temp overview chips.
+      // Home vitals: the System Vitals view is merged into the overview cards.
+      // CPU/Mem/Disk/Temp values plus compact sub-details (load, used-of-total).
       function renderVitals(vitals) {
         if (!vitals) return;
 
         $set("ov-hostname", "textContent", vitals.hostname || "-");
         $set("ov-uptime", "textContent", vitals.uptime || "-");
 
-        $set("ov-cpu", "textContent", (vitals.cpu?.usage ?? "-") + "%");
-        $set("ov-mem", "textContent", (vitals.memory?.percent ?? "-") + "%");
-        $set("ov-disk", "textContent", (vitals.disk?.percent ?? "-") + "%");
+        const pct = (value) => (value === null || value === undefined ? "\u2014" : value + "%");
+        setOv("ov-cpu", pct(vitals.cpu?.usage));
+        setOv("ov-mem", pct(vitals.memory?.percent));
+        setOv("ov-disk", pct(vitals.disk?.percent));
+
+        const loadAvg = Array.isArray(vitals.cpu?.loadAvg) ? vitals.cpu.loadAvg : [];
+        const cpuSub = [];
+        if (loadAvg[0] !== undefined) cpuSub.push(`load ${Number(loadAvg[0]).toFixed(2)}`);
+        if (vitals.cpu?.cores) cpuSub.push(`${vitals.cpu.cores} cores`);
+        $set("ov-cpu-sub", "textContent", cpuSub.join(" \u00b7 "));
+
+        const usedOfTotal = (slice) =>
+          slice?.usedFormatted && slice?.totalFormatted
+            ? `${slice.usedFormatted} of ${slice.totalFormatted}`
+            : "";
+        $set("ov-mem-sub", "textContent", usedOfTotal(vitals.memory));
+        $set("ov-disk-sub", "textContent", usedOfTotal(vitals.disk));
 
         const temp = vitals.temperature;
-        $set(
-          "ov-temp",
-          "textContent",
-          temp !== null && temp !== undefined && temp > 0 ? temp + "\u00b0C" : "-",
-        );
+        if (temp !== null && temp !== undefined && temp > 0) {
+          setOv("ov-temp", temp + "\u00b0C");
+          $set(
+            "ov-temp-sub",
+            "textContent",
+            temp < 50 ? "Cool" : temp < 70 ? "Normal" : temp < 85 ? "Warm" : "Hot!",
+          );
+        } else {
+          setOv("ov-temp", "\u2014");
+          $set("ov-temp-sub", "textContent", vitals.temperatureNote || "");
+        }
       }
 
       // Safe DOM helper - sets property only if element exists
@@ -1199,57 +893,33 @@
         return el;
       }
 
+      // Overview-card value setter: fills the text and clears the loading
+      // skeleton so dashes never sprawl while data is still in flight.
+      function setOv(id, value) {
+        const el = document.getElementById(id);
+        if (!el) return null;
+        el.classList.remove("ov-skel");
+        el.textContent = value;
+        return el;
+      }
+
       // Slim home LLM usage: the fuel gauges + routing stats moved to
       // #view-llm-usage. Home shows the Claude session/weekly chips only.
       function renderLlmUsage(data) {
         try {
           if (!data) return;
           if (data.errorType === "auth" || data.claude?.session?.error || data.error) {
-            $set("ov-llm-session", "textContent", "N/A");
-            $set("ov-llm-weekly", "textContent", "N/A");
+            setOv("ov-llm-session", "N/A");
+            setOv("ov-llm-weekly", "N/A");
             return;
           }
           // "—" when the field is absent — a missing percent is not 0%.
           const sessionPct = data.claude?.session?.usedPct;
           const weeklyPct = data.claude?.weekly?.usedPct;
-          $set("ov-llm-session", "textContent", sessionPct == null ? "—" : sessionPct + "%");
-          $set("ov-llm-weekly", "textContent", weeklyPct == null ? "—" : weeklyPct + "%");
+          setOv("ov-llm-session", sessionPct == null ? "—" : sessionPct + "%");
+          setOv("ov-llm-weekly", weeklyPct == null ? "—" : weeklyPct + "%");
         } catch (e) {
           console.error("[renderLlmUsage] Error:", e.message);
-        }
-      }
-
-      function renderMemory(memory) {
-        $set("memory-count", "textContent", `${memory.totalFiles} files`);
-        $set("nav-memory-count", "textContent", memory.totalFiles);
-
-        $set("memory-md-size", "textContent", memory.memoryMdSizeFormatted || "-");
-        $set("memory-md-lines", "textContent", memory.memoryMdLines || "-");
-
-        $set("memory-total-files", "textContent", memory.totalFiles || "-");
-        $set("memory-total-size", "textContent", memory.totalSizeFormatted || "-");
-
-        // Recent files
-        const recentEl = document.getElementById("memory-recent-files");
-        if (memory.recentFiles && memory.recentFiles.length > 0) {
-          smartUpdate(
-            recentEl,
-            memory.recentFiles
-              .map(
-                (f) => `
-                    <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 0.8rem;">
-                        <span style="color: var(--accent);">📄 ${escapeHtml(f.name)}</span>
-                        <span style="color: var(--text-muted);">${f.sizeFormatted} • ${f.age}</span>
-                    </div>
-                `,
-              )
-              .join(""),
-          );
-        } else {
-          smartUpdate(
-            recentEl,
-            '<em style="color: var(--text-muted); font-size: 0.8rem;">No memory files yet</em>',
-          );
         }
       }
 
@@ -1863,7 +1533,7 @@
       // (active sub-agents strip). Home shows the count chip only.
       function renderSubagents(subagents) {
         // Defensive: a missing slice means "no data", not zero sub-agents.
-        $set("ov-subagent-count", "textContent", Array.isArray(subagents) ? subagents.length : "—");
+        setOv("ov-subagent-count", Array.isArray(subagents) ? subagents.length : "—");
       }
 
       // Quick Actions
@@ -1932,14 +1602,6 @@
       // Init - try SSE first, fall back to polling
       async function init() {
         connectSSE();
-        // Populate version badge from server (single source of truth: package.json)
-        fetch("/api/about")
-          .then((r) => r.json())
-          .then((d) => {
-            const el = document.getElementById("app-version");
-            if (el && d.version) el.textContent = "v" + d.version;
-          })
-          .catch(() => {});
         // Fetch data after short delay to ensure DOM is ready
         // This fixes a race condition on initial page load
         setTimeout(fetchData, 100);
@@ -1971,112 +1633,6 @@
       } else {
         setTimeout(init, 0);
       }
-    </script>
-
-    <!-- Header VALIDATION GATE toggle (Evolution lessons approval gate) -->
-    <script>
-      (function () {
-        "use strict";
-
-        const toggle = document.getElementById("validation-gate-toggle");
-        if (!toggle) return;
-
-        const t = (key, params = {}, fallback = key) =>
-          window.I18N?.t ? window.I18N.t(key, params, fallback) : fallback;
-
-        let gateState = null; // null = unknown
-        let busy = false;
-
-        function renderGate() {
-          toggle.classList.toggle("on", gateState === true);
-          toggle.classList.toggle("off", gateState === false);
-          toggle.classList.toggle("unknown", gateState === null);
-          toggle.setAttribute("aria-checked", gateState === true ? "true" : "false");
-          toggle.title =
-            gateState === true
-              ? t(
-                  "gate.titleOn",
-                  {},
-                  "Validation gate ON — lessons require approval (click to allow autonomous merge)",
-                )
-              : gateState === false
-                ? t(
-                    "gate.titleOff",
-                    {},
-                    "Validation gate OFF — autonomous merge (click to require approval)",
-                  )
-                : t("gate.titleLoading", {}, "Validation gate: loading...");
-        }
-
-        function fetchGate() {
-          fetch("/api/fleet/evolution/gate")
-            .then((r) => (r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))))
-            .then((d) => {
-              gateState = !!d.gate;
-              renderGate();
-            })
-            .catch((e) => console.error("[Gate] Failed to fetch gate state:", e));
-        }
-
-        async function flipGate() {
-          if (busy || gateState === null) return;
-          busy = true;
-          const previous = gateState;
-          gateState = !gateState; // optimistic
-          renderGate();
-          try {
-            const res = await fetch("/api/fleet/evolution/gate", {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ gate: gateState }),
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data.error || "HTTP " + res.status);
-            if (typeof showToast === "function") {
-              showToast(
-                gateState
-                  ? t("gate.toastOn", {}, "Validation gate ON — lessons require approval")
-                  : t("gate.toastOff", {}, "Validation gate OFF — autonomous merge"),
-              );
-            }
-          } catch (e) {
-            gateState = previous; // revert
-            renderGate();
-            if (typeof showToast === "function") {
-              showToast(
-                t("gate.updateFailed", { message: e.message }, "Gate update failed: {message}"),
-                "error",
-              );
-            }
-          } finally {
-            busy = false;
-          }
-        }
-
-        toggle.addEventListener("click", flipGate);
-        toggle.addEventListener("keydown", (e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            flipGate();
-          }
-        });
-
-        // Re-render the localized title when the locale changes.
-        window.addEventListener("i18n:updated", renderGate);
-
-        // Stay in sync with SSE evolution events (re-dispatched on window) —
-        // gate.toggle events carry the new state; anything else, refetch.
-        window.addEventListener("fleet:evolution", (e) => {
-          if (e.detail && e.detail.type === "gate.toggle" && typeof e.detail.gate === "boolean") {
-            gateState = e.detail.gate;
-            renderGate();
-          } else {
-            fetchGate();
-          }
-        });
-
-        fetchGate();
-      })();
     </script>
 
     <!-- Toast notifications container -->
