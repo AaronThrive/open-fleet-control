@@ -1,108 +1,64 @@
 <!-- Briefs View Partial -->
 <div class="section" id="briefs-view-section">
   <style>
+    #briefs-view-section [hidden] {
+      display: none !important;
+    }
     #briefs-view-section .briefs-layout {
       display: flex;
+      flex-direction: column;
       flex: 1;
-      gap: 16px;
+      gap: 14px;
       margin-top: 16px;
       min-height: 0;
     }
-    #briefs-view-section .briefs-layout[hidden] {
-      display: none;
+    #briefs-view-section .briefs-toolbar {
+      display: flex;
+      justify-content: flex-end;
     }
-    /* Left pane — file list */
-    #briefs-view-section .briefs-list-pane {
-      width: 260px;
-      flex-shrink: 0;
+    #briefs-view-section .briefs-new-btn {
+      font-weight: 600;
+    }
+    /* Row + detail-panel actions */
+    #briefs-view-section .briefs-row-actions,
+    #briefs-view-section .briefs-detail-actions {
+      display: inline-flex;
+      gap: 6px;
+    }
+    #briefs-view-section .briefs-detail {
       display: flex;
       flex-direction: column;
       gap: 10px;
     }
-    #briefs-view-section .briefs-new-btn {
-      width: 100%;
-      font-weight: 600;
-    }
-    #briefs-view-section .briefs-list {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      overflow-y: auto;
-      max-height: 60vh;
-    }
-    #briefs-view-section .briefs-list-item {
-      display: flex;
-      flex-direction: column;
-      gap: 3px;
-      padding: 10px 12px;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      cursor: pointer;
-      text-align: left;
-      font: inherit;
-      color: var(--text);
-      transition:
-        border-color 0.15s ease,
-        background 0.15s ease;
-    }
-    #briefs-view-section .briefs-list-item:hover {
-      border-color: var(--accent-2);
-      background: var(--card-hover);
-    }
-    #briefs-view-section .briefs-list-item.active {
-      border-color: var(--accent);
-      background: rgba(var(--accent-rgb), 0.08);
-    }
-    #briefs-view-section .briefs-item-name {
-      font-family: "SF Mono", "Fira Code", Consolas, monospace;
+    #briefs-view-section .briefs-detail-loading {
       font-size: 0.78rem;
-      color: var(--accent);
-      word-break: break-all;
-    }
-    #briefs-view-section .briefs-list-item.active .briefs-item-name {
-      color: var(--accent);
-    }
-    #briefs-view-section .briefs-item-heading {
-      font-size: 0.82rem;
-      font-weight: 600;
-      color: var(--text);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    #briefs-view-section .briefs-item-meta {
-      font-size: 0.7rem;
       color: var(--text-muted);
     }
-    /* Right pane — editor */
-    #briefs-view-section .briefs-editor-pane {
-      flex: 1;
-      min-width: 0;
+    #briefs-view-section .briefs-edit-btn {
+      padding: 4px 12px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      border-radius: 6px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+    }
+    #briefs-view-section .briefs-edit-btn:hover:not(:disabled) {
+      border-color: rgba(var(--accent-rgb), 0.6);
+      color: var(--accent);
+    }
+    /* Editor (below the list) */
+    #briefs-view-section .briefs-editor {
       display: flex;
       flex-direction: column;
+      min-height: 0;
       border: 1px solid var(--border);
       border-radius: 10px;
       background: var(--bg);
       overflow: hidden;
-    }
-    #briefs-view-section .briefs-editor-placeholder {
-      flex: 1;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 320px;
-      color: var(--text-muted);
-      font-size: 0.85rem;
-    }
-    #briefs-view-section .briefs-editor {
-      display: flex;
-      flex-direction: column;
-      flex: 1;
-      min-height: 0;
-    }
-    #briefs-view-section .briefs-editor[hidden] {
-      display: none;
     }
     #briefs-view-section .briefs-editor-toolbar {
       display: flex;
@@ -177,6 +133,25 @@
     #briefs-view-section .briefs-delete-btn:hover {
       border-color: var(--red);
     }
+    #briefs-view-section .briefs-delete-btn.small {
+      padding: 4px 12px;
+      font-size: 0.72rem;
+    }
+    #briefs-view-section .briefs-close-btn {
+      padding: 5px 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      border-radius: 6px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    #briefs-view-section .briefs-close-btn:hover {
+      border-color: rgba(var(--accent-rgb), 0.6);
+      color: var(--text);
+    }
     #briefs-view-section .briefs-textarea {
       flex: 1;
       width: 100%;
@@ -194,15 +169,18 @@
     #briefs-view-section .briefs-textarea:focus {
       box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.35);
     }
-    /* Markdown preview */
+    /* Markdown preview (editor preview mode AND row detail panels) */
     #briefs-view-section .briefs-preview {
       flex: 1;
-      min-height: 380px;
-      padding: 16px 20px;
+      padding: 4px 2px;
       overflow-y: auto;
       font-size: 0.85rem;
       line-height: 1.65;
       color: var(--text);
+    }
+    #briefs-view-section .briefs-editor .briefs-preview {
+      min-height: 380px;
+      padding: 16px 20px;
     }
     #briefs-view-section .briefs-preview h1,
     #briefs-view-section .briefs-preview h2,
@@ -312,14 +290,6 @@
         transform: translateY(0);
       }
     }
-    @media (max-width: 760px) {
-      #briefs-view-section .briefs-layout {
-        flex-direction: column;
-      }
-      #briefs-view-section .briefs-list-pane {
-        width: 100%;
-      }
-    }
   </style>
   <section class="view-panel">
     <div class="view-header">
@@ -346,7 +316,7 @@
       </button>
     </div>
     <div class="briefs-layout" id="briefs-layout" hidden>
-      <aside class="briefs-list-pane">
+      <div class="briefs-toolbar">
         <button
           class="btn-primary briefs-new-btn"
           id="briefs-new-btn"
@@ -355,75 +325,78 @@
         >
           + New brief
         </button>
-        <div class="briefs-list" id="briefs-list"></div>
-      </aside>
-      <div class="briefs-editor-pane">
-        <div
-          class="briefs-editor-placeholder"
-          id="briefs-editor-placeholder"
-          data-i18n="views.briefs.placeholder"
-        >
-          Select a brief to view or edit
-        </div>
-        <div class="briefs-editor" id="briefs-editor" hidden>
-          <div class="briefs-editor-toolbar">
-            <div class="briefs-editor-name">
-              <span id="briefs-editor-filename"></span>
-              <span
-                class="briefs-dirty-dot"
-                id="briefs-dirty-dot"
-                hidden
-                title="Unsaved changes"
-                data-i18n-title="views.briefs.unsaved"
-                >●</span
-              >
-            </div>
-            <div class="briefs-editor-actions">
-              <div class="briefs-mode-toggle" role="tablist">
-                <button
-                  class="briefs-mode-btn active"
-                  id="briefs-mode-edit"
-                  type="button"
-                  data-i18n="views.briefs.edit"
-                >
-                  Edit
-                </button>
-                <button
-                  class="briefs-mode-btn"
-                  id="briefs-mode-preview"
-                  type="button"
-                  data-i18n="views.briefs.preview"
-                >
-                  Preview
-                </button>
-              </div>
-              <button
-                class="btn-primary briefs-save-btn"
-                id="briefs-save-btn"
-                type="button"
-                data-i18n="views.briefs.save"
-              >
-                Save
-              </button>
-              <button
-                class="briefs-delete-btn"
-                id="briefs-delete-btn"
-                type="button"
-                data-i18n="views.briefs.delete"
-              >
-                Delete
-              </button>
-            </div>
+      </div>
+
+      <!-- Detail list host (built by views/briefs.js via the shared component) -->
+      <div id="briefs-list"></div>
+
+      <!-- Editor (preserved v1.x capability; opened via the Edit actions) -->
+      <div class="briefs-editor" id="briefs-editor" hidden>
+        <div class="briefs-editor-toolbar">
+          <div class="briefs-editor-name">
+            <span id="briefs-editor-filename"></span>
+            <span
+              class="briefs-dirty-dot"
+              id="briefs-dirty-dot"
+              hidden
+              title="Unsaved changes"
+              data-i18n-title="views.briefs.unsaved"
+              >●</span
+            >
           </div>
-          <textarea
-            class="briefs-textarea"
-            id="briefs-textarea"
-            spellcheck="false"
-            placeholder="Write markdown here..."
-            data-i18n-placeholder="views.briefs.markdownPlaceholder"
-          ></textarea>
-          <div class="briefs-preview" id="briefs-preview" hidden></div>
+          <div class="briefs-editor-actions">
+            <div class="briefs-mode-toggle" role="tablist">
+              <button
+                class="briefs-mode-btn active"
+                id="briefs-mode-edit"
+                type="button"
+                data-i18n="views.briefs.edit"
+              >
+                Edit
+              </button>
+              <button
+                class="briefs-mode-btn"
+                id="briefs-mode-preview"
+                type="button"
+                data-i18n="views.briefs.preview"
+              >
+                Preview
+              </button>
+            </div>
+            <button
+              class="btn-primary briefs-save-btn"
+              id="briefs-save-btn"
+              type="button"
+              data-i18n="views.briefs.save"
+            >
+              Save
+            </button>
+            <button
+              class="briefs-delete-btn"
+              id="briefs-delete-btn"
+              type="button"
+              data-i18n="views.briefs.delete"
+            >
+              Delete
+            </button>
+            <button
+              class="briefs-close-btn"
+              id="briefs-editor-close"
+              type="button"
+              data-i18n="actions.close"
+            >
+              Close
+            </button>
+          </div>
         </div>
+        <textarea
+          class="briefs-textarea"
+          id="briefs-textarea"
+          spellcheck="false"
+          placeholder="Write markdown here..."
+          data-i18n-placeholder="views.briefs.markdownPlaceholder"
+        ></textarea>
+        <div class="briefs-preview" id="briefs-preview" hidden></div>
       </div>
     </div>
     <div class="briefs-toasts" id="briefs-toasts"></div>
