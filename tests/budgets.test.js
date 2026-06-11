@@ -338,6 +338,106 @@ describe("budgets module", () => {
     });
   });
 
+  describe("getStatus()", () => {
+    it("returns { enabled: false } when disabled", async () => {
+      const { budgets } = makeBudgets({
+        config: { enabled: false, daily: { totalUSD: 10 } },
+        usage: { nineRouterByProvider: { kimi: 3 } },
+      });
+      assert.deepStrictEqual(await budgets.getStatus(), { enabled: false });
+    });
+
+    it("returns { enabled: false } when enabled but no scope has a limit", async () => {
+      const { budgets } = makeBudgets({
+        config: { enabled: true },
+        usage: { nineRouterByProvider: { kimi: 3 } },
+      });
+      assert.deepStrictEqual(await budgets.getStatus(), { enabled: false });
+    });
+
+    it("reports limit, spend, percent, state, and period progress per scope", async () => {
+      // NOW = Wednesday 2026-06-10T12:00Z → 50% of the day, 2.5/7 of the week.
+      const { budgets } = makeBudgets({
+        config: {
+          enabled: true,
+          daily: { totalUSD: 10, perProvider: { kimi: 2 } },
+          weekly: { totalUSD: 50 },
+        },
+        usage: { nineRouterByProvider: { kimi: 3.2 } },
+      });
+      const status = await budgets.getStatus();
+
+      assert.strictEqual(status.enabled, true);
+      assert.strictEqual(status.generatedAt, NOW);
+
+      const daily = status.periods.daily;
+      assert.strictEqual(daily.periodKey, "2026-06-10");
+      assert.strictEqual(daily.elapsedPct, 50);
+      assert.strictEqual(daily.usageAvailable, true);
+      assert.deepStrictEqual(daily.scopes, [
+        { scope: "total", limitUSD: 10, spentUSD: 3.2, percent: 32, state: "ok" },
+        { scope: "provider:kimi", limitUSD: 2, spentUSD: 3.2, percent: 160, state: "critical" },
+      ]);
+
+      const weekly = status.periods.weekly;
+      assert.strictEqual(weekly.periodKey, "2026-W24");
+      assert.strictEqual(weekly.elapsedPct, 35.7);
+      assert.deepStrictEqual(weekly.scopes, [
+        { scope: "total", limitUSD: 50, spentUSD: 3.2, percent: 6.4, state: "ok" },
+      ]);
+    });
+
+    it("marks warn at >=80% without firing or recording a breach", async () => {
+      const { budgets, breaches } = makeBudgets({
+        config: { enabled: true, daily: { totalUSD: 10 } },
+        usage: { nineRouterByProvider: { kimi: 8.5 } },
+      });
+      const status = await budgets.getStatus();
+      assert.strictEqual(status.periods.daily.scopes[0].state, "warn");
+      assert.strictEqual(status.periods.daily.scopes[0].percent, 85);
+      // getStatus is read-only: no breach fired, no fired-state persisted.
+      assert.deepStrictEqual(breaches, []);
+      assert.ok(!fs.existsSync(stateFile));
+    });
+
+    it("reports zero spend with usageAvailable=false when the provider is not wired", async () => {
+      const { budgets } = makeBudgets({
+        config: { enabled: true, daily: { totalUSD: 10 } },
+        usage: async () => null,
+      });
+      const status = await budgets.getStatus();
+      assert.strictEqual(status.periods.daily.usageAvailable, false);
+      assert.deepStrictEqual(status.periods.daily.scopes, [
+        { scope: "total", limitUSD: 10, spentUSD: 0, percent: 0, state: "ok" },
+      ]);
+    });
+
+    it("never throws when getUsage rejects (degrades to usageAvailable=false)", async () => {
+      const { budgets } = makeBudgets({
+        config: { enabled: true, daily: { totalUSD: 10 } },
+        usage: async () => {
+          throw new Error("source exploded");
+        },
+      });
+      const status = await budgets.getStatus();
+      assert.strictEqual(status.enabled, true);
+      assert.strictEqual(status.periods.daily.usageAvailable, false);
+    });
+
+    it("shares the OpenRouter baseline with the evaluator (same window delta)", async () => {
+      let cumulative = 100;
+      const { budgets } = makeBudgets({
+        config: { enabled: true, daily: { totalUSD: 10 } },
+        usage: async () => ({ openrouterCumulativeUSD: cumulative }),
+      });
+      await budgets.evaluate(); // baseline = 100
+      cumulative = 103.5;
+      const status = await budgets.getStatus();
+      assert.strictEqual(status.periods.daily.scopes[0].spentUSD, 3.5);
+      assert.strictEqual(status.periods.daily.scopes[0].percent, 35);
+    });
+  });
+
   describe("createUsageProvider()", () => {
     function stubUsageSources({ nineRows = null, totalUsage = null, windows = null } = {}) {
       return {

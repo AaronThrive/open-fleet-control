@@ -195,6 +195,26 @@
     #llm-view-section .lvx-flex-split > .vital-card {
       flex: 1 1 240px;
     }
+    /* ---- Budget burn-down gauges ---- */
+    #llm-view-section .lvx-bg-bar {
+      position: relative;
+    }
+    #llm-view-section .lvx-bg-marker {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 80%;
+      width: 2px;
+      background: rgba(245, 158, 11, 0.85);
+      border-radius: 1px;
+      pointer-events: none;
+    }
+    #llm-view-section .lvx-bg-text {
+      font-size: 0.74rem;
+      color: var(--text-muted);
+      margin-top: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
   </style>
   <section class="view-panel">
     <div class="view-header">
@@ -342,6 +362,16 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- ============ Budgets (burn-down gauges) ============ -->
+    <!-- Hidden entirely unless /api/fleet/budgets/status reports enabled
+         scopes; gauges are built in JS (textContent only — XSS-safe). -->
+    <div class="vitals-panel lvx-panel" id="lvx-bg-panel" hidden>
+      <div class="vitals-header">
+        <div class="vitals-title">💰 <span>Budgets</span></div>
+      </div>
+      <div class="lvx-cards" id="lvx-bg-gauges"></div>
     </div>
 
     <!-- ============ Claude Max Subscription (headroom) ============ -->

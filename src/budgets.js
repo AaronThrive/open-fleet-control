@@ -109,6 +109,22 @@ function round2(value) {
   return Math.round(value * 100) / 100;
 }
 
+function round1(value) {
+  return Math.round(value * 10) / 10;
+}
+
+/** One scope row of the getStatus() snapshot (pure). */
+function scopeStatus(scope, limitUSD, spentUSD) {
+  const ratio = limitUSD > 0 ? spentUSD / limitUSD : 0;
+  return {
+    scope,
+    limitUSD,
+    spentUSD: round2(spentUSD),
+    percent: round1(ratio * 100),
+    state: ratio >= CRITICAL_RATIO ? "critical" : ratio >= WARN_RATIO ? "warn" : "ok",
+  };
+}
+
 /**
  * Create the budget evaluator.
  *
@@ -119,7 +135,7 @@ function round2(value) {
  * @param {string} [options.stateFile] - persisted fired-state path
  * @param {function} [options.nowFn=Date.now]
  * @param {object} [options.log=console]
- * @returns {{start, stop, evaluate, applyConfig, getState}}
+ * @returns {{start, stop, evaluate, applyConfig, getState, getStatus}}
  */
 function createBudgets({ getUsage, onBreach, config, stateFile = null, nowFn = Date.now, log = console } = {}) {
   if (typeof getUsage !== "function") throw new TypeError("createBudgets requires getUsage");
@@ -359,6 +375,66 @@ function createBudgets({ getUsage, onBreach, config, stateFile = null, nowFn = D
     if (cfg.enabled) start();
   }
 
+  /**
+   * Read-only mid-period snapshot for the dashboard burn-down gauges.
+   *
+   * Reuses computeSpend() — the exact aggregation the breach evaluator
+   * runs — so the gauges can never disagree with the alerts. Unlike
+   * evaluate(), this never fires onBreach and never persists state (the
+   * in-memory OpenRouter baseline may advance for a new period; the next
+   * evaluate() persists it, same as before).
+   *
+   * Returns { enabled: false } when disabled or when no scope has a limit,
+   * otherwise:
+   *   { enabled: true, generatedAt, periods: { daily?, weekly? } }
+   * where each period is
+   *   { periodKey, elapsedPct, usageAvailable,
+   *     scopes: [{ scope, limitUSD, spentUSD, percent, state }] }
+   * with state one of "ok" | "warn" | "critical" and scope "total" or
+   * "provider:<name>".
+   */
+  async function getStatus() {
+    if (!cfg.enabled) return { enabled: false };
+
+    const now = nowFn();
+    const periods = {};
+
+    for (const period of ["daily", "weekly"]) {
+      const periodCfg = cfg[period];
+      const providerScopes = Object.entries(periodCfg.perProvider);
+      if (periodCfg.totalUSD <= 0 && providerScopes.length === 0) continue;
+
+      const startMs = periodStartMs(period, now);
+      const lengthMs = period === "daily" ? DAY_MS : 7 * DAY_MS;
+      const elapsedPct = round1(Math.min(100, Math.max(0, ((now - startMs) / lengthMs) * 100)));
+
+      let usage = null;
+      try {
+        usage = await getUsage({ sinceMs: startMs, period });
+      } catch (e) {
+        log.error(`[Budgets] getUsage failed for status (${period}): ${e.message}`);
+      }
+      const usageAvailable = Boolean(usage && typeof usage === "object");
+      const key = periodKey(period, now);
+      const spend = usageAvailable
+        ? computeSpend(usage, period, key)
+        : { byProvider: {}, totalUSD: 0 };
+
+      const scopes = [];
+      if (periodCfg.totalUSD > 0) {
+        scopes.push(scopeStatus("total", periodCfg.totalUSD, spend.totalUSD));
+      }
+      for (const [provider, limitUSD] of providerScopes) {
+        const actual = Number(spend.byProvider[provider]) || 0;
+        scopes.push(scopeStatus(`provider:${provider}`, limitUSD, actual));
+      }
+      periods[period] = { periodKey: key, elapsedPct, usageAvailable, scopes };
+    }
+
+    if (Object.keys(periods).length === 0) return { enabled: false };
+    return { enabled: true, generatedAt: now, periods };
+  }
+
   function getState() {
     return {
       enabled: cfg.enabled,
@@ -369,7 +445,7 @@ function createBudgets({ getUsage, onBreach, config, stateFile = null, nowFn = D
     };
   }
 
-  return { start, stop, evaluate, applyConfig, getState };
+  return { start, stop, evaluate, applyConfig, getState, getStatus };
 }
 
 /**

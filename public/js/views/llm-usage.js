@@ -555,22 +555,102 @@ function renderOpenRouter(els, data) {
 }
 
 /**
+ * One budget burn-down gauge card: horizontal fill = % of budget spent,
+ * fixed marker at the 80% warn threshold, color shifts ok→warn→critical
+ * with the evaluator's state. All values via textContent — XSS-safe.
+ */
+function buildBudgetGauge(scope, periodLabel, elapsedText) {
+  const scopeName =
+    scope.scope === "total"
+      ? t("views.llmUsage.budgetTotal", {}, "Total")
+      : String(scope.scope).replace(/^provider:/, "");
+  const pct = Number(scope.percent);
+  const safePct = Number.isFinite(pct) ? pct : 0;
+
+  const card = el("div", "vital-card lvx-bg-card");
+  const header = el("div", "vital-header");
+  header.appendChild(el("span", "vital-label", `💰 ${scopeName} · ${periodLabel}`));
+  header.appendChild(el("span", "vital-value", `${safePct}%`));
+  card.appendChild(header);
+
+  const barWrap = el("div", "vital-bar lvx-bg-bar");
+  const color = scope.state === "critical" ? "red" : scope.state === "warn" ? "yellow" : "green";
+  const fill = el("div", `vital-bar-fill ${color}`);
+  fill.style.width = `${Math.min(100, Math.max(0, safePct))}%`;
+  barWrap.appendChild(fill);
+  barWrap.appendChild(el("div", "lvx-bg-marker")); // 80% warn threshold
+  card.appendChild(barWrap);
+
+  const limit = Number(scope.limitUSD);
+  const label = t(
+    "views.llmUsage.budgetGauge",
+    {
+      spent: fmtUsd(scope.spentUSD),
+      limit: Number.isInteger(limit) ? `$${limit}` : fmtUsd(limit),
+      period: periodLabel,
+      pct: safePct,
+    },
+    "{spent} / {limit} {period} ({pct}%)",
+  );
+  card.appendChild(el("div", "lvx-bg-text", `${label} — ${elapsedText}`));
+  return card;
+}
+
+/**
+ * Render the Budgets section from /api/fleet/budgets/status. The panel is
+ * hidden entirely when budgets are disabled/unconfigured ({ enabled:false })
+ * or when the endpoint is absent (older deployment → null).
+ */
+function renderBudgets(els, data) {
+  const enabled = Boolean(data && data.enabled === true && data.periods);
+  els.bgPanel.hidden = !enabled;
+  if (!enabled) return;
+
+  const cards = [];
+  for (const period of ["daily", "weekly"]) {
+    const slice = data.periods[period];
+    if (!slice || !Array.isArray(slice.scopes)) continue;
+    const periodLabel =
+      period === "daily"
+        ? t("views.llmUsage.budgetDaily", {}, "daily")
+        : t("views.llmUsage.budgetWeekly", {}, "weekly");
+    let elapsedText =
+      period === "daily"
+        ? t("views.llmUsage.budgetDayElapsed", { pct: slice.elapsedPct }, "{pct}% of day elapsed")
+        : t(
+            "views.llmUsage.budgetWeekElapsed",
+            { pct: slice.elapsedPct },
+            "{pct}% of week elapsed",
+          );
+    if (slice.usageAvailable === false) {
+      elapsedText += ` · ${t("views.llmUsage.budgetNoUsage", {}, "no usage data yet")}`;
+    }
+    for (const scope of slice.scopes) {
+      cards.push(buildBudgetGauge(scope, periodLabel, elapsedText));
+    }
+  }
+  els.bgGauges.replaceChildren(...cards);
+}
+
+/**
  * Fetch + render the dedicated usage-source sections. Each endpoint is
  * fetched independently and each render is try/caught so a single failing
  * source never blanks the rest of the page.
  */
 async function loadSources(els) {
   const seq = ++sourcesSeq;
-  const [subscription, claudeCode, codex, nineRouter, openrouter] = await Promise.all([
+  const [subscription, claudeCode, codex, nineRouter, openrouter, budgets] = await Promise.all([
     fetchSource("/api/usage/subscription"),
     fetchSource("/api/usage/claude-code"),
     fetchSource("/api/usage/codex"),
     fetchSource("/api/usage/nine-router"),
     fetchSource("/api/usage/openrouter"),
+    fetchSource("/api/fleet/budgets/status"),
   ]);
   if (seq !== sourcesSeq || !els.root.isConnected) return;
 
   const renders = [
+    () => renderBudgets(els, budgets),
     () => renderSubscription(els, subscription),
     () => renderClaudeCodeUsage(els, claudeCode),
     () => renderCodexActivity(els, codex),
@@ -670,6 +750,9 @@ export function init(container) {
     routingLatency: container.querySelector("#lv-routing-latency"),
     codexFloor: container.querySelector("#lv-codex-floor"),
     extraSources: container.querySelector("#lv-extra-sources"),
+    // Budget burn-down gauges
+    bgPanel: container.querySelector("#lvx-bg-panel"),
+    bgGauges: container.querySelector("#lvx-bg-gauges"),
     // Claude Max subscription
     subPanel: container.querySelector("#lvx-sub-panel"),
     subStatus: container.querySelector("#lvx-sub-status"),
