@@ -6,8 +6,17 @@
  * all DOM references and event bindings are rebuilt from scratch here, and
  * stale SortableJS instances / timers from the previous visit are destroyed.
  *
- * Data source: /api/fleet/kanban (REST) + the `fleet.kanban` SSE event on
- * /api/events, with a 30s polling fallback.
+ * Data sources:
+ *   GET  /api/fleet/kanban                          — local tasks (full shape)
+ *   GET  /api/fleet/federation/board                — remote cards + origins
+ *   POST /api/fleet/federation/remotes/:id/actions  — REMOTE card moves
+ *        ({action:"task.move"}) via the whitelisted federation write proxy
+ *   SSE  /api/events ("fleet.kanban" / "fleet.federation"), 30s poll fallback
+ *
+ * Remote (federated) cards render in the same columns with an origin chip.
+ * They are READ-ONLY (locked, not draggable) unless their remote connection
+ * has allowWrites — then drags proxy through the federation task.move
+ * write-action. A federation fetch failure quietly degrades to local-only.
  */
 
 import { t } from "../utils.js";
@@ -29,6 +38,15 @@ const SSE_MAX_RECONNECT_DELAY = 30000;
 const RUNNING_TICK_MS = 1000; // live elapsed-time refresh on running ⚡ badges
 const ATTEMPT_NOTE_MAX = 400; // drawer result snippet truncation
 
+// Border/dot palette cycled across remote origins (local is always accent).
+const ORIGIN_COLORS = [
+  "var(--accent-2)",
+  "var(--purple)",
+  "var(--yellow)",
+  "var(--red)",
+  "var(--green)",
+];
+
 // ---------------------------------------------------------------------------
 // Module state (reset/rebuilt on every init)
 // ---------------------------------------------------------------------------
@@ -36,6 +54,11 @@ const ATTEMPT_NOTE_MAX = 400; // drawer result snippet truncation
 const state = {
   container: null,
   tasks: [],
+  localLoaded: false, // first /api/fleet/kanban fetch landed (gates renders)
+  remoteTasks: [], // federated cards (origin !== "local") from the fleet board
+  originIndex: new Map(), // origin key -> { ...origin, color } in legend order
+  federationDown: false, // federation board fetch failed — local-only mode
+  fedSeq: 0, // stale federation response guard
   openTaskId: null,
   sortables: [],
   pollTimer: null,
@@ -145,7 +168,11 @@ function cssEscape(value) {
 }
 
 function cardEl(taskId) {
-  return state.refs.board?.querySelector(`.kb-card[data-id="${cssEscape(taskId)}"]`) || null;
+  // :not(.kb-remote) — a federated card may share an id with a local task.
+  return (
+    state.refs.board?.querySelector(`.kb-card[data-id="${cssEscape(taskId)}"]:not(.kb-remote)`) ||
+    null
+  );
 }
 
 /** Tasks of one column, in render order (shared by renderBoard + keyboard moves). */
@@ -257,6 +284,193 @@ async function fetchDispatchStatus() {
   } catch (err) {
     state.dispatch = null; // older server / unconfigured — no dispatch UI
   }
+}
+
+// ---------------------------------------------------------------------------
+// Federation (remote cards merged into the same board)
+// ---------------------------------------------------------------------------
+
+/** Assign a stable legend color per origin (local is always accent). */
+function indexOrigins(origins) {
+  const index = new Map();
+  let colorCursor = 0;
+  for (const origin of Array.isArray(origins) ? origins : []) {
+    const color =
+      origin.kind === "local"
+        ? "var(--accent)"
+        : ORIGIN_COLORS[colorCursor++ % ORIGIN_COLORS.length];
+    index.set(origin.key, { ...origin, color });
+  }
+  state.originIndex = index;
+}
+
+/** Writable remotes must also be reachable to accept a proxied move. */
+function isRemoteMovable(origin) {
+  return origin.writable === true && origin.reachable === true;
+}
+
+function originRank(key) {
+  let rank = 0;
+  for (const originKey of state.originIndex.keys()) {
+    if (originKey === key) return rank;
+    rank++;
+  }
+  return rank;
+}
+
+/** Remote tasks of one column: legend order first, then remote column order. */
+function remoteSortedColumn(status) {
+  return state.remoteTasks
+    .filter((task) => task.status === status)
+    .sort((a, b) => originRank(a.origin) - originRank(b.origin) || (a.order ?? 0) - (b.order ?? 0));
+}
+
+/**
+ * Fetch the federated fleet board and keep only remote cards (local cards
+ * stay on the richer /api/fleet/kanban flow). Any failure degrades quietly
+ * to a local-only board — the kanban must never break on federation.
+ */
+async function refreshFederation() {
+  if (!isActive()) return;
+  const seq = ++state.fedSeq;
+  try {
+    const response = await fetch("/api/fleet/federation/board");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    if (seq !== state.fedSeq || !isActive()) return;
+    indexOrigins(data.origins);
+    state.remoteTasks = (Array.isArray(data.tasks) ? data.tasks : []).filter(
+      (task) => task.origin && task.origin !== "local",
+    );
+    state.federationDown = false;
+  } catch (err) {
+    if (seq !== state.fedSeq || !isActive()) return;
+    console.error("[Kanban] Federation board unavailable (local-only):", err);
+    state.remoteTasks = [];
+    state.originIndex = new Map();
+    state.federationDown = true;
+  }
+  // Render only once the local fetch has landed; refreshBoard() includes
+  // remote cards anyway, so an early federation response never flashes an
+  // empty board while local tasks are still loading.
+  if (state.localLoaded) renderBoard();
+}
+
+function scheduleFederationRefresh() {
+  if (!isActive()) return;
+  if (state.dragging) {
+    state.pendingRefresh = true; // flushed (as a full refresh) after the drop
+    return;
+  }
+  refreshFederation();
+}
+
+/** Origin legend row: local + each remote with reachability + write mode. */
+function renderLegend() {
+  const { legend, fedNotice } = state.refs;
+  if (fedNotice) {
+    fedNotice.hidden = !state.federationDown;
+    fedNotice.textContent = state.federationDown
+      ? t(
+          "views.kanban.federationDown",
+          {},
+          "Fleet federation unavailable — showing local tasks only.",
+        )
+      : "";
+  }
+  if (!legend) return;
+
+  const origins = [...state.originIndex.values()];
+  const hasRemotes = origins.some((origin) => origin.kind === "remote");
+  legend.hidden = !hasRemotes;
+  legend.textContent = "";
+  if (!hasRemotes) return;
+
+  for (const origin of origins) {
+    const unreachable = origin.kind === "remote" && origin.reachable === false;
+    const chip = document.createElement("span");
+    chip.className = unreachable ? "kb-origin-chip unreachable" : "kb-origin-chip";
+    chip.style.setProperty("--kb-origin-color", origin.color);
+
+    const dot = document.createElement("span");
+    dot.className = "kb-origin-dot";
+
+    const name = document.createElement("span");
+    name.textContent = origin.label || origin.key;
+
+    const mode = document.createElement("span");
+    mode.className = origin.writable ? "kb-origin-mode writable" : "kb-origin-mode";
+    mode.textContent = origin.writable
+      ? t("views.kanban.originWritable", {}, "WRITABLE")
+      : t("views.kanban.originReadOnly", {}, "read-only");
+
+    chip.append(dot, name, mode);
+    if (unreachable) {
+      chip.title = t(
+        "views.kanban.remoteUnreachable",
+        {},
+        "Remote unreachable — showing cached cards",
+      );
+    }
+    legend.appendChild(chip);
+  }
+}
+
+/** Remote card: origin chip + lock; no drawer, no dispatch, no move mode. */
+function buildRemoteCard(task) {
+  const origin = state.originIndex.get(task.origin) || { label: task.origin, writable: false };
+  const movable = isRemoteMovable(origin);
+
+  const card = document.createElement("div");
+  card.className = movable ? "kb-card kb-remote" : "kb-card kb-remote kb-remote-locked";
+  card.dataset.id = task.id;
+  card.dataset.origin = task.origin;
+  card.style.setProperty("--kb-origin-color", origin.color || "var(--border)");
+  card.setAttribute("role", "listitem");
+  card.setAttribute(
+    "aria-label",
+    t(
+      "views.kanban.remoteCardAria",
+      { title: task.title, origin: origin.label || task.origin, column: columnLabel(task.status) },
+      "{title} — {column} (remote: {origin})",
+    ),
+  );
+
+  const title = document.createElement("div");
+  title.className = "kb-card-title";
+  title.textContent = task.title;
+  card.appendChild(title);
+
+  const badges = document.createElement("div");
+  badges.className = "kb-card-badges";
+
+  const chip = document.createElement("span");
+  chip.className = "kb-card-origin";
+  chip.style.setProperty("--kb-origin-color", origin.color || "var(--border)");
+  const dot = document.createElement("span");
+  dot.className = "kb-origin-dot";
+  const label = document.createElement("span");
+  label.textContent = origin.label || task.origin;
+  chip.append(dot, label);
+  badges.appendChild(chip);
+
+  if (!movable) {
+    const lock = document.createElement("span");
+    lock.className = "kb-card-lock";
+    lock.textContent = "🔒";
+    lock.title = t(
+      "views.kanban.remoteLocked",
+      {},
+      "Read-only — enable write actions on this remote to move its cards",
+    );
+    badges.appendChild(lock);
+  }
+  if (task.assignee) badges.appendChild(buildBadge("kb-badge-assignee", task.assignee));
+  if (task.stale) {
+    badges.appendChild(buildBadge("kb-badge-stale", t("views.kanban.staleBadge", {}, "STALE")));
+  }
+  card.appendChild(badges);
+  return card;
 }
 
 // ---------------------------------------------------------------------------
@@ -451,7 +665,9 @@ function renderCounts() {
   for (const col of COLUMNS) {
     const colEl = state.refs.board.querySelector(`.kb-col[data-status="${col.status}"]`);
     if (!colEl) continue;
-    const n = state.tasks.filter((t) => t.status === col.status).length;
+    const n =
+      state.tasks.filter((t) => t.status === col.status).length +
+      state.remoteTasks.filter((t) => t.status === col.status).length;
     colEl.querySelector(".kb-count").textContent = String(n);
   }
 }
@@ -465,7 +681,11 @@ function renderBoard() {
   const { board, emptyState, loading, kbdHint } = state.refs;
   loading.hidden = true;
 
-  const empty = state.tasks.length === 0 && !state.forceBoard && !anyNewFormOpen();
+  const empty =
+    state.tasks.length === 0 &&
+    state.remoteTasks.length === 0 &&
+    !state.forceBoard &&
+    !anyNewFormOpen();
   emptyState.hidden = !empty;
   board.hidden = empty;
   if (kbdHint) kbdHint.hidden = empty;
@@ -481,8 +701,11 @@ function renderBoard() {
     if (!list) continue;
     list.textContent = "";
     for (const task of sortedColumn(col.status)) list.appendChild(buildCard(task));
+    // Federated cards render after local ones, grouped by legend order.
+    for (const task of remoteSortedColumn(col.status)) list.appendChild(buildRemoteCard(task));
   }
   renderCounts();
+  renderLegend();
 
   if (focusedCardId) cardEl(focusedCardId)?.focus();
 
@@ -506,6 +729,7 @@ async function refreshBoard() {
   try {
     const board = await api("GET", "");
     state.tasks = Array.isArray(board.tasks) ? board.tasks : [];
+    state.localLoaded = true;
     renderBoard();
   } catch (err) {
     console.error("[Kanban] Failed to fetch board:", err);
@@ -535,6 +759,7 @@ function ensureEventSource() {
     sseRetries = 0;
   };
   eventSource.addEventListener("fleet.kanban", () => scheduleRefresh());
+  eventSource.addEventListener("fleet.federation", () => scheduleFederationRefresh());
   eventSource.onerror = () => {
     if (eventSource) {
       eventSource.close();
@@ -560,6 +785,7 @@ async function createSortables() {
       animation: 150,
       ghostClass: "sortable-ghost",
       dragClass: "sortable-drag",
+      filter: ".kb-remote-locked", // read-only federated cards cannot start a drag
       onStart: () => {
         state.dragging = true;
       },
@@ -580,10 +806,64 @@ function destroySortables() {
   state.sortables = [];
 }
 
+/** Drop position among LOCAL cards only (federated cards don't shift order). */
+function localDropIndex(item) {
+  const locals = [...(item.parentElement?.children || [])].filter(
+    (node) => node.classList?.contains("kb-card") && !node.dataset.origin,
+  );
+  return Math.max(0, locals.indexOf(item));
+}
+
+/**
+ * Persist a dropped REMOTE card through the federation write-action proxy
+ * (requires the remote's allowWrites opt-in; the server enforces it anyway),
+ * then re-sync — the remote is authoritative for its own cards.
+ */
+async function handleRemoteDrop(taskId, origin, toStatus) {
+  try {
+    const response = await fetch(
+      `/api/fleet/federation/remotes/${encodeURIComponent(origin)}/actions`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "task.move", params: { taskId, status: toStatus } }),
+      },
+    );
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (err) {
+      // Non-JSON body — fall through to status check
+    }
+    if (!response.ok) throw new Error(payload?.error || `HTTP ${response.status}`);
+    const result = payload?.result || {};
+    if (!result.ok) {
+      const detail = result.remoteBody?.error ? ` — ${result.remoteBody.error}` : "";
+      throw new Error(`remote HTTP ${result.remoteStatus}${detail}`);
+    }
+    toast(
+      t(
+        "views.kanban.remoteMoveOk",
+        { column: columnLabel(toStatus) },
+        "Remote card moved to {column}.",
+      ),
+      "success",
+    );
+  } catch (err) {
+    toast(t("views.kanban.moveFailed", { message: err.message }, "Move failed: {message}"));
+  }
+  await refreshFederation();
+  if (state.pendingRefresh) {
+    state.pendingRefresh = false;
+    refreshBoard();
+  }
+}
+
 async function handleDragEnd(evt) {
   state.dragging = false;
 
   const taskId = evt.item?.dataset?.id;
+  const remoteOrigin = evt.item?.dataset?.origin || null;
   const toStatus = evt.to?.dataset?.status;
   const moved = evt.to !== evt.from || evt.oldIndex !== evt.newIndex;
 
@@ -595,17 +875,23 @@ async function handleDragEnd(evt) {
     return;
   }
 
+  if (remoteOrigin) {
+    await handleRemoteDrop(taskId, remoteOrigin, toStatus);
+    return;
+  }
+
   // Optimistic: the card already sits in its new list; sync local state + counts
+  const toIndex = localDropIndex(evt.item);
   const task = getTask(taskId);
   if (task) {
-    upsertTask({ ...task, status: toStatus, order: evt.newIndex });
+    upsertTask({ ...task, status: toStatus, order: toIndex });
     renderCounts();
   }
 
   try {
     const result = await api("POST", `/tasks/${encodeURIComponent(taskId)}/move`, {
       status: toStatus,
-      order: evt.newIndex,
+      order: toIndex,
     });
     if (result?.task) upsertTask(result.task);
   } catch (err) {
@@ -1413,6 +1699,11 @@ function teardown() {
   }
   state.dragging = false;
   state.pendingRefresh = false;
+  state.localLoaded = false;
+  state.remoteTasks = [];
+  state.originIndex = new Map();
+  state.federationDown = false;
+  state.fedSeq += 1; // invalidate any in-flight federation fetch
   state.openTaskId = null;
   state.forceBoard = false;
   state.moveModeTaskId = null;
@@ -1438,6 +1729,8 @@ export function init(containerEl) {
     live: containerEl.querySelector("#kb-live"),
     moveHint: containerEl.querySelector("#kb-move-hint"),
     kbdHint: containerEl.querySelector("#kb-kbd-hint"),
+    legend: containerEl.querySelector("#kb-legend"),
+    fedNotice: containerEl.querySelector("#kb-fed-notice"),
     dispatchModal: containerEl.querySelector("#kb-dispatch-modal"),
     dispatchBackdrop: containerEl.querySelector("#kb-dispatch-backdrop"),
   };
@@ -1459,10 +1752,14 @@ export function init(containerEl) {
   });
 
   ensureEventSource();
-  state.pollTimer = setInterval(() => scheduleRefresh(), POLL_INTERVAL_MS);
+  state.pollTimer = setInterval(() => {
+    scheduleRefresh();
+    scheduleFederationRefresh();
+  }, POLL_INTERVAL_MS);
   state.runningTimer = setInterval(() => tickRunningBadges(), RUNNING_TICK_MS);
 
   refreshBoard();
+  refreshFederation();
   createSortables().catch((err) => {
     console.error("[Kanban] Drag & drop unavailable:", err);
     toast(
