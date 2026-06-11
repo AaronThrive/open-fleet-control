@@ -523,6 +523,15 @@
       font-family: monospace;
       color: var(--text-muted);
     }
+    /* Dispatch outcome snippet (truncated agent output / failure reason) */
+    .kb-attempt-note {
+      font-family: monospace;
+      font-size: 0.68rem;
+      line-height: 1.4;
+      color: var(--text-muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
     .kb-ts {
       margin-left: auto;
       font-size: 0.66rem;
@@ -609,6 +618,8 @@
       background: rgba(var(--accent-rgb), 0.1);
       border: 1px solid rgba(var(--accent-rgb), 0.4);
       animation: kb-stale-pulse 1.6s ease-in-out infinite;
+      /* live elapsed counter — keep the badge from jittering as digits tick */
+      font-variant-numeric: tabular-nums;
     }
     .kb-drawer-dispatch {
       background: transparent;

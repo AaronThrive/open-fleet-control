@@ -128,6 +128,7 @@ const ALERT_RULES = [
   "taskStale",
   "lessonPending",
   "budgetBreach",
+  "dispatchComplete",
 ];
 
 // Budgets validation bounds (fleet.budgets — see src/budgets.js).
@@ -157,6 +158,8 @@ const EDITABLE_DEFAULTS = Object.freeze({
       taskStale: true,
       lessonPending: true,
       budgetBreach: true,
+      // Dispatch follow-through ping — opt-in, OFF by default.
+      dispatchComplete: false,
     },
     flap: { consecutive: 3, minDurationMs: 60000 },
     mutes: [],

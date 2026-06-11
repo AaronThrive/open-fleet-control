@@ -29,6 +29,20 @@
  *     timeoutSec + 15 min; a crashed server can therefore never wedge a card
  *     into an undispatachable state forever
  *   - remote nodes are v-next: node != self → clean error
+ *
+ * Follow-through (the watcher — closes the dispatch loop when the CLI exits):
+ *   - the CLI's --json output is parsed (parseRunResult): session id,
+ *     CLI-reported error, and the agent's output text
+ *   - the outcome + a truncated output snippet are recorded on the attempt
+ *   - the card auto-moves: assigned/inprogress → review on success,
+ *     → failed on CLI error or timeout (operator moves are never overridden:
+ *     cards already in inbox/review/done/failed are left where they are)
+ *   - a killed/overdue process is classified as a timeout (note "timeout: …")
+ *   - the optional injected fireAlert hook fires a `dispatchComplete` alert
+ *     (info on success, warn on failure) — delivery and the default-OFF
+ *     gating live in the alerts engine (fleet.alerts.rules.dispatchComplete)
+ *   - every board mutation goes through the kanban engine, so the runtime's
+ *     onChange → fleet.kanban SSE fan-out updates UIs for free
  */
 
 const fs = require("fs");
@@ -44,6 +58,10 @@ const OPEN_ATTEMPT_GRACE_MS = 15 * 60 * 1000;
 const DISPATCH_NOTE = "dispatched";
 const PROTOCOL_BRIEF = "agent-task-protocol";
 const EXEC_MAX_BUFFER = 16 * 1024 * 1024;
+const RESULT_SNIPPET_MAX = 300;
+// Statuses the watcher may auto-move FROM; operator-final columns are immune.
+const AUTO_MOVE_SOURCES = Object.freeze(["assigned", "inprogress"]);
+const WATCHER_ACTOR = "dispatch";
 
 function httpError(statusCode, message) {
   const err = new Error(message);
@@ -118,6 +136,74 @@ function composeKickoffMessage(task, { agent, baseUrl, briefsDir }) {
   return lines.join("\n");
 }
 
+/** First line of an error message, capped for attempt notes / comments. */
+function shortReason(message, fallback = "failed") {
+  return String(message || fallback)
+    .split("\n")[0]
+    .slice(0, 300);
+}
+
+/** Collapse whitespace and cap the agent output for the attempt note. */
+function snippet(text) {
+  const collapsed = String(text).replace(/\s+/g, " ").trim();
+  if (collapsed.length <= RESULT_SNIPPET_MAX) return collapsed;
+  return `${collapsed.slice(0, RESULT_SNIPPET_MAX)}…`;
+}
+
+/** Best-effort extraction of the agent's output text from the parsed JSON. */
+function extractOutputText(parsed) {
+  const result = parsed.result && typeof parsed.result === "object" ? parsed.result : {};
+  if (Array.isArray(result.payloads)) {
+    const joined = result.payloads
+      .map((p) => (p && typeof p.text === "string" ? p.text : ""))
+      .filter((text) => text.length > 0)
+      .join("\n");
+    if (joined.length > 0) return joined;
+  }
+  for (const candidate of [result.text, result.output, parsed.output, parsed.text]) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) return candidate;
+  }
+  return null;
+}
+
+/** CLI-reported error inside an otherwise clean exit, or null. */
+function extractCliError(parsed) {
+  if (typeof parsed.error === "string" && parsed.error.length > 0) return parsed.error;
+  if (parsed.error && typeof parsed.error === "object" && parsed.error.message) {
+    return String(parsed.error.message);
+  }
+  if (parsed.success === false || parsed.ok === false) return "agent run reported failure";
+  return null;
+}
+
+/**
+ * Parse the `openclaw agent --json` stdout into the fields the watcher
+ * records on the card. Never throws — unparseable output yields all-nulls
+ * (the run still counts as success when the process exited cleanly).
+ *
+ * @param {string} stdout - raw CLI stdout
+ * @returns {{sessionId: string|null, outputText: string|null, error: string|null}}
+ */
+function parseRunResult(stdout) {
+  let parsed;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch (e) {
+    return { sessionId: null, outputText: null, error: null };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { sessionId: null, outputText: null, error: null };
+  }
+  return {
+    sessionId:
+      parsed?.result?.meta?.agentMeta?.sessionId ||
+      parsed?.result?.meta?.systemPromptReport?.sessionId ||
+      null,
+    outputText: extractOutputText(parsed),
+    error: extractCliError(parsed),
+  };
+}
+
 /**
  * Create the dispatch module.
  *
@@ -130,6 +216,9 @@ function composeKickoffMessage(task, { agent, baseUrl, briefsDir }) {
  * @param {object} [options.config] - fleet.dispatch config section:
  *   {enabled=true, baseUrl, maxConcurrent=3, timeoutSec=600, node=os.hostname()}
  * @param {function} [options.nowFn] - clock (epoch ms), injectable for tests
+ * @param {function} [options.fireAlert] - (event) => void|Promise; fired with a
+ *   `dispatchComplete` alert when a run settles. Gating (rule default OFF) and
+ *   sink delivery (ntfy/Slack/webhooks) belong to the alerts engine.
  * @returns {object} dispatch API
  */
 function createDispatch(options = {}) {
@@ -140,6 +229,7 @@ function createDispatch(options = {}) {
     execFn = null,
     config = {},
     nowFn = Date.now,
+    fireAlert = null,
   } = options;
   if (!kanban) throw new Error("createDispatch: kanban is required");
 
@@ -227,20 +317,6 @@ function createDispatch(options = {}) {
     return task.attempts.some((a) => isOpenDispatchAttempt(a, nowMs, openTtlMs));
   }
 
-  /** Best-effort extraction of the session id from the CLI's --json output. */
-  function parseSessionId(stdout) {
-    try {
-      const parsed = JSON.parse(stdout);
-      return (
-        parsed?.result?.meta?.agentMeta?.sessionId ||
-        parsed?.result?.meta?.systemPromptReport?.sessionId ||
-        null
-      );
-    } catch (e) {
-      return null;
-    }
-  }
-
   /**
    * Close the dispatch attempt when the CLI run settles. Best-effort: the
    * card may have been deleted or hand-edited meanwhile — never throws.
@@ -257,34 +333,96 @@ function createDispatch(options = {}) {
     }
   }
 
-  function handleRunSettled(taskId, attemptIndex, agent, settled) {
-    if (settled.ok) {
-      const sessionId = parseSessionId(settled.stdout);
-      closeAttempt(taskId, attemptIndex, {
-        result: "success",
-        note: sessionId
-          ? `${DISPATCH_NOTE} · session ${sessionId}`
-          : `${DISPATCH_NOTE} · completed`,
-      });
-      emit({ type: "task.dispatch_completed", taskId, agent, sessionId });
-      return;
+  /**
+   * Auto-move the card when a run settles: review on success, failed on
+   * error/timeout. Only assigned/inprogress cards move — a card the operator
+   * (or agent) already placed in a final column is never overridden.
+   * Best-effort: never throws.
+   */
+  function autoMoveOnSettle(taskId, toStatus) {
+    try {
+      const task = kanban.getBoard().tasks.find((t) => t.id === taskId);
+      if (!task || !AUTO_MOVE_SOURCES.includes(task.status)) return;
+      kanban.moveTask(taskId, toStatus, task.order, WATCHER_ACTOR);
+    } catch (e) {
+      console.error(`[Dispatch] Could not auto-move ${taskId} to ${toStatus}:`, e.message);
     }
-    const reason = String(settled.error && settled.error.message ? settled.error.message : "failed")
-      .split("\n")[0]
-      .slice(0, 300);
+  }
+
+  /**
+   * Fire the dispatchComplete alert through the injected hook. The alerts
+   * engine owns gating (rule defaults to OFF) and sink delivery; here we only
+   * make sure a broken hook can never break the watcher.
+   */
+  function notifyCompletion({ taskId, agent, ok, detail }) {
+    if (typeof fireAlert !== "function") return;
+    const message =
+      `Dispatch ${ok ? "completed" : "failed"} for task ${taskId} (agent ${agent})` +
+      (detail ? `: ${detail}` : "");
+    try {
+      Promise.resolve(
+        fireAlert({
+          type: "dispatchComplete",
+          severity: ok ? "info" : "warn",
+          task: taskId,
+          message,
+        }),
+      ).catch((e) => {
+        console.error("[Dispatch] dispatchComplete alert failed:", e.message);
+      });
+    } catch (e) {
+      console.error("[Dispatch] dispatchComplete alert failed:", e.message);
+    }
+  }
+
+  /** Record a failed/timed-out run on the card and move it to failed. */
+  function settleFailure(taskId, attemptIndex, agent, { reason, timedOut }) {
+    const label = timedOut ? "timeout" : "failed";
     closeAttempt(taskId, attemptIndex, {
       result: "failure",
-      note: `${DISPATCH_NOTE} · failed: ${reason}`,
+      note: `${DISPATCH_NOTE} · ${label}: ${reason}`,
     });
     try {
       kanban.addComment(taskId, {
-        author: "dispatch",
-        text: `[Dispatch] Agent run for ${agent} failed: ${reason}`,
+        author: WATCHER_ACTOR,
+        text: `[Dispatch] Agent run for ${agent} ${timedOut ? "timed out" : "failed"}: ${reason}`,
       });
     } catch (e) {
       console.error(`[Dispatch] Could not record failure comment on ${taskId}:`, e.message);
     }
-    emit({ type: "task.dispatch_failed", taskId, agent, error: reason });
+    autoMoveOnSettle(taskId, "failed");
+    emit({ type: "task.dispatch_failed", taskId, agent, error: reason, timedOut });
+    notifyCompletion({ taskId, agent, ok: false, detail: reason });
+  }
+
+  function handleRunSettled(taskId, attemptIndex, agent, settled, startedMs) {
+    if (settled.ok) {
+      const run = parseRunResult(settled.stdout);
+      if (run.error) {
+        settleFailure(taskId, attemptIndex, agent, {
+          reason: shortReason(run.error),
+          timedOut: false,
+        });
+        return;
+      }
+      const noteParts = [
+        DISPATCH_NOTE,
+        run.sessionId ? `session ${run.sessionId}` : "completed",
+        ...(run.outputText ? [`result: ${snippet(run.outputText)}`] : []),
+      ];
+      closeAttempt(taskId, attemptIndex, { result: "success", note: noteParts.join(" · ") });
+      autoMoveOnSettle(taskId, "review");
+      emit({ type: "task.dispatch_completed", taskId, agent, sessionId: run.sessionId });
+      notifyCompletion({ taskId, agent, ok: true, detail: null });
+      return;
+    }
+    const err = settled.error || {};
+    const timedOut =
+      err.killed === true || Boolean(err.signal) || nowFn() - startedMs >= timeoutSec * 1000;
+    settleFailure(taskId, attemptIndex, agent, {
+      reason: shortReason(err.message, timedOut ? `no exit within ${timeoutSec}s` : "failed"),
+      timedOut,
+    });
   }
 
   /**
@@ -352,7 +490,8 @@ function createDispatch(options = {}) {
       );
     }
 
-    const sessionKey = `agent:${agent}:kanban-${taskId}-${nowFn()}`;
+    const startedMs = nowFn();
+    const sessionKey = `agent:${agent}:kanban-${taskId}-${startedMs}`;
     const message = composeKickoffMessage(task, { agent, baseUrl, briefsDir });
     const args = [
       "agent",
@@ -394,7 +533,7 @@ function createDispatch(options = {}) {
     emit({ type: "task.dispatched", taskId, agent, actor, sessionKey });
 
     const completion = settledPromise.then((settled) =>
-      handleRunSettled(taskId, attemptIndex, agent, settled),
+      handleRunSettled(taskId, attemptIndex, agent, settled, startedMs),
     );
 
     const { task: latest } = requireTask(taskId);
@@ -409,5 +548,6 @@ module.exports = {
   composeKickoffMessage,
   resolveBinary,
   isOpenDispatchAttempt,
+  parseRunResult,
   DISPATCH_NOTE,
 };
