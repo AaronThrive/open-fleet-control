@@ -33,6 +33,33 @@ export default [
   {
     ignores: ["lib/server.js"],
   },
+  // Browser globals for the zero-build frontend (public/)
+  {
+    files: ["public/**/*.js"],
+    languageOptions: {
+      globals: {
+        window: "readonly",
+        document: "readonly",
+        navigator: "readonly",
+        location: "readonly",
+        localStorage: "readonly",
+        sessionStorage: "readonly",
+        fetch: "readonly",
+        EventSource: "readonly",
+        AbortController: "readonly",
+        CustomEvent: "readonly",
+        Event: "readonly",
+        FormData: "readonly",
+        Blob: "readonly",
+        performance: "readonly",
+        requestAnimationFrame: "readonly",
+        cancelAnimationFrame: "readonly",
+        confirm: "readonly",
+        alert: "readonly",
+        prompt: "readonly",
+      },
+    },
+  },
   // Relax rules for source code (many patterns)
   {
     files: ["src/**/*.js"],

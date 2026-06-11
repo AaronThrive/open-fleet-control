@@ -42,6 +42,8 @@ const AUDIT_ACTIONS = [
   "alerts.config",
   "memory.write",
   "session.kill",
+  "cron.update",
+  "cron.run",
 ];
 
 const ACTIVE_LOG = "audit.jsonl";
