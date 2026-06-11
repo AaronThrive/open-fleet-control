@@ -441,6 +441,39 @@ function createFleetRoutes({
     }
   }
 
+  /**
+   * Budget guardrail (src/budgets.js enforce): when an enforced budget scope
+   * sits at >=100% for the current window and no operator ack exists, new
+   * dispatches are refused with a 429-style envelope and a budgetBreach
+   * alert fires (the engine's 5-minute dedupe keeps it from spamming).
+   * Returns true when the dispatch was blocked (response already sent).
+   */
+  function refuseWhenOverBudget(res, taskId) {
+    const block =
+      fleet.budgets && typeof fleet.budgets.checkDispatchBlock === "function"
+        ? fleet.budgets.checkDispatchBlock()
+        : null;
+    if (!block) return false;
+    fleet.fireAlert({
+      type: "budgetBreach",
+      severity: "warn",
+      task: taskId,
+      message:
+        `Dispatch blocked: ${block.scope} ${block.period} budget exceeded ` +
+        `($${block.spent.toFixed(2)} of $${block.limit.toFixed(2)}, window ${block.periodKey}). ` +
+        `Acknowledge via POST /api/fleet/budgets/ack to resume dispatching.`,
+    });
+    json(res, 429, {
+      error: "budget exceeded",
+      scope: block.scope,
+      spent: block.spent,
+      limit: block.limit,
+      period: block.period,
+      periodKey: block.periodKey,
+    });
+    return true;
+  }
+
   async function handleKanbanDispatch(req, res, method, taskId, query) {
     if (method !== "POST") return false;
     if (!dispatch) {
@@ -457,6 +490,7 @@ function createFleetRoutes({
     }
     const user = guardMutation(req, res);
     if (!user) return true;
+    if (refuseWhenOverBudget(res, taskId)) return true;
     const body = await readJsonBody(req);
     await requireRosterAgent(body.agent);
     const result = dispatch.dispatchTask(taskId, {
@@ -1017,6 +1051,32 @@ function createFleetRoutes({
         // when budgets are disabled or unconfigured.
         if (segments[1] === "status" && segments.length === 2 && method === "GET") {
           json(res, 200, await fleet.budgets.getStatus());
+          return true;
+        }
+        // Operator acknowledgement of an over-budget block: clears dispatch
+        // blocking for the current budget window(s). Audited + rate-limited.
+        if (segments[1] === "ack" && segments.length === 2 && method === "POST") {
+          const user = guardMutation(req, res);
+          if (!user) return true;
+          const result = fleet.budgets.ack(user);
+          recordAudit(user, "budgets.ack", null, { acked: result.acked });
+          json(res, 200, { success: true, ...result });
+          return true;
+        }
+        return false;
+      case "digest":
+        // Compose + send the fleet digest NOW (does not advance the
+        // scheduler's lastSentAt). Audited + rate-limited.
+        if (segments[1] === "test" && segments.length === 2 && method === "POST") {
+          const user = guardMutation(req, res);
+          if (!user) return true;
+          const result = await fleet.digest.sendNow();
+          recordAudit(user, "digest.test", null, {
+            sent: result.sent,
+            dispatched: result.dispatched ?? 0,
+            delivered: result.delivered ?? 0,
+          });
+          json(res, 200, { success: true, result });
           return true;
         }
         return false;
