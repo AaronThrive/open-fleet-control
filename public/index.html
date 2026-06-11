@@ -531,223 +531,8 @@
           </div>
         </div>
 
-        <!-- Cerebro Section -->
-        <div class="section" id="cerebro-section">
-          <div class="section-header">
-            <div class="section-title">
-              🔮 Cerebro <span class="section-count" id="cerebro-count">0 topics</span>
-            </div>
-            <!-- SSE provides live updates -->
-          </div>
-
-          <div id="cerebro-content">
-            <!-- Not Initialized State -->
-            <div id="cerebro-not-initialized" class="vitals-panel" style="display: none">
-              <div style="text-align: center; padding: 40px 20px">
-                <div style="font-size: 3rem; margin-bottom: 16px">🔮</div>
-                <h3 style="font-size: 1.2rem; font-weight: 600; margin-bottom: 8px">
-                  Cerebro Not Initialized
-                </h3>
-                <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 20px">
-                  Cerebro tracks conversation topics and threads across sessions.
-                </p>
-                <div
-                  id="cerebro-init-commands"
-                  style="
-                    background: var(--bg);
-                    border-radius: 8px;
-                    padding: 16px;
-                    text-align: left;
-                    font-size: 0.8rem;
-                    font-family: monospace;
-                  "
-                >
-                  <div style="color: var(--text-muted); margin-bottom: 8px">
-                    # To initialize Cerebro:
-                  </div>
-                  <div style="color: var(--accent)" id="cerebro-init-topics-cmd">
-                    mkdir -p ~/cerebro/topics
-                  </div>
-                  <div style="color: var(--accent)" id="cerebro-init-orphans-cmd">
-                    mkdir -p ~/cerebro/orphans
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Initialized State -->
-            <div id="cerebro-initialized" class="vitals-panel" style="display: none">
-              <div class="vitals-grid">
-                <!-- Topic Counts -->
-                <div class="vital-card">
-                  <div class="vital-header">
-                    <span class="vital-label">📊 Topics by Status</span>
-                  </div>
-                  <div class="vital-detail" style="margin-top: 8px">
-                    <div class="vital-detail-item">
-                      <span
-                        class="vital-detail-value"
-                        id="cerebro-active"
-                        style="color: var(--green)"
-                        >0</span
-                      >
-                      <span class="vital-detail-label">active</span>
-                    </div>
-                    <div class="vital-detail-item">
-                      <span
-                        class="vital-detail-value"
-                        id="cerebro-resolved"
-                        style="color: var(--accent)"
-                        >0</span
-                      >
-                      <span class="vital-detail-label">resolved</span>
-                    </div>
-                    <div class="vital-detail-item">
-                      <span
-                        class="vital-detail-value"
-                        id="cerebro-parked"
-                        style="color: var(--text-muted)"
-                        >0</span
-                      >
-                      <span class="vital-detail-label">parked</span>
-                    </div>
-                  </div>
-                  <div style="margin-top: 12px; font-size: 0.75rem; color: var(--text-muted)">
-                    <span id="cerebro-total-topics">0</span> total topics
-                  </div>
-                </div>
-
-                <!-- Thread Stats -->
-                <div class="vital-card">
-                  <div class="vital-header">
-                    <span class="vital-label">🧵 Threads</span>
-                  </div>
-                  <div class="vital-detail" style="margin-top: 8px">
-                    <div class="vital-detail-item">
-                      <span class="vital-detail-value" id="cerebro-threads">0</span>
-                      <span class="vital-detail-label">tracked</span>
-                    </div>
-                    <div class="vital-detail-item">
-                      <span
-                        class="vital-detail-value"
-                        id="cerebro-orphans"
-                        style="color: var(--yellow)"
-                        >0</span
-                      >
-                      <span class="vital-detail-label">orphans</span>
-                    </div>
-                  </div>
-                  <div style="margin-top: 12px; font-size: 0.75rem; color: var(--text-muted)">
-                    Threads linked to topics
-                  </div>
-                </div>
-
-                <!-- Recent Topics -->
-                <div class="vital-card" style="grid-column: span 2">
-                  <div class="vital-header">
-                    <span class="vital-label">🕐 Recent Active Topics</span>
-                  </div>
-                  <div id="cerebro-recent-topics" style="margin-top: 8px">
-                    <em style="color: var(--text-muted); font-size: 0.8rem"
-                      >No active topics yet</em
-                    >
-                  </div>
-                </div>
-              </div>
-
-              <div
-                style="
-                  margin-top: 16px;
-                  padding-top: 16px;
-                  border-top: 1px solid var(--border);
-                  display: flex;
-                  justify-content: space-between;
-                  align-items: center;
-                "
-              >
-                <span style="font-size: 0.75rem; color: var(--text-muted)">
-                  Last updated: <span id="cerebro-last-updated">-</span>
-                </span>
-                <a
-                  href="file://#"
-                  style="font-size: 0.75rem; color: var(--accent); text-decoration: none"
-                >
-                  📁 Open cerebro/
-                </a>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Operators Section -->
-        <div class="section" id="operators-section">
-          <div class="section-header">
-            <div class="section-title">👥 Operators</div>
-            <div class="section-actions">
-              <button class="btn-secondary" onclick="refreshOperators()" title="Refresh">🔄</button>
-            </div>
-          </div>
-          <div class="operators-grid" id="operators-grid">
-            <div class="loading-state">Loading operators...</div>
-          </div>
-
-          <div
-            class="roles-legend"
-            style="margin-top: 20px; padding: 16px; background: var(--bg); border-radius: 8px"
-          >
-            <div
-              style="
-                font-size: 0.75rem;
-                color: var(--text-muted);
-                margin-bottom: 12px;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-              "
-            >
-              Permission Levels
-            </div>
-            <div style="display: flex; gap: 24px; flex-wrap: wrap">
-              <div style="display: flex; align-items: center; gap: 8px">
-                <span
-                  style="
-                    width: 12px;
-                    height: 12px;
-                    border-radius: 50%;
-                    background: linear-gradient(135deg, #ffd700, #ff8c00);
-                  "
-                ></span>
-                <span style="font-size: 0.85rem">Owner</span>
-                <span style="font-size: 0.7rem; color: var(--text-muted)">Full control</span>
-              </div>
-              <div style="display: flex; align-items: center; gap: 8px">
-                <span
-                  style="
-                    width: 12px;
-                    height: 12px;
-                    border-radius: 50%;
-                    background: linear-gradient(135deg, #a371f7, #8957e5);
-                  "
-                ></span>
-                <span style="font-size: 0.85rem">Admin</span>
-                <span style="font-size: 0.7rem; color: var(--text-muted)"
-                  >Manage users & settings</span
-                >
-              </div>
-              <div style="display: flex; align-items: center; gap: 8px">
-                <span
-                  style="
-                    width: 12px;
-                    height: 12px;
-                    border-radius: 50%;
-                    background: linear-gradient(135deg, var(--accent-2), #09b3a6);
-                  "
-                ></span>
-                <span style="font-size: 0.85rem">User</span>
-                <span style="font-size: 0.7rem; color: var(--text-muted)">Dashboard access</span>
-              </div>
-            </div>
-          </div>
-        </div>
+        <!-- Cerebro and Operators moved to their own tabs: #view-cerebro and
+             #view-operators (public/js/views/cerebro.js + operators.js). -->
 
         <!-- About Section -->
         <div class="section" id="about-section">
@@ -983,22 +768,6 @@
       </div>
     </div>
 
-    <!-- Operator Modal -->
-    <div
-      id="operator-modal-overlay"
-      class="detail-overlay hidden"
-      onclick="closeOperatorModal()"
-    ></div>
-    <div id="operator-modal" class="detail-panel hidden" style="max-width: 500px">
-      <div class="detail-header">
-        <h2>👤 <span id="operator-modal-name">User Stats</span></h2>
-        <button class="close-btn" onclick="closeOperatorModal()">✕</button>
-      </div>
-      <div class="detail-content" id="operator-modal-content">
-        <div class="loading-state">Loading user stats...</div>
-      </div>
-    </div>
-
     <!-- Privacy Settings Modal -->
     <div
       id="privacy-modal-overlay"
@@ -1157,11 +926,11 @@
 
     <script>
       // State
-      // The full sessions/cron/vitals/LLM sections live on their own pages
-      // (js/views/*.js); home only keeps compact overview chips plus the
-      // memory/cerebro/operators sections and the global modals.
+      // The full sessions/cron/vitals/LLM/cerebro/operators sections live on
+      // their own pages (js/views/*.js); home only keeps compact overview
+      // chips plus the memory section and the global modals.
       let memoryFilters = { type: "all", age: "all" };
-      let sessionsData = []; // last sessions slice (operator modal + privacy refresh)
+      let sessionsData = []; // last sessions slice (privacy refresh)
       let cronData = []; // last cron slice (privacy refresh)
       let sidebarCollapsed = false;
 
@@ -1371,11 +1140,9 @@
         if (state.sessions) renderSessions(state.sessions, state.pagination, state.statusCounts);
         if (state.tokenStats) renderTokenStats(state.tokenStats);
         if (state.capacity) renderCapacity(state.capacity);
-        if (state.operators) renderOperators(state.operators);
         if (state.llmUsage) renderLlmUsage(state.llmUsage);
         if (state.cron) renderCron(state.cron);
         if (state.memory) renderMemory(state.memory);
-        if (state.cerebro) renderCerebro(state.cerebro);
         if (state.subagents) renderSubagents(state.subagents);
       }
 
@@ -1391,9 +1158,6 @@
           fetch("/api/sessions")
             .then((r) => r.json())
             .catch(() => null),
-          fetch("/api/operators")
-            .then((r) => r.json())
-            .catch(() => null),
           fetch("/api/llm-usage")
             .then((r) => r.json())
             .catch(() => null),
@@ -1403,26 +1167,20 @@
           fetch("/api/memory")
             .then((r) => r.json())
             .catch(() => null),
-          fetch("/api/cerebro")
-            .then((r) => r.json())
-            .catch(() => null),
           fetch("/api/subagents")
             .then((r) => r.json())
             .catch(() => null),
         ];
 
-        const [vitals, sessions, operators, llm, cron, memory, cerebro, subagents] =
-          await Promise.all(promises);
+        const [vitals, sessions, llm, cron, memory, subagents] = await Promise.all(promises);
 
         if (vitals?.vitals) renderVitals(vitals.vitals);
         if (sessions?.sessions)
           renderSessions(sessions.sessions, sessions.pagination, sessions.statusCounts);
         if (sessions?.tokenStats) renderTokenStats(sessions.tokenStats);
-        if (operators) renderOperators(operators);
         if (llm) renderLlmUsage(llm);
         if (cron?.cron) renderCron(cron.cron);
         if (memory?.memory) renderMemory(memory.memory);
-        if (cerebro) renderCerebro(cerebro);
         if (subagents?.subagents) renderSubagents(subagents.subagents);
 
         const now = new Date().toLocaleTimeString();
@@ -1436,7 +1194,7 @@
 
       // Slim home renderers: the full sessions/cron grids moved to their own
       // pages (#view-sessions / #view-cron). Home keeps the data slices for
-      // the operator modal + privacy refresh and updates the overview chips.
+      // the privacy refresh and updates the overview chips.
       // Defensive: absent/null fields render as "—", never as a fake 0.
       function renderSessions(sessions, pagination, statusCounts) {
         sessionsData = Array.isArray(sessions) ? sessions : [];
@@ -1471,96 +1229,6 @@
           "textContent",
           i18nText("overview.cronEnabled", { enabled }, "{enabled} enabled"),
         );
-      }
-
-      // Operators data store
-      let operatorsData = [];
-
-      // Render operators
-      function renderOperators(data) {
-        const operatorsEl = document.getElementById("operators-grid");
-        operatorsData = data.operators || [];
-
-        $set("nav-operator-count", "textContent", operatorsData.length);
-
-        if (operatorsData.length === 0) {
-          smartUpdate(
-            operatorsEl,
-            `
-                    <div class="empty-state">
-                        <div class="empty-state-icon">👥</div>
-                        <div class="empty-state-text">No operators configured</div>
-                        <div class="empty-state-hint" style="margin-top: 8px; font-size: 0.8rem; color: var(--text-muted);">
-                            Operators are auto-detected from session activity
-                        </div>
-                    </div>
-                `,
-          );
-        } else {
-          smartUpdate(
-            operatorsEl,
-            operatorsData
-              .map((op) => {
-                const roleClass = op.role || "user";
-                const initial = (op.name || op.username || "?").charAt(0).toUpperCase();
-                const avatarHtml = op.avatar
-                  ? `<img src="${escapeHtml(op.avatar)}" alt="${escapeHtml(op.name)}">`
-                  : initial;
-
-                const activeSessions = op.stats?.activeSessions || 0;
-                const totalSessions = op.stats?.totalSessions || 0;
-
-                let lastSeenText = "Never";
-                if (op.stats?.lastSeen) {
-                  const lastSeen = new Date(op.stats.lastSeen);
-                  const minutesAgo = Math.floor((Date.now() - lastSeen.getTime()) / 60000);
-                  lastSeenText =
-                    minutesAgo < 1
-                      ? i18nText("time.justNow", {}, "Just now")
-                      : formatTimeAgo(minutesAgo);
-                }
-
-                return `
-                    <div class="operator-card role-${roleClass}" style="cursor: pointer;" onclick="openOperatorModal('${escapeHtml(op.id || op.username)}')">
-                        <div class="operator-header">
-                            <div class="operator-avatar">${avatarHtml}</div>
-                            <div class="operator-info">
-                                <div class="operator-name">${escapeHtml(op.name || op.username || "Unknown")}</div>
-                                <div class="operator-username">@${escapeHtml(op.username || op.id)}</div>
-                            </div>
-                            <span class="operator-role ${roleClass}">${roleClass}</span>
-                        </div>
-                        <div class="operator-stats">
-                            <div class="operator-stat">
-                                <div class="operator-stat-value" style="color: ${activeSessions > 0 ? "var(--green)" : "var(--text-muted)"}">${activeSessions}</div>
-                                <div class="operator-stat-label">Active</div>
-                            </div>
-                            <div class="operator-stat">
-                                <div class="operator-stat-value">${totalSessions}</div>
-                                <div class="operator-stat-label">Sessions</div>
-                            </div>
-                            <div class="operator-stat">
-                                <div class="operator-stat-value" style="font-size: 0.9rem;">${lastSeenText}</div>
-                                <div class="operator-stat-label">Last Seen</div>
-                            </div>
-                        </div>
-                    </div>
-                    `;
-              })
-              .join(""),
-          );
-        }
-      }
-
-      // Refresh operators data
-      async function refreshOperators() {
-        try {
-          const res = await fetch("/api/operators");
-          const data = await res.json();
-          renderOperators(data);
-        } catch (e) {
-          console.error("Failed to fetch operators:", e);
-        }
       }
 
       // Store current token stats for window switching
@@ -1738,128 +1406,6 @@
         }
       }
 
-      // Cerebro rendering
-      function renderCerebro(cerebro) {
-        // Store for re-rendering when privacy settings change
-        window.lastCerebroData = cerebro;
-
-        const notInitEl = document.getElementById("cerebro-not-initialized");
-        const initEl = document.getElementById("cerebro-initialized");
-
-        if (!cerebro || !cerebro.initialized) {
-          // Show not initialized state with dynamic path
-          if (notInitEl) notInitEl.style.display = "block";
-          if (initEl) initEl.style.display = "none";
-          $set("cerebro-count", "textContent", "not initialized");
-          $set("nav-cerebro-count", "textContent", "-");
-
-          // Update init commands with actual configured path
-          if (cerebro && cerebro.cerebroPath) {
-            const basePath = cerebro.cerebroPath.replace(/^\/Users\/[^/]+/, "~");
-            $set("cerebro-init-topics-cmd", "textContent", `mkdir -p ${basePath}/topics`);
-            $set("cerebro-init-orphans-cmd", "textContent", `mkdir -p ${basePath}/orphans`);
-          }
-          return;
-        }
-
-        // Show initialized state
-        if (notInitEl) notInitEl.style.display = "none";
-        if (initEl) initEl.style.display = "block";
-
-        // Calculate hidden topics count from current view
-        const allTopics = cerebro.recentTopics || [];
-        const hiddenTopicsCount = allTopics.filter((t) => isTopicHidden(t.name)).length;
-        const visibleTopicsCount = allTopics.length - hiddenTopicsCount;
-
-        // Update counts with hidden breakdown (updates dynamically on hide/unhide)
-        const countText =
-          hiddenTopicsCount > 0
-            ? `${cerebro.topics.total} topics (${visibleTopicsCount} visible, ${hiddenTopicsCount} hidden)`
-            : `${cerebro.topics.total} topics`;
-        $set("cerebro-count", "textContent", countText);
-        $set("nav-cerebro-count", "textContent", cerebro.topics.total);
-
-        $set("cerebro-active", "textContent", cerebro.topics.active || 0);
-        $set("cerebro-resolved", "textContent", cerebro.topics.resolved || 0);
-        $set("cerebro-parked", "textContent", cerebro.topics.parked || 0);
-        $set("cerebro-total-topics", "textContent", cerebro.topics.total || 0);
-
-        $set("cerebro-threads", "textContent", cerebro.threads || 0);
-        $set("cerebro-orphans", "textContent", cerebro.orphans || 0);
-
-        // Recent topics with action buttons (filtered by privacy settings)
-        const recentEl = document.getElementById("cerebro-recent-topics");
-        const visibleTopics = allTopics.filter((t) => !isTopicHidden(t.name));
-
-        if (visibleTopics.length > 0) {
-          smartUpdate(
-            recentEl,
-            visibleTopics
-              .map((t) => {
-                const statusIcon =
-                  t.status === "active" ? "🟢" : t.status === "resolved" ? "✅" : "⏸️";
-                const statusColor =
-                  t.status === "active"
-                    ? "var(--green)"
-                    : t.status === "resolved"
-                      ? "var(--accent)"
-                      : "var(--text-muted)";
-
-                // Action buttons based on status (always include hide button)
-                const hideBtn = `<button class="topic-action-btn hide" onclick="quickHideTopic('${escapeHtml(t.name).replace(/'/g, "\\'")}', '${escapeHtml(t.title || t.name).replace(/'/g, "\\'")}'); event.stopPropagation();" title="Hide topic">👁️</button>`;
-                let actionButtons = "";
-                if (t.status === "active") {
-                  actionButtons = `
-                            <button class="topic-action-btn resolve" onclick="updateTopicStatus('${escapeHtml(t.name)}', 'resolved')" title="Mark as resolved">✓</button>
-                            <button class="topic-action-btn park" onclick="updateTopicStatus('${escapeHtml(t.name)}', 'parked')" title="Park topic">⏸</button>
-                            ${hideBtn}
-                        `;
-                } else {
-                  actionButtons = `
-                            <button class="topic-action-btn reactivate" onclick="updateTopicStatus('${escapeHtml(t.name)}', 'active')" title="Reactivate topic">↩</button>
-                            ${hideBtn}
-                        `;
-                }
-
-                return `
-                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.8rem;">
-                            <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
-                                <span>${statusIcon}</span>
-                                <span style="color: ${statusColor};">${escapeHtml(t.title || t.name)}</span>
-                                ${t.threads > 0 ? `<span style="color: var(--text-muted); font-size: 0.7rem;">(${t.threads} threads)</span>` : ""}
-                            </div>
-                            <div class="topic-actions">
-                                ${actionButtons}
-                            </div>
-                            <span style="color: var(--text-muted); margin-left: 8px;">${t.age || "-"}</span>
-                        </div>
-                    `;
-              })
-              .join(""),
-          );
-        } else {
-          smartUpdate(
-            recentEl,
-            '<em style="color: var(--text-muted); font-size: 0.8rem;">No active topics yet</em>',
-          );
-        }
-
-        // Last updated
-        const lastUpdatedEl = document.getElementById("cerebro-last-updated");
-        if (cerebro.lastUpdated) {
-          const date = new Date(cerebro.lastUpdated);
-          const now = new Date();
-          const diffMs = now - date;
-          const diffMins = Math.round(diffMs / 60000);
-          if (diffMins < 1) lastUpdatedEl.textContent = "just now";
-          else if (diffMins < 60) lastUpdatedEl.textContent = `${diffMins}m ago`;
-          else if (diffMins < 1440) lastUpdatedEl.textContent = `${Math.round(diffMins / 60)}h ago`;
-          else lastUpdatedEl.textContent = `${Math.round(diffMins / 1440)}d ago`;
-        } else {
-          lastUpdatedEl.textContent = "-";
-        }
-      }
-
       // Detail panel
       function openDetail(sessionKey, label) {
         document.getElementById("detail-title").textContent = label;
@@ -1932,133 +1478,6 @@
         setTimeout(() => {
           document.getElementById("auth-modal").classList.add("hidden");
           document.getElementById("auth-modal-overlay").classList.add("hidden");
-        }, 200);
-      }
-
-      // Operator modal
-      async function openOperatorModal(operatorId) {
-        document.getElementById("operator-modal").classList.remove("hidden");
-        document.getElementById("operator-modal").classList.add("visible");
-        document.getElementById("operator-modal-overlay").classList.remove("hidden");
-        document.getElementById("operator-modal-overlay").classList.add("visible");
-
-        // Show loading state
-        document.getElementById("operator-modal-content").innerHTML =
-          '<div class="loading-state">Loading user stats...</div>';
-
-        try {
-          // Fetch operator data from API
-          const res = await fetch("/api/operators");
-          const data = await res.json();
-
-          // Find the operator by ID or name
-          const operator = data.operators?.find(
-            (op) =>
-              op.id === operatorId ||
-              op.metadata?.slackId === operatorId ||
-              op.displayName === operatorId ||
-              op.username === operatorId,
-          );
-
-          if (operator) {
-            renderOperatorModal(operator, data.sessions || []);
-          } else {
-            document.getElementById("operator-modal-content").innerHTML = `
-              <div class="detail-section">
-                <p style="color: var(--text-muted)">Operator not found: ${escapeHtml(operatorId)}</p>
-              </div>
-            `;
-          }
-        } catch (e) {
-          console.error("Failed to load operator:", e);
-          document.getElementById("operator-modal-content").innerHTML = `
-            <div class="detail-section">
-              <p style="color: var(--error)">Failed to load user data</p>
-            </div>
-          `;
-        }
-      }
-
-      function renderOperatorModal(operator, allSessions) {
-        const displayName = operator.displayName || operator.username || "Unknown";
-        document.getElementById("operator-modal-name").textContent = displayName;
-
-        // Calculate user stats
-        const userSessions = sessionsData.filter(
-          (s) =>
-            s.originator?.userId === operator.id ||
-            s.originator?.userId === operator.metadata?.slackId ||
-            s.originator?.displayName === displayName,
-        );
-
-        const activeSessions = userSessions.filter((s) => s.active).length;
-        const totalTokens = userSessions.reduce((sum, s) => sum + (s.tokens || 0), 0);
-        const tokensFormatted =
-          totalTokens > 1000000
-            ? (totalTokens / 1000000).toFixed(1) + "M"
-            : totalTokens > 1000
-              ? (totalTokens / 1000).toFixed(1) + "k"
-              : totalTokens;
-
-        const initial = displayName.charAt(0).toUpperCase();
-        const roleLabel =
-          operator.role === "owner"
-            ? "👑 Owner"
-            : operator.role === "admin"
-              ? "⭐ Admin"
-              : "👤 User";
-
-        document.getElementById("operator-modal-content").innerHTML = `
-          <div class="detail-section">
-            <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 16px;">
-              <div style="width: 60px; height: 60px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: bold;">
-                ${initial}
-              </div>
-              <div>
-                <div style="font-size: 1.2rem; font-weight: 600;">${escapeHtml(displayName)}</div>
-                <div style="color: var(--text-muted); font-size: 0.85rem;">${roleLabel}</div>
-                ${operator.source ? `<div style="color: var(--text-muted); font-size: 0.75rem;">via ${operator.source}</div>` : ""}
-              </div>
-            </div>
-          </div>
-          
-          <div class="detail-section">
-            <h3>📊 Stats</h3>
-            <div class="detail-box">
-              <div class="detail-row"><span class="detail-label">Active Sessions</span><span class="detail-value">${activeSessions}</span></div>
-              <div class="detail-row"><span class="detail-label">Total Sessions</span><span class="detail-value">${userSessions.length}</span></div>
-              <div class="detail-row"><span class="detail-label">Total Tokens</span><span class="detail-value">${tokensFormatted}</span></div>
-              <div class="detail-row"><span class="detail-label">First Seen</span><span class="detail-value">${operator.firstSeen ? new Date(operator.firstSeen).toLocaleDateString() : "—"}</span></div>
-            </div>
-          </div>
-          
-          <div class="detail-section">
-            <h3>💬 Recent Sessions</h3>
-            <div class="detail-box" style="font-size: 0.85rem;">
-              ${
-                userSessions
-                  .slice(0, 5)
-                  .map(
-                    (s) => `
-                <div class="detail-row" style="cursor: pointer;" onclick="closeOperatorModal(); openDetail('${escapeHtml(s.sessionKey)}', '${escapeHtml(s.label)}')">
-                  <span class="detail-label">${s.active ? "🟢" : "⚪"} ${escapeHtml(s.label?.substring(0, 30) || "Unknown")}${(s.label?.length || 0) > 30 ? "..." : ""}</span>
-                  <span class="detail-value">${((s.tokens || 0) / 1000).toFixed(1)}k</span>
-                </div>
-              `,
-                  )
-                  .join("") || '<em style="color: var(--text-muted)">No sessions found</em>'
-              }
-            </div>
-          </div>
-        `;
-      }
-
-      function closeOperatorModal() {
-        document.getElementById("operator-modal").classList.remove("visible");
-        document.getElementById("operator-modal-overlay").classList.remove("visible");
-        setTimeout(() => {
-          document.getElementById("operator-modal").classList.add("hidden");
-          document.getElementById("operator-modal-overlay").classList.add("hidden");
         }, 200);
       }
 
@@ -2368,9 +1787,9 @@
         }
       }
 
-      // Refresh all views after privacy change
+      // Refresh all views after privacy change (the Cerebro tab re-applies
+      // hidden-topic filters itself on its next render)
       function refreshAllViews() {
-        if (window.lastCerebroData) renderCerebro(window.lastCerebroData);
         renderSessions(sessionsData);
         if (cronData && cronData.length > 0) renderCron(cronData);
         updateHostnameDisplay();
@@ -3015,28 +2434,6 @@
           toast.style.animation = "toast-out 0.3s ease forwards";
           setTimeout(() => toast.remove(), 300);
         }, 3000);
-      }
-
-      // Update topic status API call
-      async function updateTopicStatus(topicId, status) {
-        try {
-          const res = await fetch(`/api/cerebro/topic/${encodeURIComponent(topicId)}/status`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status }),
-          });
-
-          const data = await res.json();
-          if (!res.ok) {
-            throw new Error(data.error || "Failed to update status");
-          }
-
-          showToast(`Topic "${data.topic.title}" marked as ${status}`);
-          // Refresh Cerebro data
-          refreshCerebro();
-        } catch (e) {
-          showToast(`Error: ${e.message}`, "error");
-        }
       }
 
       // Slim home sub-agents: the full panel moved to #view-sessions

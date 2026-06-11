@@ -1,3 +1,4 @@
+/* global HashChangeEvent */
 /**
  * Shared Sidebar Loader
  *
@@ -217,7 +218,8 @@
 
     // Update cerebro count
     if (data.cerebro) {
-      sidebarState.cerebro = data.cerebro.topicCount || data.cerebro.totalTopics || 0;
+      sidebarState.cerebro =
+        data.cerebro.topics?.total || data.cerebro.topicCount || data.cerebro.totalTopics || 0;
     }
 
     // Update operators count
@@ -285,7 +287,9 @@
     const collapsed = sidebar?.classList.contains("collapsed");
     try {
       localStorage.setItem("sidebar-collapsed", collapsed ? "true" : "false");
-    } catch (e) {}
+    } catch (e) {
+      // localStorage unavailable (private mode) — preference is not persisted
+    }
   };
 
   /**
@@ -300,7 +304,9 @@
         if (sidebar) sidebar.classList.add("collapsed");
         if (mainWrapper) mainWrapper.classList.add("sidebar-collapsed");
       }
-    } catch (e) {}
+    } catch (e) {
+      // localStorage unavailable (private mode) — start expanded
+    }
   }
 
   // Fetch jobs count separately (since it's a different API).
