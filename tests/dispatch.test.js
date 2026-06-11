@@ -21,6 +21,7 @@ const {
   composeKickoffMessage,
   resolveBinary,
   isOpenDispatchAttempt,
+  parseRunResult,
   DISPATCH_NOTE,
 } = require("../src/dispatch");
 
@@ -298,6 +299,233 @@ describe("previewDispatch / getStatus", () => {
     exec.release();
     await result.completion;
     assert.strictEqual(dispatch.getStatus().openCount, 0);
+  });
+});
+
+describe("dispatch follow-through (watcher)", () => {
+  let kanban;
+  beforeEach(() => {
+    kanban = freshKanban();
+  });
+
+  const SUCCESS_STDOUT = JSON.stringify({
+    result: {
+      meta: { agentMeta: { sessionId: "sess-9" } },
+      payloads: [{ text: "All done. Opened PR #42." }],
+    },
+  });
+
+  it("auto-moves the card to review when the run succeeds", async () => {
+    const exec = makeExecFn({ stdout: SUCCESS_STDOUT });
+    const dispatch = makeDispatch({ kanban, execFn: exec.fn });
+    const task = kanban.createTask({ title: "T" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "dev" });
+    exec.release();
+    await result.completion;
+
+    const after = kanban.getBoard().tasks.find((t) => t.id === task.id);
+    assert.strictEqual(after.status, "review");
+    assert.strictEqual(after.attempts[0].result, "success");
+  });
+
+  it("auto-moves inprogress → review on success (agent moved the card itself)", async () => {
+    const exec = makeExecFn({ stdout: SUCCESS_STDOUT });
+    const dispatch = makeDispatch({ kanban, execFn: exec.fn });
+    const task = kanban.createTask({ title: "T" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "dev" });
+    kanban.moveTask(task.id, "inprogress", 0, "dev"); // agent started work
+    exec.release();
+    await result.completion;
+
+    const after = kanban.getBoard().tasks.find((t) => t.id === task.id);
+    assert.strictEqual(after.status, "review");
+  });
+
+  it("records the output snippet on the attempt note (success)", async () => {
+    const exec = makeExecFn({ stdout: SUCCESS_STDOUT });
+    const dispatch = makeDispatch({ kanban, execFn: exec.fn });
+    const task = kanban.createTask({ title: "T" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "dev" });
+    exec.release();
+    await result.completion;
+
+    const after = kanban.getBoard().tasks.find((t) => t.id === task.id);
+    assert.match(after.attempts[0].note, /^dispatched · session sess-9 · result: All done\./);
+  });
+
+  it("truncates long output snippets on the attempt note", async () => {
+    const longText = "x".repeat(5000);
+    const exec = makeExecFn({
+      stdout: JSON.stringify({ result: { payloads: [{ text: longText }] } }),
+    });
+    const dispatch = makeDispatch({ kanban, execFn: exec.fn });
+    const task = kanban.createTask({ title: "T" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "dev" });
+    exec.release();
+    await result.completion;
+
+    const after = kanban.getBoard().tasks.find((t) => t.id === task.id);
+    assert.ok(after.attempts[0].note.length < 400);
+    assert.match(after.attempts[0].note, /…$/);
+  });
+
+  it("does not auto-move a card the operator already moved to done", async () => {
+    const exec = makeExecFn({ stdout: SUCCESS_STDOUT });
+    const dispatch = makeDispatch({ kanban, execFn: exec.fn });
+    const task = kanban.createTask({ title: "T" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "dev" });
+    kanban.moveTask(task.id, "done", 0, "op"); // operator pre-empted the watcher
+    exec.release();
+    await result.completion;
+
+    const after = kanban.getBoard().tasks.find((t) => t.id === task.id);
+    assert.strictEqual(after.status, "done");
+    assert.strictEqual(after.attempts[0].result, "success"); // outcome still recorded
+  });
+
+  it("treats a CLI-reported JSON error as failure and moves the card to failed", async () => {
+    const exec = makeExecFn({
+      stdout: JSON.stringify({ error: "agent turn aborted", result: null }),
+    });
+    const dispatch = makeDispatch({ kanban, execFn: exec.fn });
+    const task = kanban.createTask({ title: "T" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "dev" });
+    exec.release();
+    await result.completion;
+
+    const after = kanban.getBoard().tasks.find((t) => t.id === task.id);
+    assert.strictEqual(after.status, "failed");
+    assert.strictEqual(after.attempts[0].result, "failure");
+    assert.match(after.attempts[0].note, /^dispatched · failed: agent turn aborted/);
+  });
+
+  it("auto-moves the card to failed when the run rejects", async () => {
+    const exec = makeExecFn({ fail: true });
+    const dispatch = makeDispatch({ kanban, execFn: exec.fn });
+    const task = kanban.createTask({ title: "T" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "dev" });
+    exec.release();
+    await result.completion;
+
+    const after = kanban.getBoard().tasks.find((t) => t.id === task.id);
+    assert.strictEqual(after.status, "failed");
+  });
+
+  it("classifies a killed process as timeout: note, comment, and move to failed", async () => {
+    const calls = [];
+    const execFn = (args, opts) => {
+      calls.push({ args, opts });
+      const err = new Error("spawnSync timed out");
+      err.killed = true;
+      err.signal = "SIGTERM";
+      return Promise.reject(err);
+    };
+    const dispatch = makeDispatch({ kanban, execFn, config: { timeoutSec: 7 } });
+    const task = kanban.createTask({ title: "T" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "dev" });
+    await result.completion;
+
+    const after = kanban.getBoard().tasks.find((t) => t.id === task.id);
+    assert.strictEqual(after.status, "failed");
+    assert.strictEqual(after.attempts[0].result, "failure");
+    assert.match(after.attempts[0].note, /^dispatched · timeout: /);
+    const comment = after.comments.find((c) => c.author === "dispatch");
+    assert.match(comment.text, /timed out/);
+  });
+
+  it("fires the dispatchComplete alert hook on success (info) and failure (warn)", async () => {
+    const fired = [];
+    const fireAlert = (event) => {
+      fired.push(event);
+    };
+
+    const okExec = makeExecFn({ stdout: SUCCESS_STDOUT });
+    const okDispatch = createDispatch({
+      kanban,
+      execFn: okExec.fn,
+      fireAlert,
+      config: { baseUrl: "http://x", node: "test-node" },
+    });
+    const a = kanban.createTask({ title: "A" }, "op");
+    const ok = okDispatch.dispatchTask(a.id, { agent: "dev" });
+    okExec.release();
+    await ok.completion;
+
+    const failExec = makeExecFn({ fail: true });
+    const failDispatch = createDispatch({
+      kanban,
+      execFn: failExec.fn,
+      fireAlert,
+      config: { baseUrl: "http://x", node: "test-node" },
+    });
+    const b = kanban.createTask({ title: "B" }, "op");
+    const bad = failDispatch.dispatchTask(b.id, { agent: "dev" });
+    failExec.release();
+    await bad.completion;
+
+    assert.strictEqual(fired.length, 2);
+    assert.deepStrictEqual(
+      { type: fired[0].type, severity: fired[0].severity, task: fired[0].task },
+      { type: "dispatchComplete", severity: "info", task: a.id },
+    );
+    assert.match(fired[0].message, /completed/);
+    assert.deepStrictEqual(
+      { type: fired[1].type, severity: fired[1].severity, task: fired[1].task },
+      { type: "dispatchComplete", severity: "warn", task: b.id },
+    );
+    assert.match(fired[1].message, /failed/);
+  });
+
+  it("survives a throwing fireAlert hook (completion still settles cleanly)", async () => {
+    const exec = makeExecFn({ stdout: SUCCESS_STDOUT });
+    const dispatch = createDispatch({
+      kanban,
+      execFn: exec.fn,
+      fireAlert: () => {
+        throw new Error("sink exploded");
+      },
+      config: { baseUrl: "http://x", node: "test-node" },
+    });
+    const task = kanban.createTask({ title: "T" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "dev" });
+    exec.release();
+    await result.completion; // must not reject
+
+    const after = kanban.getBoard().tasks.find((t) => t.id === task.id);
+    assert.strictEqual(after.status, "review");
+  });
+});
+
+describe("parseRunResult", () => {
+  it("extracts session id, output text, and no error from a clean run", () => {
+    const parsed = parseRunResult(
+      JSON.stringify({
+        result: {
+          meta: { agentMeta: { sessionId: "sess-7" } },
+          payloads: [{ text: "first" }, { text: "second" }],
+        },
+      }),
+    );
+    assert.strictEqual(parsed.sessionId, "sess-7");
+    assert.strictEqual(parsed.outputText, "first\nsecond");
+    assert.strictEqual(parsed.error, null);
+  });
+
+  it("reports CLI-level errors (string and object forms)", () => {
+    assert.strictEqual(parseRunResult(JSON.stringify({ error: "boom" })).error, "boom");
+    assert.strictEqual(
+      parseRunResult(JSON.stringify({ error: { message: "deep boom" } })).error,
+      "deep boom",
+    );
+    assert.match(String(parseRunResult(JSON.stringify({ success: false })).error), /failure/);
+  });
+
+  it("returns nulls for non-JSON output", () => {
+    assert.deepStrictEqual(parseRunResult("not json at all"), {
+      sessionId: null,
+      outputText: null,
+      error: null,
+    });
   });
 });
 

@@ -35,6 +35,7 @@ const ALERT_RULES = [
   "taskStale",
   "lessonPending",
   "budgetBreach",
+  "dispatchComplete",
 ];
 const WEBHOOK_EVENT_OPTIONS = ["*", ...ALERT_RULES];
 const SEC = 1000;
