@@ -1,0 +1,233 @@
+<!-- Fleet Board View Partial — unified kanban across local + federated remotes -->
+<div class="section" id="fleet-board-view-section">
+  <style>
+    /* Explicit display rules below would defeat the `hidden` attribute */
+    #fleet-board-view-section [hidden] {
+      display: none !important;
+    }
+
+    /* ---- Origin legend ---- */
+    #fleet-board-view-section .fb-legend {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding-top: 12px;
+    }
+    #fleet-board-view-section .fb-origin-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text-muted);
+    }
+    #fleet-board-view-section .fb-origin-chip .fb-origin-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--fb-origin-color, var(--text-muted));
+      flex-shrink: 0;
+    }
+    #fleet-board-view-section .fb-origin-chip.unreachable {
+      opacity: 0.55;
+    }
+    #fleet-board-view-section .fb-origin-mode {
+      font-size: 0.6rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    #fleet-board-view-section .fb-origin-mode.writable {
+      color: var(--accent);
+    }
+
+    /* ---- Board (mirrors the kanban kb-* idioms) ---- */
+    #fleet-board-view-section .fb-board {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      flex: 1;
+      overflow-x: auto;
+      padding: 16px 2px 8px;
+    }
+    #fleet-board-view-section .fb-col {
+      flex: 0 0 234px;
+      min-width: 234px;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-top: 2px solid var(--fb-col-accent, var(--border));
+      border-radius: 10px;
+      max-height: 72vh;
+    }
+    #fleet-board-view-section .fb-col[data-status="inbox"] {
+      --fb-col-accent: var(--text-muted);
+    }
+    #fleet-board-view-section .fb-col[data-status="assigned"] {
+      --fb-col-accent: var(--accent-2);
+    }
+    #fleet-board-view-section .fb-col[data-status="inprogress"] {
+      --fb-col-accent: var(--accent);
+    }
+    #fleet-board-view-section .fb-col[data-status="review"] {
+      --fb-col-accent: var(--purple);
+    }
+    #fleet-board-view-section .fb-col[data-status="done"] {
+      --fb-col-accent: rgba(var(--accent-rgb), 0.45);
+    }
+    #fleet-board-view-section .fb-col[data-status="failed"] {
+      --fb-col-accent: var(--red);
+      border-color: rgba(248, 81, 73, 0.45);
+    }
+    #fleet-board-view-section .fb-col-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    #fleet-board-view-section .fb-col-name {
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--fb-col-accent, var(--text));
+    }
+    #fleet-board-view-section .fb-count {
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 1px 8px;
+      min-width: 24px;
+      text-align: center;
+      margin-left: auto;
+    }
+    #fleet-board-view-section .fb-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 10px;
+      overflow-y: auto;
+      min-height: 60px;
+      flex: 1;
+    }
+
+    /* ---- Cards ---- */
+    #fleet-board-view-section .fb-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--fb-origin-color, var(--border));
+      border-radius: 8px;
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      cursor: grab;
+    }
+    #fleet-board-view-section .fb-card.fb-readonly {
+      cursor: default;
+    }
+    #fleet-board-view-section .fb-card-title {
+      font-size: 0.8rem;
+      color: var(--text);
+      word-break: break-word;
+    }
+    #fleet-board-view-section .fb-card-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      font-size: 0.66rem;
+      color: var(--text-muted);
+    }
+    #fleet-board-view-section .fb-card-origin {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-weight: 600;
+      padding: 1px 7px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      max-width: 130px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #fleet-board-view-section .fb-card-origin .fb-origin-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--fb-origin-color, var(--text-muted));
+      flex-shrink: 0;
+    }
+    #fleet-board-view-section .fb-card-lock {
+      flex-shrink: 0;
+    }
+    #fleet-board-view-section .fb-card-assignee {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 110px;
+    }
+    #fleet-board-view-section .fb-card-stale {
+      color: var(--yellow);
+      font-weight: 600;
+    }
+    #fleet-board-view-section .sortable-ghost {
+      opacity: 0.4;
+    }
+
+    /* ---- Loading / error / empty ---- */
+    #fleet-board-view-section .fb-error {
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 0.82rem;
+      background: rgba(248, 81, 73, 0.1);
+      border: 1px solid rgba(248, 81, 73, 0.4);
+      color: var(--red);
+      margin-top: 12px;
+    }
+    #fleet-board-view-section .fb-hint {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      padding-top: 4px;
+    }
+  </style>
+
+  <section class="view-panel">
+    <div class="view-header">
+      <div class="view-title">
+        <span class="view-icon">🗂️</span>
+        <span data-i18n="views.fleetBoard.title">Fleet Board</span>
+      </div>
+      <div class="view-subtitle" data-i18n="views.fleetBoard.subtitle">
+        Unified kanban across this dashboard and every federated remote — remote cards are read-only
+        unless the remote has write actions enabled
+      </div>
+    </div>
+
+    <div class="view-loading" id="fb-loading" data-i18n="views.fleetBoard.loading">
+      Loading fleet board...
+    </div>
+    <div class="fb-error" id="fb-error" hidden></div>
+
+    <div id="fb-body" hidden>
+      <div class="fb-legend" id="fb-legend"></div>
+      <div class="fb-hint" id="fb-hint" data-i18n="views.fleetBoard.dragHint">
+        Drag cards between columns. Cards from read-only remotes are locked (🔒); moves on writable
+        remotes are proxied through federation under your identity.
+      </div>
+      <div class="fb-board" id="fb-board"></div>
+    </div>
+  </section>
+</div>
