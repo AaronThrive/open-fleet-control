@@ -1,6 +1,6 @@
 ---
 name: open-fleet-control
-version: 2.0.0
+version: 2.1.0
 description: Mission control dashboard for OpenClaw - real-time session monitoring, LLM usage tracking, cost intelligence, and system vitals. View all your AI agents in one place.
 metadata:
   openclaw:

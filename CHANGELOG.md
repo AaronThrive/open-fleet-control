@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.1.0 — 2026-06-11
+
+- Detail lists everywhere: Cron, AI Jobs, Agents, Cerebro, Operators, Cortex memory, and Logs use the shared dense detail-list component (sortable, filterable, expandable rows) instead of card grids
+- Cerebro and Operators extracted from the home page into their own sidebar tabs (home page no longer fetches their data)
+- Single kanban board: Fleet Board merged into Kanban — federated cards render in the same columns with origin chips, read-only locking, and remote moves proxied for writable remotes
+- Cortex gauges fixed: headroom no longer renders zeros (empty path override + null poll state both handled honestly); lean-ctx shows real totals instead of a meaningless 0% savings; knowledge graph moved below the memory browser
+- Settings page: sections render independently (one failed fetch no longer wedges the page), fetches time out with a Retry chip, restart-required is a calm info banner with a working "Restart service" button (POST /api/fleet/admin/restart riding systemd Restart=on-failure)
+- Privacy feature removed entirely (hide buttons, hostname blur, /api/privacy, settings card)
+- Audit everything: every mutating route now writes an audit entry (10 new actions incl. settings.update, chat.publish, action.execute, job.run, service.restart); Logs page gains dynamic action/actor filters, free-text search, pagination, and a count summary
+- i18n: 138 keys backfilled, 46 orphans pruned
+
 ## 1.7.0 — 2026-06-10
 
 - Rebrand: OpenFleetControl, built by Aaron May; English-only (zh-CN removed)
