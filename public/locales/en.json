@@ -2,10 +2,8 @@
   "app": {
     "title": "OpenFleetControl",
     "connecting": "Connecting...",
-    "connected": "🟢 Live",
     "disconnected": "🔴 Disconnected",
     "pollingMode": "Polling Mode",
-    "error": "🔴 Error",
     "live": "LIVE",
     "stale": "STALE — last update {time}"
   },
@@ -13,7 +11,6 @@
     "title": "OpenFleetControl",
     "navigation": "Navigation",
     "settings": "Settings",
-    "quickStats": "Quick Stats",
     "systemVitals": "System Vitals",
     "llmUsage": "LLM Usage",
     "sessions": "Sessions",
@@ -31,13 +28,7 @@
     "evolution": "Evolution",
     "federation": "Federation",
     "logs": "Logs",
-    "privacy": "Privacy",
     "about": "About",
-    "tokens": "Tokens",
-    "estDaily": "Est. Daily",
-    "estMonthly": "Est. Monthly",
-    "avgTokSess": "Avg Tok/Sess",
-    "avgCostSess": "Avg $/Sess",
     "autoRefresh": "Auto-refresh: 30s",
     "live": "Live: {time}",
     "updated": "Updated: {time}",
@@ -47,7 +38,8 @@
     "settingsView": "Settings",
     "docker": "Docker",
     "agents": "Agents",
-    "alerts": "Alerts"
+    "alerts": "Alerts",
+    "fleetBoard": "Fleet Board"
   },
   "stats": {
     "totalTokens": "Total Tokens",
@@ -80,7 +72,8 @@
     "checked": "checked {value}"
   },
   "actions": {
-    "remove": "Remove"
+    "remove": "Remove",
+    "close": "Close"
   },
   "privacy": {
     "noCronHidden": "No cron jobs hidden"
@@ -145,7 +138,6 @@
       "subtitle": "Broadcast channel between you and every agent in the fleet",
       "emptyTitle": "No fleet messages yet",
       "emptyText": "When agents report in or you broadcast an order, the conversation will appear here.",
-      "cta": "Send your first broadcast →",
       "alertsLabel": "Alerts",
       "senderPlaceholder": "Sender",
       "receiverPlaceholder": "Receiver",
@@ -246,7 +238,7 @@
       "dispatchTargetPrefix": "Task \"{title}\" → agent ",
       "dispatchTask": "⚡ Dispatch to Agent",
       "dispatchTo": "Dispatch to {agent}",
-      "dispatchedBadge": "⚡ dispatched"
+      "runningBadge": "running ⚡ {elapsed}"
     },
     "briefs": {
       "title": "Briefs",
@@ -280,9 +272,6 @@
     "cortex": {
       "title": "Cortex",
       "subtitle": "Shared knowledge base the whole fleet can read and write",
-      "emptyTitle": "Cortex is empty",
-      "emptyText": "No knowledge has been ingested yet. Feed the Cortex documents, notes, and lessons so every agent shares the same brain.",
-      "cta": "Ingest knowledge →",
       "availMemory": "Memory",
       "availGraph": "Graph (gbrain)",
       "availGauges": "Gauges",
@@ -437,7 +426,20 @@
       "actionFailedRemote": "{action} failed on \"{name}\": remote HTTP {status}{detail}",
       "actionFailed": "{action} failed on \"{name}\": {message}",
       "confirmRemove": "Remove remote dashboard \"{name}\" from federation?",
-      "removeFailed": "Failed to remove remote: {message}"
+      "removeFailed": "Failed to remove remote: {message}",
+      "drillAlertUnknown": "(no message)",
+      "drillAlerts": "Recent alerts",
+      "drillDownTitle": "Click for remote detail",
+      "drillError": "Failed to load remote detail: {message}",
+      "drillFetched": "Detail fetched: {value}",
+      "drillKanban": "Kanban",
+      "drillLoading": "Loading remote detail...",
+      "drillNoAlerts": "No recent alerts.",
+      "drillNoData": "No detail cached from this remote yet. It appears after the first successful poll.",
+      "drillNoKanban": "No kanban data.",
+      "drillNoNodes": "No node data.",
+      "drillNodes": "Mesh nodes",
+      "drillUnreachable": "Remote currently unreachable — showing last-known cached detail."
     },
     "logs": {
       "title": "Audit Logs",
@@ -494,7 +496,13 @@
       "transcriptLoading": "loading…",
       "transcriptLoadingBody": "Loading transcript…",
       "transcriptStatus": "{count} messages • tailing",
-      "viewTranscript": "View live transcript"
+      "viewTranscript": "View live transcript",
+      "transcriptNoMatches": "No matches in the full transcript.",
+      "transcriptSearchFailed": "search failed: {message}",
+      "transcriptSearchPlaceholder": "Search…",
+      "transcriptSearching": "searching full transcript…",
+      "transcriptServerResults": "{count} matches in full transcript",
+      "transcriptServerResultsTruncated": "{count}+ matches in full transcript (capped)"
     },
     "cron": {
       "title": "Cron Jobs",
@@ -512,7 +520,15 @@
       "filterAll": "All",
       "filterEmpty": "No cron jobs match the current filters.",
       "filterSource": "Source:",
-      "hermesEmpty": "No Hermes scheduled tasks found — ~/.hermes/cron/jobs.json has no matching jobs."
+      "hermesEmpty": "No Hermes scheduled tasks found — ~/.hermes/cron/jobs.json has no matching jobs.",
+      "actionDisable": "⏸ Disable",
+      "actionEnable": "✓ Enable",
+      "actionError": "Cron action failed: {message}",
+      "actionRun": "▶ Run now",
+      "disabledToast": "Disabled: {name}",
+      "enabledToast": "Enabled: {name}",
+      "runConfirm": "Run \"{name}\" now? The job executes immediately.",
+      "runQueued": "Run queued: {name}"
     },
     "vitals": {
       "title": "System Vitals",
@@ -538,7 +554,14 @@
       "nrUnavailable": "Nine Router usage unavailable: {reason}",
       "orUnavailable": "OpenRouter unavailable: {reason} — add OPENROUTER_API_KEY to the server environment to enable credit tracking.",
       "resetsIn": "resets in {time}",
-      "subUnavailable": "Subscription data unavailable: {reason}"
+      "subUnavailable": "Subscription data unavailable: {reason}",
+      "budgetDaily": "daily",
+      "budgetDayElapsed": "{pct}% of day elapsed",
+      "budgetGauge": "{spent} / {limit} {period} ({pct}%)",
+      "budgetNoUsage": "no usage data yet",
+      "budgetTotal": "Total",
+      "budgetWeekElapsed": "{pct}% of week elapsed",
+      "budgetWeekly": "weekly"
     },
     "tokens": {
       "title": "Tokens & Cost",
@@ -683,7 +706,18 @@
       "privacyTitle": "🔒 Privacy",
       "privacyUnhidden": "Item is visible again.",
       "saveBudgets": "Save budgets",
-      "savePrivacy": "Save privacy"
+      "savePrivacy": "Save privacy",
+      "arulesAllSinks": "All sinks",
+      "arulesColEnabled": "Enabled",
+      "arulesColRule": "Rule",
+      "arulesColSinks": "Sends to",
+      "arulesFlapConsecutive": "Consecutive failed checks (1–20)",
+      "arulesFlapDuration": "Min failing duration, seconds (0–3600)",
+      "arulesFlapInvalid": "Flap thresholds must be 1–20 consecutive checks and 0–3600 seconds.",
+      "arulesFlapTitle": "Flap suppression (nodeOffline / nodeUnreachable)",
+      "arulesHint": "Per-rule delivery: enable/disable each alert rule and choose which sink(s) it fires to. \"All sinks\" routes through every configured sink; webhook event filters still apply.",
+      "arulesSave": "Save alert rules",
+      "arulesTitle": "🚨 Alert rules"
     },
     "alerts": {
       "title": "Alerts",
@@ -707,8 +741,6 @@
       "colType": "Type",
       "colTarget": "Node / Task",
       "colMessage": "Message",
-      "mute1h": "Mute 1h",
-      "mute24h": "Mute 24h",
       "unmute": "Unmute",
       "reEnable": "Re-enable",
       "mutedRulesBanner": "Disabled alert rules:",
@@ -722,8 +754,30 @@
       "cta": "Refresh alerts →",
       "queryFailed": "Alert query failed (HTTP {status})",
       "networkError": "Could not reach the alerts API — is the server up?",
-      "settingsFailed": "Could not load alert settings",
-      "updateFailed": "Settings update failed: {message}"
+      "updateFailed": "Settings update failed: {message}",
+      "analyticsCount": "{n}×",
+      "analyticsCycles": "{n} cycles",
+      "analyticsDayTitle": "{date}: {n} alerts",
+      "analyticsEmpty": "No alerts in the analytics window yet.",
+      "analyticsFlaps": "Flapping (fired → recovered cycles)",
+      "analyticsNodes": "Noisiest nodes",
+      "analyticsNone": "—",
+      "analyticsRules": "Noisiest rules",
+      "analyticsTitle": "Alert analytics — {n} alerts in the last {days} days"
+    },
+    "fleetBoard": {
+      "dragHint": "Drag cards between columns. Cards from read-only remotes are locked (🔒); moves on writable remotes are proxied through federation under your identity.",
+      "loadError": "Failed to load the fleet board: {message}. Retrying automatically...",
+      "loading": "Loading fleet board...",
+      "lockedTitle": "Read-only — enable write actions on this remote to move its cards",
+      "moveFailed": "Move failed: {message}",
+      "moveOk": "Card moved to {column}.",
+      "readOnly": "read-only",
+      "stale": "stale",
+      "subtitle": "Unified kanban across this dashboard and every federated remote — remote cards are read-only unless the remote has write actions enabled",
+      "title": "Fleet Board",
+      "unreachable": "Remote unreachable — showing cached cards",
+      "writable": "WRITABLE"
     }
   },
   "jobs": {
