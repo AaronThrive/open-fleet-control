@@ -157,6 +157,9 @@ function mapOpenClawJob(job, node) {
     enabled: job.enabled !== false,
     nextRun: formatNextRun(state.nextRunAtMs),
     lastStatus: state.lastStatus ?? state.lastRunStatus ?? null,
+    // Epoch ms of the most recent run (null when the job never ran) — feeds
+    // the per-agent flight-recorder timeline (cron.run events).
+    lastRunAtMs: Number.isFinite(state.lastRunAtMs) ? state.lastRunAtMs : null,
     agent: job.agentId || null,
     node,
     source: "openclaw",
@@ -181,6 +184,12 @@ function mapHermesJob(job, node) {
     if (Number.isFinite(parsed)) nextRunAtMs = parsed;
   }
 
+  let lastRunAtMs = null;
+  if (job.last_run_at) {
+    const parsed = Date.parse(job.last_run_at);
+    if (Number.isFinite(parsed)) lastRunAtMs = parsed;
+  }
+
   return {
     id: job.id,
     name: job.name || String(job.id || "").slice(0, 8),
@@ -189,6 +198,7 @@ function mapHermesJob(job, node) {
     enabled: job.enabled !== false,
     nextRun: formatNextRun(nextRunAtMs),
     lastStatus: job.last_status ?? null,
+    lastRunAtMs,
     agent: job.profile || null,
     node,
     source: "hermes",
