@@ -36,31 +36,7 @@
     color: var(--red);
   }
 
-  /* Remote dashboard grid */
-  #federation-view-section .fed-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 12px;
-  }
-  #federation-view-section .fed-card {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 14px 16px;
-    border-radius: 10px;
-    background: var(--card-hover);
-    border: 1px solid var(--border);
-    transition: border-color 0.15s ease;
-  }
-  #federation-view-section .fed-card:hover {
-    border-color: rgba(var(--accent-rgb), 0.4);
-  }
-  #federation-view-section .fed-card-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-  }
+  /* Row cells */
   #federation-view-section .fed-status-dot {
     width: 10px;
     height: 10px;
@@ -76,63 +52,24 @@
     background: var(--red);
     box-shadow: 0 0 6px rgba(248, 81, 73, 0.6);
   }
-  #federation-view-section .fed-card-names {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-  }
-  #federation-view-section .fed-card-label {
-    font-weight: 600;
-    font-size: 0.9rem;
-    color: var(--text);
-    overflow: hidden;
-    text-overflow: ellipsis;
+  #federation-view-section .fed-reach {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
     white-space: nowrap;
   }
-  #federation-view-section .fed-card-host {
+  #federation-view-section .fed-reach.reachable {
+    color: var(--green);
+  }
+  #federation-view-section .fed-reach.unreachable {
+    color: var(--red);
+  }
+  #federation-view-section .fed-host {
     font-size: 0.72rem;
     color: var(--text-muted);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  #federation-view-section .fed-latency {
-    margin-left: auto;
-    flex-shrink: 0;
-    font-size: 0.74rem;
-    color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* Summary tiles */
-  #federation-view-section .fed-tiles {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
-    gap: 8px;
-  }
-  #federation-view-section .fed-tile {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    padding: 8px 10px;
-    border-radius: 8px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    min-width: 0;
-  }
-  #federation-view-section .fed-tile-label {
-    font-size: 0.62rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-muted);
-    white-space: nowrap;
-  }
-  #federation-view-section .fed-tile-value {
-    font-size: 0.92rem;
-    font-weight: 600;
-    color: var(--text);
-    font-variant-numeric: tabular-nums;
   }
   #federation-view-section .fed-gate-badge {
     display: inline-block;
@@ -157,40 +94,16 @@
     border: 1px solid var(--border);
     color: var(--text-muted);
   }
-
-  /* Task mini-bars */
-  #federation-view-section .fed-taskbars {
-    display: flex;
-    align-items: flex-end;
-    gap: 3px;
-    height: 26px;
-  }
-  #federation-view-section .fed-taskbar {
-    flex: 1;
-    min-width: 6px;
-    border-radius: 2px 2px 0 0;
-    background: rgba(var(--accent-rgb), 0.55);
-  }
-  #federation-view-section .fed-taskbar.failed {
-    background: rgba(248, 81, 73, 0.7);
-  }
-  #federation-view-section .fed-taskbar.done {
-    background: rgba(var(--accent-2-rgb), 0.6);
-  }
   #federation-view-section .fed-card-error {
     font-size: 0.74rem;
     color: var(--red);
     word-break: break-word;
   }
-  #federation-view-section .fed-card-foot {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 0.7rem;
-    color: var(--text-muted);
+  #federation-view-section .fed-row-actions {
+    display: inline-flex;
+    gap: 6px;
   }
   #federation-view-section .fed-remove-btn {
-    margin-left: auto;
     flex-shrink: 0;
     background: transparent;
     border: 1px solid var(--border);
@@ -201,9 +114,13 @@
     cursor: pointer;
     transition: all 0.15s ease;
   }
-  #federation-view-section .fed-remove-btn:hover {
+  #federation-view-section .fed-remove-btn:hover:not(:disabled) {
     border-color: var(--red);
     color: var(--red);
+  }
+  #federation-view-section .fed-remove-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 
   /* Add-remote form */
@@ -279,33 +196,25 @@
     color: var(--text-muted);
   }
 
-  /* Write-actions badge / toggle (per-remote opt-in) */
+  /* Write-actions badge (per-remote opt-in state, shown in the row) */
   #federation-view-section .fed-writes-badge {
+    display: inline-block;
     flex-shrink: 0;
     font-size: 0.64rem;
     font-weight: 700;
     letter-spacing: 0.05em;
     padding: 2px 8px;
     border-radius: 999px;
-    cursor: pointer;
-    transition: all 0.15s ease;
     background: transparent;
     border: 1px solid var(--border);
     color: var(--text-muted);
+    white-space: nowrap;
   }
   #federation-view-section .fed-writes-badge.on {
     background: rgba(var(--accent-rgb), 0.14);
     border-color: rgba(var(--accent-rgb), 0.65);
     color: var(--accent);
     box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.45);
-  }
-  #federation-view-section .fed-writes-badge:hover:not(:disabled) {
-    border-color: rgba(var(--accent-rgb), 0.6);
-    color: var(--accent);
-  }
-  #federation-view-section .fed-writes-badge:disabled {
-    opacity: 0.5;
-    cursor: default;
   }
 
   /* Remote write controls (gate toggle + pending lessons) */
@@ -383,71 +292,16 @@
     color: var(--text-muted);
   }
 
-  /* ---- Drill-down drawer (per-remote detail) ---- */
-  #federation-view-section .fed-card {
-    cursor: pointer;
-  }
-  #federation-view-section .fed-drawer-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.45);
-    z-index: 90;
-  }
-  #federation-view-section .fed-drawer {
-    position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(480px, 92vw);
-    background: var(--card-bg);
-    border-left: 1px solid var(--border);
-    box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35);
-    z-index: 91;
+  /* ---- Expanded detail panel (per-remote drill-down) ---- */
+  #federation-view-section .fed-detail {
     display: flex;
     flex-direction: column;
+    gap: 12px;
   }
-  #federation-view-section .fed-drawer-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--border);
-  }
-  #federation-view-section .fed-drawer-title {
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: var(--text);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  #federation-view-section .fed-drawer-sub {
-    font-size: 0.7rem;
-    color: var(--text-muted);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-  #federation-view-section .fed-drawer-close {
-    margin-left: auto;
-    flex-shrink: 0;
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    border-radius: 6px;
-    padding: 3px 10px;
-    font-size: 0.8rem;
-    cursor: pointer;
-  }
-  #federation-view-section .fed-drawer-close:hover {
-    border-color: var(--red);
-    color: var(--red);
-  }
-  #federation-view-section .fed-drawer-body {
-    flex: 1;
-    overflow-y: auto;
-    padding: 14px 16px;
+  #federation-view-section .fed-drill {
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 14px;
   }
   #federation-view-section .fed-detail-section-title {
     font-size: 0.64rem;
@@ -593,7 +447,7 @@
         <span>🔭</span>
         <span data-i18n="views.federation.writeNote">
           Remotes are read-only by default. Write actions (lesson approve/reject, gate, task move)
-          are a per-remote opt-in via the WRITES badge on each card.
+          are a per-remote opt-in via the Enable writes action on each row.
         </span>
         <span>
           <span data-i18n="views.federation.crossTailnetNote"
@@ -608,8 +462,8 @@
         </span>
       </div>
 
-      <!-- Remote dashboard grid -->
-      <div class="fed-grid" id="fed-grid" hidden></div>
+      <!-- Remote dashboard detail list (built by views/federation.js) -->
+      <div id="fed-list" hidden></div>
 
       <!-- Empty state (zero remotes) -->
       <div class="empty-state" id="fed-empty-state">
@@ -673,32 +527,5 @@
         <div class="fed-add-error" id="fed-add-error" hidden></div>
       </div>
     </div>
-
-    <!-- Drill-down drawer (per-remote detail; managed by federation.js) -->
-    <div class="fed-drawer-backdrop" id="fed-drawer-backdrop" hidden></div>
-    <aside
-      class="fed-drawer"
-      id="fed-drawer"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="fed-drawer-title"
-      hidden
-    >
-      <div class="fed-drawer-head">
-        <div style="min-width: 0">
-          <div class="fed-drawer-title" id="fed-drawer-title"></div>
-          <div class="fed-drawer-sub" id="fed-drawer-sub"></div>
-        </div>
-        <button
-          type="button"
-          class="fed-drawer-close"
-          id="fed-drawer-close"
-          data-i18n="actions.close"
-        >
-          Close
-        </button>
-      </div>
-      <div class="fed-drawer-body" id="fed-drawer-body"></div>
-    </aside>
   </section>
 </div>
