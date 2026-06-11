@@ -317,35 +317,34 @@ function buildFleetConfig(fileFleet) {
     }
   }
 
-  const assembled = {
+  return {
     ...fleet,
     ...resolvedDirs,
     cortex: resolvedCortex,
     usage: resolvedUsage,
     agents: resolvedAgents,
   };
-
-  // 1Password secret refs (op://vault/item/field) in secret-bearing fields
-  // (webhook secret, slack gatewayUrl, ntfy topic, usage.openrouterKey,
-  // federation token) are resolved SYNCHRONOUSLY here — CONFIG is a sync
-  // singleton consumed at require time, so boot-time execFileSync via the
-  // shared resolver is the least invasive integration (see src/secrets.js
-  // "RESOLUTION TIMING"). No-op (no process spawn) when no refs are present.
-  // A failed ref logs its path+ref (never the secret) and resolves to "",
-  // leaving that one integration unavailable while startup continues.
-  const { value: resolved, failures } = defaultSecrets.resolveDeepSync(assembled);
-  for (const failure of failures) {
-    console.warn(
-      `[Config] 1Password ref ${failure.ref} (fleet.${failure.path}) failed: ${failure.error} — continuing without it`,
-    );
-  }
-  return resolved;
 }
 
 /**
- * Build final configuration
+ * Build final configuration.
+ *
+ * 1Password secret refs (op://vault/item/field) in ANY string value of the
+ * assembled config (dashboard.json / dashboard.local.json / env overrides
+ * such as FLEET_CONFIG_JSON) are resolved SYNCHRONOUSLY at the end — CONFIG
+ * is a sync singleton consumed at require time, so boot-time execFileSync
+ * via the shared resolver is the least invasive integration (see
+ * src/secrets.js "RESOLUTION TIMING"). No-op (no process spawn) when no
+ * refs are present. A failed ref logs its path+ref (never the secret) and
+ * KEEPS the literal op:// string in place, so downstream code sees an
+ * obviously-invalid credential while startup continues; the failure is also
+ * surfaced via the secrets module status.
+ *
+ * @param {object} [options]
+ * @param {object} [options.secrets=defaultSecrets] - secrets resolver
+ *   (injectable for tests so the real op CLI is never spawned)
  */
-function loadConfig() {
+function loadConfig({ secrets = defaultSecrets } = {}) {
   const fileConfig = loadConfigFile();
   const workspace =
     process.env.OPENCLAW_WORKSPACE || expandPath(fileConfig.paths?.workspace) || detectWorkspace();
@@ -430,7 +429,14 @@ function loadConfig() {
     },
   };
 
-  return config;
+  // op:// secret references → resolved values (see the function docblock).
+  const { value: resolved, failures } = secrets.resolveDeepSync(config);
+  for (const failure of failures) {
+    console.warn(
+      `[Config] 1Password ref ${failure.ref} (${failure.path}) failed: ${failure.error} — keeping the reference in place`,
+    );
+  }
+  return resolved;
 }
 
 // Export singleton config

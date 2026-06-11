@@ -13,6 +13,8 @@
  * markdown (plus JSON envelope overhead).
  */
 
+const { defaultSecrets } = require("./secrets");
+
 const DEFAULT_BODY_LIMIT = 64 * 1024;
 const BRIEF_BODY_LIMIT = Math.floor(1.25 * 1024 * 1024); // 1MB content + JSON overhead
 const IDENTITY_HEADER = "tailscale-user-login";
@@ -118,9 +120,19 @@ function parseIntParam(query, name, fallback) {
  *   dispatch agent must exist in it. Wiring (src/index.js):
  *     createFleetRoutes({ fleet, settings, dispatch,
  *                         rosterFn: () => agentsRoster.getLocalRoster() })
+ * @param {function} [options.secretsStatusFn] - () => 1Password resolution
+ *   status summary for GET /api/fleet/secrets (refs + ok/failed counts,
+ *   never values). Defaults to the shared process-wide resolver's
+ *   getStatus(); injectable for tests.
  * @returns {{handle: function, isFleetRoute: function}}
  */
-function createFleetRoutes({ fleet, settings = null, dispatch = null, rosterFn = null }) {
+function createFleetRoutes({
+  fleet,
+  settings = null,
+  dispatch = null,
+  rosterFn = null,
+  secretsStatusFn = () => defaultSecrets.getStatus(),
+}) {
   if (!fleet) throw new Error("createFleetRoutes requires a fleet runtime");
 
   /**
@@ -812,6 +824,14 @@ function createFleetRoutes({ fleet, settings = null, dispatch = null, rosterFn =
         return handleAlerts(res, method, segments, query);
       case "settings":
         return handleSettings(req, res, method, segments);
+      case "secrets":
+        // Read-only 1Password resolution status: refs + ok/failed counts.
+        // Never includes resolved values (see src/secrets.js getStatus()).
+        if (segments.length === 1 && method === "GET") {
+          json(res, 200, secretsStatusFn());
+          return true;
+        }
+        return false;
       default:
         return false;
     }
