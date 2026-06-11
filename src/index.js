@@ -101,6 +101,8 @@ const { createSettings } = require("./settings");
 const { createDocker } = require("./docker");
 const { createUsageSources } = require("./usage-sources");
 const { createAgentsRoster } = require("./agents-roster");
+const { createFlightRecorder, createStoreSessionsSource } = require("./flight-recorder");
+const { createTimelineRoutes, isTimelineRoute } = require("./timeline-routes");
 const { createSessionControl } = require("./session-control");
 const { createRateLimiter } = require("./rate-limit");
 
@@ -334,6 +336,19 @@ const agentsRoster = createAgentsRoster({
   agentsDir: path.join(getOpenClawDir(), "agents"),
   mesh: fleet.mesh,
 });
+
+// Agent flight recorder — read-only per-agent activity timeline aggregated
+// from sources the dashboard already collects (sessions store, kanban
+// attempts/comments, audit trail, cron last-runs). No new collection.
+const flightRecorder = createFlightRecorder({
+  readAgentSessions: createStoreSessionsSource({
+    agentsDir: path.join(getOpenClawDir(), "agents"),
+  }),
+  getBoard: () => fleet.kanban.getBoard(),
+  queryAudit: (filters) => fleet.audit.query(filters),
+  getCronJobs: getCronJobsSafe,
+});
+const timelineRoutes = createTimelineRoutes({ recorder: flightRecorder });
 
 // ============================================================================
 // STARTUP: Data migration + background tasks
@@ -962,6 +977,15 @@ const server = http.createServer((req, res) => {
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Internal error" }));
       });
+    return;
+  } else if (isTimelineRoute(pathname)) {
+    // GET /api/fleet/agents/:id/timeline — agent flight recorder (read-only).
+    // Must dispatch before the generic fleet routes, which 404 unknown paths.
+    timelineRoutes.handle(req, res, pathname, query).catch((e) => {
+      console.error("[Timeline] Route failed:", e.message);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Internal error" }));
+    });
     return;
   } else if (isFleetRoute(pathname)) {
     fleetRoutes.handle(req, res, pathname, query);
