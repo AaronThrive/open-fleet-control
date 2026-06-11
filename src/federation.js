@@ -36,6 +36,10 @@ const MAX_LABEL_LENGTH = 120;
 const MAX_TOKEN_LENGTH = 512;
 const MAX_REMOTE_BODY_CHARS = 4096; // proxied remote response bodies are truncated to 4KB
 const MAX_PENDING_LESSONS = 10;
+// Drill-down detail caps — every remote payload is trimmed before caching.
+const MAX_DETAIL_NODES = 24;
+const MAX_DETAIL_TASKS = 120;
+const MAX_DETAIL_ALERTS = 10;
 
 // Loopback hosts allowed to use plain http:// (see validateBaseUrl).
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -283,6 +287,113 @@ function extractPendingLessons(body) {
     }));
 }
 
+/** Trimmed string or null — guards every remote-supplied text field. */
+function pickString(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * Best-effort extraction of a remote GET /api/fleet/mesh payload into a
+ * trimmed node list for the drill-down panel. Tolerates any shape mismatch
+ * (missing blocks, malformed leaves) by returning null / nulled fields.
+ * Capped at MAX_DETAIL_NODES entries.
+ *
+ * @param {object|null} body - remote /api/fleet/mesh response body
+ * @returns {{nodes: Array<object>}|null}
+ */
+function extractRemoteMeshDetail(body) {
+  if (!body || typeof body !== "object" || !Array.isArray(body.nodes)) return null;
+  const nodes = body.nodes
+    .filter((n) => n && typeof n === "object")
+    .slice(0, MAX_DETAIL_NODES)
+    .map((n) => {
+      const health = n.health && typeof n.health === "object" ? n.health : {};
+      const vitals = n.vitals && typeof n.vitals === "object" ? n.vitals : null;
+      return {
+        id: pickString(n.id),
+        hostname: pickString(n.hostname),
+        label: pickString(n.label),
+        port: pickNumber(n.port),
+        status: pickString(health.status) || "unknown",
+        latencyMs: pickNumber(health.latencyMs),
+        version: pickString(health.version),
+        vitals: vitals
+          ? {
+              cpuPct: pickNumber(vitals.cpu?.percent),
+              memPct: pickNumber(vitals.memory?.pct),
+              diskPct: pickNumber(vitals.disk?.pct),
+              uptime:
+                typeof vitals.uptime === "string" || typeof vitals.uptime === "number"
+                  ? vitals.uptime
+                  : null,
+            }
+          : null,
+      };
+    });
+  return { nodes };
+}
+
+/**
+ * Best-effort extraction of a remote GET /api/fleet/kanban board into
+ * per-column counts plus a trimmed task list (cards carry only what the
+ * drill-down / fleet board render). Tasks with an unknown status or without
+ * a string id/title are dropped; the list is sorted by column order then
+ * task order and capped at MAX_DETAIL_TASKS.
+ *
+ * @param {object|null} body - remote /api/fleet/kanban response body
+ * @returns {{counts: object, tasks: Array<object>}|null}
+ */
+function extractRemoteBoardDetail(body) {
+  if (!body || typeof body !== "object" || !Array.isArray(body.tasks)) return null;
+  const counts = {};
+  for (const status of KANBAN_STATUSES) counts[status] = 0;
+
+  const tasks = [];
+  for (const task of body.tasks) {
+    if (!task || typeof task !== "object") continue;
+    if (typeof task.id !== "string" || typeof task.title !== "string") continue;
+    if (!KANBAN_STATUSES.includes(task.status)) continue;
+    counts[task.status] += 1;
+    tasks.push({
+      id: task.id,
+      title: task.title,
+      status: task.status,
+      assignee: pickString(task.assignee),
+      priority: pickNumber(task.priority),
+      order: pickNumber(task.order) ?? 0,
+      updated_at: pickString(task.updated_at),
+      stale: task.stale === true,
+    });
+  }
+  tasks.sort(
+    (a, b) =>
+      KANBAN_STATUSES.indexOf(a.status) - KANBAN_STATUSES.indexOf(b.status) || a.order - b.order,
+  );
+  return { counts, tasks: tasks.slice(0, MAX_DETAIL_TASKS) };
+}
+
+/**
+ * Best-effort extraction of a remote GET /api/fleet/alerts payload into a
+ * trimmed recent-alerts list, capped at MAX_DETAIL_ALERTS.
+ *
+ * @param {object|null} body - remote /api/fleet/alerts response body
+ * @returns {{alerts: Array<object>}|null}
+ */
+function extractRemoteAlertsDetail(body) {
+  if (!body || typeof body !== "object" || !Array.isArray(body.alerts)) return null;
+  const alerts = body.alerts
+    .filter((a) => a && typeof a === "object")
+    .slice(0, MAX_DETAIL_ALERTS)
+    .map((a) => ({
+      ts: pickNumber(a.ts) ?? pickString(a.ts),
+      type: pickString(a.type),
+      severity: pickString(a.severity),
+      node: pickString(a.node),
+      message: pickString(a.message),
+    }));
+  return { alerts };
+}
+
 function createInitialStatus() {
   return {
     reachable: null, // null = never checked yet
@@ -311,8 +422,9 @@ function redactRemote(remote) {
  * @param {function} [options.fetchFn] - fetch-compatible function (injectable)
  * @param {function} [options.onChange] - callback({remote, previousReachable, reachable, status}) fired on reachability transitions
  * @param {function} [options.nowFn] - clock function (default Date.now)
- * @returns {{start, stop, getState, addRemote, removeRemote, setRemoteWrites,
- *            performRemoteAction, _pollOnce}}
+ * @returns {{start, stop, getState, getRemoteDetail, getBoardSources,
+ *            addRemote, removeRemote, setRemoteWrites, performRemoteAction,
+ *            _pollOnce}}
  */
 function createFederation(options = {}) {
   const {
@@ -333,6 +445,10 @@ function createFederation(options = {}) {
 
   let remotes = loadRegistry();
   const statuses = {}; // remoteId -> status record (records replaced immutably)
+  // remoteId -> cached drill-down detail ({mesh, kanban, alerts, fetchedAt}).
+  // Kept OUT of the status records so getState() stays a compact summary —
+  // the detail surfaces only through getRemoteDetail() / getBoardSources().
+  const details = {};
   let pollTimer = null;
 
   // ---------------------------------------------------------------------
@@ -412,6 +528,7 @@ function createFederation(options = {}) {
     }
     remotes = remotes.filter((r) => r.id !== target.id);
     delete statuses[target.id];
+    delete details[target.id];
     saveRegistry();
     return redactRemote(target);
   }
@@ -552,7 +669,8 @@ function createFederation(options = {}) {
   }
 
   // ---------------------------------------------------------------------
-  // Polling (READ-ONLY: GET /api/state + GET /api/fleet/evolution, nothing else)
+  // Polling (READ-ONLY: GET /api/state + GET /api/fleet/evolution plus the
+  // drill-down detail GETs /api/fleet/{mesh,kanban,alerts} — nothing else)
   // ---------------------------------------------------------------------
 
   function timeoutSignal(ms) {
@@ -595,6 +713,48 @@ function createFederation(options = {}) {
     }
   }
 
+  /**
+   * Best-effort GET of one remote read-only endpoint. Returns the parsed
+   * JSON body or null on ANY failure (network, non-2xx, non-JSON) —
+   * drill-down enrichment must never fail the health poll.
+   */
+  async function fetchRemoteJson(remote, urlPath, headers) {
+    try {
+      const res = await fetchFn(`${remote.baseUrl}${urlPath}`, {
+        headers,
+        signal: timeoutSignal(timeoutMs),
+      });
+      if (!res || res.ok !== true) return null;
+      return await res.json();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * Refresh the cached drill-down detail for a reachable remote: mesh nodes,
+   * kanban board summary, and recent alerts — three parallel READ-ONLY GETs.
+   * Each section is independently failure-tolerant: a failed/missing
+   * endpoint (older remote, transient blip) keeps that section's last-known
+   * value instead of wiping it. When nothing has ever been fetched the cache
+   * entry simply stays absent and the UI degrades to the summary tile.
+   */
+  async function refreshRemoteDetail(remote, headers) {
+    const [meshBody, kanbanBody, alertsBody] = await Promise.all([
+      fetchRemoteJson(remote, "/api/fleet/mesh", headers),
+      fetchRemoteJson(remote, "/api/fleet/kanban", headers),
+      fetchRemoteJson(remote, `/api/fleet/alerts?limit=${MAX_DETAIL_ALERTS}`, headers),
+    ]);
+    const prev = details[remote.id] || null;
+    const mesh = extractRemoteMeshDetail(meshBody) ?? (prev ? prev.mesh : null);
+    const kanban = extractRemoteBoardDetail(kanbanBody) ?? (prev ? prev.kanban : null);
+    const alerts = extractRemoteAlertsDetail(alertsBody) ?? (prev ? prev.alerts : null);
+    if (!mesh && !kanban && !alerts) return; // nothing known yet — stay absent
+    // The remote may have been removed while the requests were in flight.
+    if (!remotes.some((r) => r.id === remote.id)) return;
+    details[remote.id] = { mesh, kanban, alerts, fetchedAt: nowFn() };
+  }
+
   async function pollRemote(remote) {
     const prev = statuses[remote.id] || createInitialStatus();
     const startedAt = nowFn();
@@ -616,13 +776,19 @@ function createFederation(options = {}) {
         } catch (e) {
           // Non-JSON body — keep the last-known summary.
         }
+        // Enrichment (pending lessons + drill-down detail) in parallel —
+        // each is independently best-effort and never fails the poll.
+        const [pendingLessons] = await Promise.all([
+          fetchPendingLessons(remote, headers),
+          refreshRemoteDetail(remote, headers),
+        ]);
         next = {
           reachable: true,
           lastChecked: startedAt,
           lastError: null,
           latencyMs,
           summary,
-          pendingLessons: await fetchPendingLessons(remote, headers),
+          pendingLessons,
         };
       } else {
         next = {
@@ -684,6 +850,45 @@ function createFederation(options = {}) {
   // State snapshot for the UI (tokens redacted)
   // ---------------------------------------------------------------------
 
+  /**
+   * Drill-down snapshot for one remote: redacted record + status + cached
+   * detail (null until the first successful detail fetch). Throws
+   * "Unknown remote" (mapped to 404 by the routes) on a bad id.
+   *
+   * @param {string} remoteId
+   * @returns {{remote: object, status: object, detail: object|null}}
+   */
+  function getRemoteDetail(remoteId) {
+    const remote = remotes.find((r) => r.id === remoteId);
+    if (!remote) {
+      throw new Error(`Unknown remote: ${remoteId}`);
+    }
+    return {
+      remote: redactRemote(remote),
+      status: statuses[remote.id] || createInitialStatus(),
+      detail: details[remote.id] || null,
+    };
+  }
+
+  /**
+   * Per-remote sources for the fleet-wide board: redacted record,
+   * reachability, and the cached detail (whose kanban block carries the
+   * remote's trimmed cards). Dead remotes appear with their last-known
+   * detail (or null) — the board renders what it has, never throws.
+   *
+   * @returns {Array<{remote: object, reachable: boolean|null, detail: object|null}>}
+   */
+  function getBoardSources() {
+    return remotes.map((remote) => {
+      const status = statuses[remote.id];
+      return {
+        remote: redactRemote(remote),
+        reachable: status ? status.reachable : null,
+        detail: details[remote.id] || null,
+      };
+    });
+  }
+
   function getState() {
     return {
       remotes: remotes.map((remote) => ({
@@ -704,6 +909,8 @@ function createFederation(options = {}) {
     start,
     stop,
     getState,
+    getRemoteDetail,
+    getBoardSources,
     addRemote,
     removeRemote,
     setRemoteWrites,
@@ -718,6 +925,13 @@ module.exports = {
   validateRemoteInput,
   extractRemoteSummary,
   extractPendingLessons,
+  extractRemoteMeshDetail,
+  extractRemoteBoardDetail,
+  extractRemoteAlertsDetail,
+  KANBAN_STATUSES,
+  MAX_DETAIL_NODES,
+  MAX_DETAIL_TASKS,
+  MAX_DETAIL_ALERTS,
   WRITE_ACTIONS,
   DEFAULT_INTERVAL_MS,
   DEFAULT_TIMEOUT_MS,
