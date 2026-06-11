@@ -717,6 +717,10 @@
               >Budget alerts enabled (fires the budgetBreach rule)</span
             >
           </label>
+          <label class="set-toggle">
+            <input type="checkbox" id="set-budgets-enforce" />
+            <span>Enforce: block new dispatches at 100% (until ack or window reset)</span>
+          </label>
           <div class="set-field">
             <span class="set-field-label" data-i18n="views.settings.budgetsInterval"
               >Check interval (minutes)</span
@@ -823,6 +827,54 @@
           budgets.
         </div>
         <div class="set-inline-error" id="set-budgets-error" hidden></div>
+      </div>
+
+      <!-- ============================ Digest ============================ -->
+      <div class="set-card">
+        <div class="set-card-head">
+          <button
+            type="button"
+            class="set-collapse-toggle"
+            data-collapse-toggle
+            aria-expanded="true"
+          >
+            <span class="set-collapse-chevron" aria-hidden="true">▼</span>
+            <span class="set-card-title" data-i18n="views.settings.digestTitle"
+              >📰 Fleet digest</span
+            >
+          </button>
+          <button type="button" class="set-save-btn" id="set-digest-save">Save digest</button>
+        </div>
+        <div class="set-row">
+          <label class="set-toggle">
+            <input type="checkbox" id="set-digest-enabled" />
+            <span data-i18n="views.settings.digestEnabled">Scheduled digest enabled</span>
+          </label>
+          <div class="set-field">
+            <span class="set-field-label" data-i18n="views.settings.digestSchedule">Schedule</span>
+            <select id="set-digest-schedule">
+              <option value="daily">daily</option>
+              <option value="weekly">weekly (Mondays UTC)</option>
+            </select>
+          </div>
+          <div class="set-field">
+            <span class="set-field-label" data-i18n="views.settings.digestHour">Hour (UTC)</span>
+            <input type="number" class="set-num-input" id="set-digest-hour" min="0" max="23" />
+          </div>
+        </div>
+        <div class="set-row" id="set-digest-sinks">
+          <label class="set-toggle"><input type="checkbox" data-sink="slack" /><span>Slack</span></label>
+          <label class="set-toggle"><input type="checkbox" data-sink="ntfy" /><span>ntfy</span></label>
+          <label class="set-toggle"
+            ><input type="checkbox" data-sink="webhooks" /><span>Webhooks</span></label
+          >
+          <button type="button" class="set-action-btn" id="set-digest-test">Send test digest</button>
+        </div>
+        <div class="set-hint" data-i18n="views.settings.digestHint">
+          Delivers a compact markdown fleet summary through the alert sinks configured above. No
+          sink checked = all sinks ("*"). Test sends never shift the schedule.
+        </div>
+        <div class="set-inline-error" id="set-digest-error" hidden></div>
       </div>
 
       <!-- ============================= Gate ============================= -->
