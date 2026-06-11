@@ -28,22 +28,10 @@
     #evolution-view-section .evo-gate-banner .evo-gate-text strong {
       letter-spacing: 0.5px;
     }
-    #evolution-view-section .evo-gate-toggle-btn {
-      padding: 6px 14px;
-      border-radius: 16px;
-      border: 1px solid currentColor;
-      background: transparent;
-      color: inherit;
-      font-size: 0.75rem;
-      cursor: pointer;
-      transition: opacity 0.15s;
-    }
-    #evolution-view-section .evo-gate-toggle-btn:hover {
-      opacity: 0.8;
-    }
-    #evolution-view-section .evo-gate-toggle-btn:disabled {
-      opacity: 0.4;
-      cursor: wait;
+    #evolution-view-section .evo-gate-hint {
+      font-size: 0.72rem;
+      opacity: 0.75;
+      white-space: nowrap;
     }
     #evolution-view-section .evo-tabs {
       display: flex;
@@ -204,10 +192,10 @@
       </div>
     </div>
 
-    <!-- Gate state banner (mirrors the header VALIDATION GATE toggle) -->
+    <!-- Gate state banner — read-only; the control lives in Settings -->
     <div class="evo-gate-banner" id="evo-gate-banner" hidden>
       <span class="evo-gate-text" id="evo-gate-text"></span>
-      <button class="evo-gate-toggle-btn" id="evo-gate-toggle" type="button"></button>
+      <span class="evo-gate-hint" id="evo-gate-hint"></span>
     </div>
 
     <div id="evo-error" class="evo-error" hidden></div>

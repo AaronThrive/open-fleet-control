@@ -33,8 +33,10 @@
 
 import { t } from "../utils.js";
 import {
+  aboutModel,
   applySections,
   formatRestartPaths,
+  makeHealthCheck,
   mergeRestartPaths,
   pollUntilHealthy,
 } from "./settings-core.js";
@@ -127,10 +129,18 @@ export function init(containerEl) {
     budgetWeeklyAdd: root.querySelector("#set-budget-weekly-add"),
     budgetsSave: root.querySelector("#set-budgets-save"),
     budgetsError: root.querySelector("#set-budgets-error"),
-    // Gate
+    // Gate (live toggle + persisted default)
+    gateLive: root.querySelector("#set-gate-live"),
+    gateLiveLabel: root.querySelector("#set-gate-live-label"),
+    gateState: root.querySelector("#set-gate-state"),
+    gateExplain: root.querySelector("#set-gate-explain"),
     gateDefault: root.querySelector("#set-gate-default"),
     gateSave: root.querySelector("#set-gate-save"),
     gateError: root.querySelector("#set-gate-error"),
+    // About
+    aboutName: root.querySelector("#set-about-name"),
+    aboutVersion: root.querySelector("#set-about-version"),
+    aboutLine: root.querySelector("#set-about-line"),
   };
 
   buildRuleToggles();
@@ -141,6 +151,7 @@ export function init(containerEl) {
   refs.alertsSave?.addEventListener("click", saveAlerts);
   refs.intervalsSave?.addEventListener("click", saveIntervals);
   refs.gateSave?.addEventListener("click", saveGate);
+  refs.gateLive?.addEventListener("change", toggleLiveGate);
   refs.ntfyTest?.addEventListener("click", sendTestAlert);
   refs.whAdd?.addEventListener("click", addWebhook);
   refs.restartBtn?.addEventListener("click", restartService);
@@ -169,9 +180,21 @@ export function init(containerEl) {
   if (refs.restartOverlayMsg) {
     refs.restartOverlayMsg.textContent = t("views.settings.restarting", {}, "Restarting…");
   }
+  if (refs.gateLiveLabel) {
+    refs.gateLiveLabel.textContent = t("views.settings.gateLiveLabel", {}, "Validation gate");
+  }
+  if (refs.gateExplain) {
+    refs.gateExplain.textContent = t(
+      "views.settings.gateExplain",
+      {},
+      "When the gate is ON, new evolution lessons require manual approval before they are adopted; OFF lets lessons auto-approve (autonomous merge).",
+    );
+  }
 
   renderRestartBanner();
   refresh();
+  refreshLiveGate();
+  loadAbout();
 }
 
 /** Wire collapsible section headers (chevron + title toggles the card body). */
@@ -522,6 +545,75 @@ function saveGate() {
   );
 }
 
+// --- Live validation gate (GET/PUT /api/fleet/evolution/gate) -----------------
+// The single control surface for the gate: it replaced both the top-bar
+// switcher and the Evolution-view toggle. The Evolution banner still shows
+// the state read-only.
+
+/** Reflect the live gate state into the toggle + state line. */
+function setLiveGateUI(gate) {
+  if (!refs || !refs.gateLive) return;
+  refs.gateLive.checked = gate === true;
+  if (refs.gateState) {
+    refs.gateState.textContent =
+      gate === true
+        ? t("views.settings.gateStateOn", {}, "ON — new lessons require approval.")
+        : t("views.settings.gateStateOff", {}, "OFF — lessons auto-approve (autonomous merge).");
+  }
+}
+
+async function refreshLiveGate() {
+  if (!refs || !refs.gateLive) return;
+  try {
+    const payload = await fetchJson("/api/fleet/evolution/gate");
+    if (!refs) return;
+    setLiveGateUI(payload && payload.gate === true);
+  } catch (err) {
+    if (!refs || !refs.gateState) return;
+    console.error("[Settings] Failed to load gate state:", err);
+    refs.gateState.textContent = t(
+      "views.settings.gateStateError",
+      { message: err.message },
+      "Current state unavailable: {message}",
+    );
+  }
+}
+
+/** Apply the toggle immediately (PUT); revert the UI when the call fails. */
+async function toggleLiveGate() {
+  if (!refs || !refs.gateLive) return;
+  const next = refs.gateLive.checked;
+  refs.gateLive.disabled = true;
+  try {
+    await fetchJson("/api/fleet/evolution/gate", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ gate: next }),
+    });
+    if (!refs) return;
+    setLiveGateUI(next);
+    showToast(
+      next
+        ? t("gate.toastOn", {}, "Validation gate ON — lessons require approval")
+        : t("gate.toastOff", {}, "Validation gate OFF — autonomous merge"),
+      "success",
+    );
+    // Keep other gate consumers (Evolution banner, SSE listeners) in sync.
+    window.dispatchEvent(
+      new CustomEvent("fleet:evolution", { detail: { type: "gate.toggle", gate: next } }),
+    );
+  } catch (err) {
+    if (!refs) return;
+    setLiveGateUI(!next); // revert to the last known server state
+    showToast(
+      t("gate.updateFailed", { message: err.message }, "Gate update failed: {message}"),
+      "error",
+    );
+  } finally {
+    if (refs && refs.gateLive) refs.gateLive.disabled = false;
+  }
+}
+
 // --- Budgets (fleet.budgets — warn at 80%, critical at 100%) ------------------
 
 const BUDGET_PROVIDER_RE = /^[A-Za-z0-9][A-Za-z0-9 ._:-]{0,63}$/;
@@ -748,25 +840,20 @@ function renderRestartBanner() {
   refs.restartPathsEl.textContent = formatRestartPaths(restartPaths);
 }
 
-/** Quick /api/health probe (short timeout so the poll loop stays snappy). */
-async function healthCheck() {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2000);
-  try {
-    const response = await fetch("/api/health", { signal: controller.signal, cache: "no-store" });
-    return response.ok;
-  } catch (err) {
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
-}
+/** Quick /api/health probe — every probe individually capped at 2s. */
+const healthCheck = makeHealthCheck({ timeoutMs: 2000 });
+
+/** Pause before the post-restart reload so the success toast is readable. */
+const RELOAD_DELAY_MS = 1200;
 
 /**
  * Confirm → POST /api/fleet/admin/restart → "Restarting…" overlay → poll
- * /api/health until the respawned service answers → reload settings and
- * clear the restart banner. The server exits ~300ms after responding and
- * systemd (Restart=on-failure, RestartSec=5) brings it back.
+ * /api/health until the respawned service answers → full page reload (the
+ * served assets may have changed across the restart). The server exits
+ * ~300ms after responding and systemd (Restart=on-failure, RestartSec=5)
+ * brings it back. The overlay ALWAYS resolves: healthy → reload + success
+ * toast; 60s timeout → overlay cleared + actionable error (dev/standalone
+ * runs have no supervisor, so the process simply stays down).
  */
 async function restartService() {
   if (!refs) return;
@@ -808,15 +895,44 @@ async function restartService() {
     restartPaths = new Set();
     renderRestartBanner();
     showToast(t("views.settings.restarted", {}, "Service restarted."), "success");
-    refresh();
+    setTimeout(() => window.location.reload(), RELOAD_DELAY_MS);
   } else {
     showToast(
       t(
-        "views.settings.restartTimeout",
+        "views.settings.restartTimeoutAction",
         {},
-        "The service did not come back in time — reload the page manually.",
+        "The service did not come back — check: systemctl --user status open-fleet-control",
       ),
       "error",
+    );
+  }
+}
+
+// --- About card ----------------------------------------------------------------
+
+/**
+ * Fill the compact About card. Version comes from GET /api/about (single
+ * source of truth: package.json); a failed fetch keeps the static fallbacks
+ * so the card always renders.
+ */
+async function loadAbout() {
+  if (!refs || !refs.aboutVersion) return;
+  let payload = null;
+  try {
+    payload = await fetchJson("/api/about");
+  } catch (err) {
+    console.error("[Settings] Failed to load /api/about:", err);
+  }
+  if (!refs || !refs.aboutVersion) return;
+  const about = aboutModel(payload);
+  if (refs.aboutName) refs.aboutName.textContent = `ℹ️ ${about.name}`;
+  refs.aboutVersion.textContent = about.version;
+  refs.aboutVersion.hidden = about.version === "";
+  if (refs.aboutLine) {
+    refs.aboutLine.textContent = t(
+      "views.settings.aboutLine",
+      { license: about.license },
+      "{license} license — built by Aaron May — based on openclaw-command-center",
     );
   }
 }
