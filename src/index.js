@@ -99,6 +99,8 @@ const { createDispatch } = require("./dispatch");
 const { createSettings } = require("./settings");
 const { createDocker } = require("./docker");
 const { createUsageSources } = require("./usage-sources");
+const { createUsageProvider } = require("./budgets");
+const { createTopConsumersSource } = require("./digest");
 const { createAgentsRoster } = require("./agents-roster");
 const { createSessionControl } = require("./session-control");
 const { createRateLimiter } = require("./rate-limit");
@@ -233,6 +235,8 @@ setAuditRecorder((entry) => fleet.audit.record(entry));
 const settings = createSettings({
   configPath: path.join(__dirname, "..", "config", "dashboard.local.json"),
   onChange: (alertsConfig) => fleet.applyAlertsConfig(alertsConfig),
+  onBudgetsChange: (budgetsConfig) => fleet.applyBudgetsConfig(budgetsConfig),
+  onDigestChange: (digestConfig) => fleet.applyDigestConfig(digestConfig),
 });
 
 // Kanban → agent dispatch + follow-through watcher (src/dispatch.js):
@@ -284,6 +288,21 @@ const usageSources = createUsageSources({
   nineRouterDb: CONFIG.fleet.usage.nineRouterDb,
   headroomStats: CONFIG.fleet.usage.headroomStats || CONFIG.fleet.cortex.headroomStats,
   openrouterKey: process.env.OPENROUTER_API_KEY || CONFIG.fleet.usage.openrouterKey,
+});
+
+// Budgets spend source: the evaluator reads REAL spend through the usage
+// adapters (9Router SQLite cost rows + the OpenRouter credits window delta;
+// claude-code estimates as the informative/fallback signal). Without this
+// wiring getUsage() stays null and the budget gauges report
+// usageAvailable:false — the guardrails would never see actual spend.
+fleet.setUsageProvider(createUsageProvider({ usageSources }));
+
+// Fleet digest sources that live outside the fleet runtime: cron job status
+// (openclaw CLI dual-source read) and the top-token-consumer rollup over the
+// usage adapters.
+fleet.setDigestSources({
+  getCronJobs: () => getCronJobsSafe(),
+  getTopConsumers: createTopConsumersSource({ usageSources }),
 });
 
 // Docker containers — read-only poller over the local Docker socket.

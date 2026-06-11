@@ -50,6 +50,7 @@ describe("budgets module", () => {
         daily: { totalUSD: 0, perProvider: {} },
         weekly: { totalUSD: 0, perProvider: {} },
         checkIntervalMs: 900000,
+        enforce: { enabled: false },
       });
       const normalized = normalizeBudgetsConfig({
         enabled: true,

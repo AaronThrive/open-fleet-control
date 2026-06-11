@@ -6,54 +6,35 @@
       font-size: 0.8rem;
       margin-bottom: 8px;
     }
-    #tokens-view-section .tokens-windows {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 12px;
-      margin-bottom: 16px;
-    }
-    #tokens-view-section .tokens-window-card .tw-cost {
-      font-size: 1.4rem;
-      font-weight: 700;
-      color: var(--accent);
-    }
-    #tokens-view-section .tokens-window-card .tw-meta {
-      font-size: 0.75rem;
-      color: var(--text-muted);
-      margin-top: 4px;
-    }
-    #tokens-view-section .tokens-table-wrap {
+    #tokens-view-section .tokens-section {
       border: 1px solid var(--border);
       border-radius: 8px;
-      overflow-x: auto;
       background: var(--card-bg);
+      padding: 12px 14px;
+      margin-bottom: 16px;
     }
-    #tokens-view-section table.tokens-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.8rem;
-    }
-    #tokens-view-section table.tokens-table th,
-    #tokens-view-section table.tokens-table td {
-      padding: 8px 12px;
-      text-align: right;
-      border-bottom: 1px solid var(--border);
-      white-space: nowrap;
-    }
-    #tokens-view-section table.tokens-table th {
-      font-size: 0.7rem;
+    #tokens-view-section .tokens-section-title {
+      font-size: 0.72rem;
+      font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       color: var(--text-muted);
-      background: var(--card-hover);
+      margin-bottom: 8px;
     }
-    #tokens-view-section table.tokens-table th:first-child,
-    #tokens-view-section table.tokens-table td:first-child {
-      text-align: left;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    #tokens-view-section .tokens-section-note {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin-top: 6px;
     }
-    #tokens-view-section table.tokens-table tr:last-child td {
-      border-bottom: none;
+    #tokens-view-section .tokens-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 6px 18px;
+      font-size: 0.76rem;
+    }
+    #tokens-view-section .tokens-detail-grid .label {
+      color: var(--text-muted);
+      margin-right: 6px;
     }
     #tokens-view-section .tokens-cache-read {
       color: var(--accent-2, #58d0c5);
@@ -85,7 +66,7 @@
       display: flex;
       align-items: center;
       gap: 10px;
-      margin: 14px 0 10px;
+      margin-bottom: 10px;
       flex-wrap: wrap;
     }
     #tokens-view-section .tokens-honesty-note {
@@ -108,57 +89,43 @@
 
     <div class="tokens-view-error" id="tokens-view-error" hidden></div>
 
-    <div class="tokens-windows" id="tokens-windows">
-      <div class="skeleton-card">
-        <div class="skeleton-bar title"></div>
-        <div class="skeleton-bar text"></div>
-        <div class="skeleton-bar text short"></div>
-      </div>
-      <div class="skeleton-card">
-        <div class="skeleton-bar title"></div>
-        <div class="skeleton-bar text"></div>
-        <div class="skeleton-bar text short"></div>
-      </div>
-      <div class="skeleton-card">
-        <div class="skeleton-bar title"></div>
-        <div class="skeleton-bar text"></div>
-        <div class="skeleton-bar text short"></div>
-      </div>
+    <div class="tokens-section">
+      <div class="tokens-section-title" data-i18n="views.tokens.windowsTitle">Windows</div>
+      <div id="tokens-windows-list"></div>
     </div>
 
-    <div class="tokens-toolbar">
-      <div class="filter-group" id="tokens-window-tabs">
-        <span class="filter-label" data-i18n="views.tokens.byModelWindow">By model:</span>
-        <button class="filter-btn active" data-window="24h" type="button">24h</button>
-        <button class="filter-btn" data-window="3d" type="button">3d</button>
-        <button class="filter-btn" data-window="7d" type="button">7d</button>
+    <div class="tokens-section">
+      <div class="tokens-toolbar">
+        <div class="filter-group" id="tokens-window-tabs">
+          <span class="filter-label" data-i18n="views.tokens.byModelWindow">By model:</span>
+          <button class="filter-btn active" data-window="24h" type="button">24h</button>
+          <button class="filter-btn" data-window="3d" type="button">3d</button>
+          <button class="filter-btn" data-window="7d" type="button">7d</button>
+        </div>
+        <button
+          class="btn-secondary"
+          id="tokens-open-cost-modal"
+          type="button"
+          data-i18n="views.tokens.openModal"
+          style="margin-left: auto"
+        >
+          💰 Full cost breakdown
+        </button>
       </div>
-      <button
-        class="btn-secondary"
-        id="tokens-open-cost-modal"
-        type="button"
-        data-i18n="views.tokens.openModal"
-        style="margin-left: auto"
-      >
-        💰 Full cost breakdown
-      </button>
+      <div id="tokens-models-list"></div>
     </div>
 
-    <div class="tokens-table-wrap">
-      <table class="tokens-table">
-        <thead>
-          <tr>
-            <th data-i18n="views.tokens.colModel">Model</th>
-            <th data-i18n="views.tokens.colInput">Input</th>
-            <th data-i18n="views.tokens.colOutput">Output</th>
-            <th data-i18n="views.tokens.colCacheRead">Cache Read</th>
-            <th data-i18n="views.tokens.colCacheWrite">Cache Write</th>
-            <th data-i18n="views.tokens.colRequests">Requests</th>
-            <th data-i18n="views.tokens.colCost">Cost</th>
-          </tr>
-        </thead>
-        <tbody id="tokens-model-rows"></tbody>
-      </table>
+    <div class="tokens-section">
+      <div class="tokens-section-title" data-i18n="views.tokens.byDayTitle">By day (9Router)</div>
+      <div id="tokens-daily-list"></div>
+      <div class="tokens-section-note" id="tokens-daily-note" hidden></div>
+    </div>
+
+    <div class="tokens-section">
+      <div class="tokens-section-title" data-i18n="views.tokens.bySourceTitle">
+        Totals by source (last 24h)
+      </div>
+      <div id="tokens-sources-list"></div>
     </div>
 
     <p class="tokens-honesty-note" data-i18n="views.tokens.honestyNote">
