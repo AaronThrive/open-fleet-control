@@ -1,5 +1,6 @@
 /**
- * Evolution view — lessons-learned review board with validation gate.
+ * Evolution view — lessons-learned review board with a read-only validation
+ * gate banner (the gate control lives in Settings → Validation gate).
  *
  * Loaded by views.js, which calls `init(containerEl)` on EVERY visit; this
  * module is idempotent (each init tears down the previous one). Live updates
@@ -48,17 +49,6 @@ async function fetchEvolution() {
   return res.json();
 }
 
-async function putGate(gate) {
-  const res = await fetch("/api/fleet/evolution/gate", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ gate }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
-}
-
 async function postLessonAction(id, action) {
   const res = await fetch(
     `/api/fleet/evolution/lessons/${encodeURIComponent(id)}/${encodeURIComponent(action)}`,
@@ -69,6 +59,11 @@ async function postLessonAction(id, action) {
   return data;
 }
 
+/**
+ * Read-only gate state banner. The gate CONTROL lives in Settings →
+ * Validation gate; this banner only mirrors the current state and points
+ * there.
+ */
 function renderGateBanner(refs, gate) {
   const banner = refs.gateBanner;
   if (!banner) return;
@@ -82,12 +77,13 @@ function renderGateBanner(refs, gate) {
     ? t("views.evolution.gateOnDesc", {}, "new lessons require approval before merging.")
     : t("views.evolution.gateOffDesc", {}, "autonomous merge: lessons auto-approve.");
   refs.gateText.innerHTML = `${gate ? "🛡️" : "⚡"} <strong>${escapeHtml(gateTitle)}</strong> — ${escapeHtml(gateDesc)}`;
-  refs.gateToggle.textContent = gate
-    ? t("views.evolution.gateTurnOff", {}, "Turn gate OFF")
-    : t("views.evolution.gateTurnOn", {}, "Turn gate ON");
-  refs.gateToggle.title = gate
-    ? t("views.evolution.gateTitleOn", {}, "Switch to autonomous merge (lessons auto-approve)")
-    : t("views.evolution.gateTitleOff", {}, "Require approval for new lessons");
+  if (refs.gateHint) {
+    refs.gateHint.textContent = t(
+      "views.evolution.gateManagedIn",
+      {},
+      "Managed in Settings → Validation gate",
+    );
+  }
 }
 
 function lessonCard(lesson) {
@@ -185,7 +181,7 @@ export function init(container) {
   const refs = {
     gateBanner: container.querySelector("#evo-gate-banner"),
     gateText: container.querySelector("#evo-gate-text"),
-    gateToggle: container.querySelector("#evo-gate-toggle"),
+    gateHint: container.querySelector("#evo-gate-hint"),
     board: container.querySelector("#evo-board"),
     lessonsEl: container.querySelector("#evo-lessons"),
     pendingBadge: container.querySelector("#evo-pending-badge"),
@@ -219,35 +215,6 @@ export function init(container) {
       activeTab = status;
       renderBoard(refs, state);
     });
-  });
-
-  // --- Gate toggle (panel banner) --------------------------------------
-  refs.gateToggle?.addEventListener("click", async () => {
-    const next = !state.gate;
-    const previous = state.gate;
-    state = { ...state, gate: next };
-    renderGateBanner(refs, next); // optimistic
-    refs.gateToggle.disabled = true;
-    try {
-      await putGate(next);
-      toast(
-        next
-          ? t("gate.toastOn", {}, "Validation gate ON — lessons require approval")
-          : t("gate.toastOff", {}, "Validation gate OFF — autonomous merge"),
-      );
-      window.dispatchEvent(
-        new CustomEvent("fleet:evolution", { detail: { type: "gate.toggle", gate: next } }),
-      );
-    } catch (e) {
-      state = { ...state, gate: previous }; // revert
-      renderGateBanner(refs, previous);
-      toast(
-        t("gate.updateFailed", { message: e.message }, "Gate update failed: {message}"),
-        "error",
-      );
-    } finally {
-      refs.gateToggle.disabled = false;
-    }
   });
 
   // --- Approve / Reject (event delegation, optimistic remove) ----------

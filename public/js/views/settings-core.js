@@ -85,3 +85,54 @@ export async function pollUntilHealthy({
   }
   return false;
 }
+
+/**
+ * Build a bounded /api/health probe for pollUntilHealthy().
+ *
+ * Every probe is individually time-capped via AbortController: a request
+ * that hangs on a dead or half-open connection resolves false after
+ * timeoutMs instead of wedging the poll loop. Never throws — any fetch
+ * failure (refused, aborted, network change) reads as "still down".
+ *
+ * @param {object} [options]
+ * @param {function} [options.fetchFn] - fetch implementation (injectable for tests)
+ * @param {string} [options.url]
+ * @param {number} [options.timeoutMs] - per-probe cap (default 2000)
+ * @returns {function(): Promise<boolean>}
+ */
+export function makeHealthCheck({
+  fetchFn = (...args) => fetch(...args),
+  url = "/api/health",
+  timeoutMs = 2000,
+} = {}) {
+  return async function healthCheck() {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetchFn(url, { signal: controller.signal, cache: "no-store" });
+      return !!(response && response.ok);
+    } catch (err) {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}
+
+/**
+ * Normalize the GET /api/about payload into the compact About-card model.
+ * Tolerates a missing/failed payload by falling back to known constants —
+ * the card must render even when the endpoint is unavailable.
+ *
+ * @param {object|null} payload - /api/about response (or null on failure)
+ * @returns {{name: string, version: string, license: string}}
+ */
+export function aboutModel(payload) {
+  const src = payload && typeof payload === "object" ? payload : {};
+  const str = (value) => (typeof value === "string" && value.trim() ? value.trim() : "");
+  return {
+    name: str(src.name) || "Open Fleet Control",
+    version: str(src.version) ? `v${str(src.version)}` : "",
+    license: str(src.license) || "MIT",
+  };
+}
