@@ -1,15 +1,23 @@
 /**
- * Sessions view module.
+ * Sessions view module — dense detail-list ("neat file list") rendering.
  *
  * Loaded by views.js via dynamic import; `init(containerEl)` runs on every
  * visit of #view-sessions and must be idempotent (timers/listeners are torn
  * down and re-created on each init).
  *
  * Data sources:
- *  - GET /api/sessions?page=&pageSize=&status=   (paginated session cards,
+ *  - GET /api/sessions?page=&pageSize=&status=   (paginated session rows,
  *    server-side status filter, statusCounts across all pages)
  *  - GET /api/subagents                          (active sub-agent strip)
- *  - GET /api/sessions/detail?key=               (inline fallback detail)
+ *  - GET /api/sessions/detail?key=               (per-row deep detail: token
+ *    in/out + cache breakdown, est. cost, tool usage, summary)
+ *
+ * Rendering: the shared detail-list component (sortable columns, text filter,
+ *  expandable detail panel). The legacy filter button groups (status /
+ * channel / kind / source) are preserved — status stays a server-side
+ * pre-filter, channel/kind are applied to the row set before list.update().
+ * The expanded panel shows EVERYTHING the API exposes for the session,
+ * including the raw metadata object.
  *
  * Real-time: listens for the `fleet:state` window event re-dispatched by the
  * page's single /api/events EventSource, with a polling fallback when SSE
@@ -21,6 +29,7 @@
 
 import { t, formatTimeAgo } from "../utils.js";
 import { splitByQuery } from "../transcript-search.js";
+import { createDetailList } from "../components/detail-list.js";
 
 const PAGE_SIZE = 20;
 const POLL_MS = 15000;
@@ -45,6 +54,9 @@ let lastSseAt = 0;
 const filters = { status: "all", channel: "all", kind: "all", source: "all" };
 let page = 1;
 let pagination = null;
+// Current page of OpenClaw sessions (raw API objects) + the detail list.
+let currentSessions = [];
+let list = null;
 // null = endpoint never answered (absent on older deployments); object = data.
 let terminalData = null;
 // Live claude processes with cwd (from /api/sessions/terminal/live); null
@@ -79,68 +91,228 @@ function channelIcon(channel) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Card rendering (DOM-built, textContent only)                        */
+/* Pure helpers (exported for node:test)                                */
 /* ------------------------------------------------------------------ */
 
-function buildCard(session, els) {
-  const status = session.active ? "live" : session.recentlyActive ? "recent" : "idle";
-  const card = el(
-    "div",
-    `session-card ${session.active ? "active" : session.recentlyActive ? "recent-active" : ""}`,
-  );
-  card.dataset.status = status;
-  card.dataset.channel = session.channel || "other";
-  card.dataset.kind = session.sessionType || session.kind || "";
+/** live → active within 15m, recent → within 60m, idle → everything else. */
+export function sessionStatus(session) {
+  if (session && session.active) return "live";
+  if (session && session.recentlyActive) return "recent";
+  return "idle";
+}
 
-  const header = el("div", "card-header");
-  const iconClass =
-    session.channel === "slack" ? "slack" : session.channel === "telegram" ? "telegram" : "main";
-  header.appendChild(el("div", `card-icon ${iconClass}`, channelIcon(session.channel)));
+const STATUS_RANK = { live: 0, recent: 1, idle: 2 };
 
-  const titleArea = el("div", "card-title-area");
-  titleArea.appendChild(el("div", "card-title", session.label || session.sessionKey || "?"));
-  const model =
-    (session.model || "").replace("claude-", "").replace("anthropic/", "") ||
-    t("views.sessions.unknownModel", {}, "unknown");
-  titleArea.appendChild(el("div", "card-subtitle", `${session.kind || "-"} • ${model}`));
-  if (session.originator) {
-    const name = session.originator.displayName || session.originator.username || "Unknown";
-    const orig = el("div", "session-originator");
-    orig.appendChild(el("span", "originator-avatar", name.charAt(0).toUpperCase()));
-    orig.appendChild(el("span", "", name));
-    titleArea.appendChild(orig);
+/** "120.5k" for thousands, verbatim below that, junk → "0". */
+export function formatTokensCompact(value) {
+  const v = Number(value) || 0;
+  return v >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${v}`;
+}
+
+/** Flatten a session onto the column keys the detail list sorts/filters by. */
+export function toSessionRow(session) {
+  const s = session || {};
+  const status = sessionStatus(s);
+  const metrics = s.metrics || {};
+  const model = String(s.model || "")
+    .replace("anthropic/", "")
+    .replace("openai/", "")
+    .replace("claude-", "");
+  return {
+    id: s.sessionKey || s.sessionId || "?",
+    label: s.label || s.sessionKey || "?",
+    channel: s.channel || "other",
+    kind: s.sessionType || s.kind || "",
+    model,
+    status,
+    statusRank: STATUS_RANK[status],
+    tokens: Number(s.tokens) || 0,
+    burnRate: Number(metrics.burnRate) || 0,
+    minutesAgo: Number.isFinite(s.minutesAgo) ? s.minutesAgo : null,
+    originatorName: s.originator?.displayName || s.originator?.username || "",
+    topic: s.topic || "",
+    session: s,
+  };
+}
+
+/** Apply the channel/kind filter-button groups to the row set. */
+export function filterSessionRows(rows, active) {
+  return rows.filter((row) => {
+    if (active.channel !== "all" && row.channel !== active.channel) return false;
+    if (active.kind !== "all" && row.kind !== active.kind) return false;
+    return true;
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Detail-list cells, per-row detail panel, and actions                 */
+/* ------------------------------------------------------------------ */
+
+function channelCell(row) {
+  return el("span", "", `${channelIcon(row.channel)} ${row.channel}`);
+}
+
+function statusBadge(row) {
+  const labels = {
+    live: t("views.sessions.statusLive", {}, "● Live"),
+    recent: t("views.sessions.statusRecent", {}, "● Recent"),
+    idle: t("views.sessions.statusIdle", {}, "○ Idle"),
+  };
+  return el("span", `sess-status ${row.status}`, labels[row.status]);
+}
+
+function tokensCell(row) {
+  const cls = row.tokens > 100000 ? " high" : row.tokens > 50000 ? " med" : "";
+  return el("span", `sess-tokens${cls}`, formatTokensCompact(row.tokens));
+}
+
+function burnCell(row) {
+  return el("span", "", `${formatTokensCompact(row.burnRate)}/min`);
+}
+
+function activityText(row) {
+  if (row.minutesAgo === null) return "—";
+  const ago = formatTimeAgo(row.minutesAgo);
+  return ago === "now" ? t("views.sessions.justNow", {}, "just now") : `${ago} ago`;
+}
+
+function activityCell(row) {
+  return el("span", row.status === "live" ? "sess-activity-live" : "", activityText(row));
+}
+
+function addDetailItem(host, label, value, mono) {
+  const item = el("div", "sess-detail-item");
+  item.appendChild(el("span", "sess-detail-label", label));
+  item.appendChild(el("span", `sess-detail-value${mono ? " mono" : ""}`, value));
+  host.appendChild(item);
+}
+
+/**
+ * Deep detail (lazy, per expand): transcript-derived numbers from
+ * /api/sessions/detail — token in/out + cache breakdown, est. cost, tool
+ * usage, detected topics, and the generated summary.
+ */
+async function loadDeepDetail(sessionKey, host) {
+  try {
+    const response = await fetch(
+      `/api/sessions/detail?key=${encodeURIComponent(sessionKey || "")}`,
+    );
+    const data = await response.json();
+    if (!host.isConnected) return; // panel collapsed/re-rendered mid-flight
+    if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
+
+    host.replaceChildren();
+    const grid = el("div", "sess-detail-grid");
+    addDetailItem(
+      grid,
+      t("views.sessions.detailTokensInOut", {}, "Tokens in / out"),
+      `${(data.inputTokens || 0).toLocaleString()} / ${(data.outputTokens || 0).toLocaleString()}`,
+    );
+    addDetailItem(
+      grid,
+      t("views.sessions.detailCache", {}, "Cache read / write"),
+      `${(data.cacheRead || 0).toLocaleString()} / ${(data.cacheWrite || 0).toLocaleString()}`,
+    );
+    addDetailItem(grid, t("views.sessions.detailCost", {}, "Est. cost"), data.estCost || "—");
+    addDetailItem(
+      grid,
+      t("views.sessions.detailLastActive", {}, "Last active"),
+      data.lastActive || "—",
+    );
+    if (Array.isArray(data.tools) && data.tools.length > 0) {
+      addDetailItem(
+        grid,
+        t("views.sessions.detailTools", {}, "Top tools"),
+        data.tools.map((tool) => `${tool.name} ×${tool.count}`).join(", "),
+      );
+    }
+    if (Array.isArray(data.topics) && data.topics.length > 0) {
+      addDetailItem(
+        grid,
+        t("views.sessions.detailTopics", {}, "Detected topics"),
+        data.topics.join(", "),
+      );
+    }
+    host.appendChild(grid);
+    if (data.summary) {
+      host.appendChild(el("div", "sess-detail-summary", String(data.summary)));
+    }
+  } catch (error) {
+    if (!host.isConnected) return;
+    host.textContent = t(
+      "views.sessions.detailDeepError",
+      { message: error.message },
+      "Transcript detail unavailable: {message}",
+    );
   }
-  header.appendChild(titleArea);
+}
 
-  const activity = session.activityState || { state: "idle", icon: "💤", label: "Idle" };
-  const activityWrap = el("div", "activity-wrapper");
-  activityWrap.title = activity.label || "";
-  activityWrap.appendChild(el("span", `activity-indicator ${activity.state}`, activity.icon));
-  activityWrap.appendChild(el("span", "activity-label", activity.label));
-  header.appendChild(activityWrap);
+/** Expanded panel: every field /api/sessions exposes + lazy deep detail + raw JSON. */
+function buildDetail(row) {
+  const s = row.session;
+  const wrap = el("div", "sess-detail");
 
-  const badgeClass = session.active
-    ? "badge-live"
-    : session.recentlyActive
-      ? "badge-recent"
-      : "badge-idle";
-  header.appendChild(
-    el(
-      "span",
-      `card-badge ${badgeClass}`,
-      session.active ? "● Live" : formatTimeAgo(session.minutesAgo || 0),
-    ),
+  const grid = el("div", "sess-detail-grid");
+  const add = (label, value, mono) => addDetailItem(grid, label, value, mono);
+  add(t("views.sessions.detailKey", {}, "Session key"), s.sessionKey || "—", true);
+  add(t("views.sessions.detailId", {}, "Session id"), s.sessionId || "—", true);
+  add(t("views.sessions.detailStatus", {}, "Status"), row.status);
+  add(t("views.sessions.detailKind", {}, "Kind"), s.kind || "—");
+  add(t("views.sessions.detailType", {}, "Type"), row.kind || "—");
+  add(t("views.sessions.detailChannel", {}, "Channel"), row.channel);
+  if (s.groupChannel)
+    add(t("views.sessions.detailGroupChannel", {}, "Group channel"), s.groupChannel);
+  if (s.displayName) add(t("views.sessions.detailDisplayName", {}, "Display name"), s.displayName);
+  add(
+    t("views.sessions.detailModel", {}, "Model"),
+    s.model || t("views.sessions.unknownModel", {}, "unknown"),
+    true,
   );
+  add(t("views.sessions.detailTokens", {}, "Tokens (total)"), row.tokens.toLocaleString());
+  add(t("views.sessions.detailBurn", {}, "Burn rate"), `${row.burnRate.toLocaleString()} tok/min`);
+  const minutesActive = s.metrics?.minutesActive;
+  add(
+    t("views.sessions.detailActive", {}, "Time active"),
+    Number.isFinite(minutesActive) ? `${minutesActive} min` : "—",
+  );
+  add(t("views.sessions.detailLastActivity", {}, "Last activity"), activityText(row));
+  if (row.originatorName) {
+    const role = s.originator?.role ? ` (${s.originator.role})` : "";
+    add(t("views.sessions.detailOriginator", {}, "Originator"), `${row.originatorName}${role}`);
+  }
+  if (s.originator?.userId) {
+    add(t("views.sessions.detailOriginatorId", {}, "Originator id"), s.originator.userId, true);
+  }
+  if (row.topic) add(t("views.sessions.detailTopic", {}, "Topics"), row.topic);
+  wrap.appendChild(grid);
 
-  if (session.sessionId) {
+  const deep = el(
+    "div",
+    "sess-detail-deep",
+    t("views.sessions.detailDeepLoading", {}, "Loading transcript detail…"),
+  );
+  wrap.appendChild(deep);
+  loadDeepDetail(s.sessionKey, deep);
+
+  // Raw metadata — the full session object exactly as served by the API.
+  const raw = el("details", "sess-detail-raw");
+  raw.appendChild(el("summary", "", t("views.sessions.detailRaw", {}, "Raw metadata")));
+  raw.appendChild(el("pre", "", JSON.stringify(s, null, 2)));
+  wrap.appendChild(raw);
+  return wrap;
+}
+
+/** Per-row actions: 📜 live transcript + the honest disabled kill control. */
+function buildRowActions(els, row) {
+  const actions = el("div", "sess-actions");
+  if (row.session.sessionId) {
     const viewBtn = el("button", "session-action-btn", "📜");
     viewBtn.type = "button";
     viewBtn.title = t("views.sessions.viewTranscript", {}, "View live transcript");
-    viewBtn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      openTranscript(els, "openclaw", session.sessionId, session.label || session.sessionKey);
+    viewBtn.addEventListener("click", () => {
+      openTranscript(els, "openclaw", row.session.sessionId, row.label);
     });
-    header.appendChild(viewBtn);
+    actions.appendChild(viewBtn);
   }
   // OpenClaw session kill: honest disabled control — the gateway only
   // exposes (auth-gated) sub-agent run kills, not chat-session termination.
@@ -148,68 +320,61 @@ function buildCard(session, els) {
   killBtn.type = "button";
   killBtn.disabled = true;
   killBtn.title = t("views.sessions.openclawKillUnavailable", {}, OPENCLAW_KILL_TOOLTIP);
-  header.appendChild(killBtn);
+  actions.appendChild(killBtn);
+  return actions;
+}
 
-  card.appendChild(header);
-
-  if (session.topic) {
-    const topics = session.topic
-      .split(", ")
-      .map((topic) => topic.trim())
-      .filter((topic) => topic);
-    if (topics.length > 0) {
-      const wrap = el("div", "card-topics");
-      for (const topic of topics) {
-        wrap.appendChild(
-          el("span", `topic-pill ${topic.toLowerCase().replace(/[^a-z]/g, "")}`, topic),
-        );
-      }
-      card.appendChild(wrap);
-    }
+function buildList(els) {
+  if (list) {
+    list.destroy();
+    list = null;
   }
-  if (session.preview) card.appendChild(el("div", "card-preview", session.preview));
-
-  const stats = el("div", "card-stats");
-  const tokenClass = session.tokens > 100000 ? "high" : session.tokens > 50000 ? "med" : "";
-  const stat = el("div", `card-stat ${tokenClass}`);
-  stat.appendChild(el("span", "", "🎫"));
-  stat.appendChild(el("span", "card-stat-value", `${((session.tokens || 0) / 1000).toFixed(1)}k`));
-  stats.appendChild(stat);
-  card.appendChild(stats);
-
-  const metrics = session.metrics || { burnRate: 0, toolCalls: 0, minutesActive: 0 };
-  const bar = el("div", "metrics-bar");
-  const burn = el("div", `metric-ring burn ${metrics.burnRate > 5000 ? "hot" : ""}`);
-  burn.title = `Token burn rate: ${metrics.burnRate} tokens/min`;
-  burn.appendChild(el("span", "metric-icon", "🔥"));
-  burn.appendChild(
-    el(
-      "span",
-      "metric-value",
-      metrics.burnRate > 1000 ? `${(metrics.burnRate / 1000).toFixed(1)}k` : `${metrics.burnRate}`,
-    ),
-  );
-  burn.appendChild(el("span", "metric-label", "tok/min"));
-  bar.appendChild(burn);
-
-  const timeRing = el("div", "metric-ring time");
-  timeRing.title = `Time active: ${metrics.minutesActive} minutes`;
-  timeRing.appendChild(el("span", "metric-icon", "⏱️"));
-  timeRing.appendChild(
-    el(
-      "span",
-      "metric-value",
-      metrics.minutesActive > 60
-        ? `${Math.floor(metrics.minutesActive / 60)}h ${metrics.minutesActive % 60}m`
-        : `${metrics.minutesActive}m`,
-    ),
-  );
-  timeRing.appendChild(el("span", "metric-label", "active"));
-  bar.appendChild(timeRing);
-  card.appendChild(bar);
-
-  card.addEventListener("click", () => openSessionDetail(session, els));
-  return card;
+  els.listHost.replaceChildren();
+  list = createDetailList(els.listHost, {
+    columns: [
+      { key: "label", label: t("views.sessions.colSession", {}, "Session"), sortable: true },
+      {
+        key: "channel",
+        label: t("views.sessions.colChannel", {}, "Channel"),
+        sortable: true,
+        render: channelCell,
+      },
+      { key: "kind", label: t("views.sessions.colKind", {}, "Kind"), sortable: true },
+      { key: "model", label: t("views.sessions.colModel", {}, "Model"), sortable: true },
+      {
+        key: "statusRank",
+        label: t("views.sessions.colStatus", {}, "Status"),
+        sortable: true,
+        render: statusBadge,
+      },
+      {
+        key: "tokens",
+        label: t("views.sessions.colTokens", {}, "Tokens"),
+        sortable: true,
+        render: tokensCell,
+      },
+      {
+        key: "burnRate",
+        label: t("views.sessions.colBurn", {}, "Burn"),
+        sortable: true,
+        render: burnCell,
+      },
+      {
+        key: "minutesAgo",
+        label: t("views.sessions.colActivity", {}, "Last activity"),
+        sortable: true,
+        render: activityCell,
+      },
+    ],
+    getRowId: (row) => row.id,
+    renderDetail: buildDetail,
+    renderActions: (row) => buildRowActions(els, row),
+    emptyText: t("views.sessions.empty", {}, "No sessions found"),
+    filterKeys: ["label", "id", "channel", "kind", "model", "status", "originatorName", "topic"],
+    filterPlaceholder: t("views.sessions.filterPlaceholder", {}, "Filter sessions…"),
+    // Most recent activity first (live rows have the smallest minutesAgo).
+    defaultSort: { key: "minutesAgo", dir: "asc" },
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -647,7 +812,7 @@ function openTranscript(els, source, id, title, pid = null) {
   els.transcriptSearch.focus();
   pollTranscript(els);
   transcriptTimer = setInterval(() => {
-    if (!els.grid.isConnected) {
+    if (!els.listHost.isConnected) {
       teardown();
       return;
     }
@@ -677,7 +842,7 @@ async function killTerminalPid(pid, btn, els) {
     if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
     btn.textContent = "✓";
     setTimeout(() => {
-      if (els.grid.isConnected) loadTerminal(els);
+      if (els.listHost.isConnected) loadTerminal(els);
     }, 2000);
   } catch (error) {
     btn.disabled = false;
@@ -843,7 +1008,7 @@ async function loadTerminal(els) {
       .then((response) => (response.ok ? response.json() : null))
       .catch(() => null),
   ]);
-  if (seq !== terminalSeq || !els.grid.isConnected) return;
+  if (seq !== terminalSeq || !els.listHost.isConnected) return;
   terminalData = data && data.available !== false ? data : null;
   terminalLive = live && Array.isArray(live.processes) ? live : null;
   try {
@@ -855,7 +1020,7 @@ async function loadTerminal(els) {
 
 function applySourceVisibility(els) {
   const showOpenClaw = filters.source === "all" || filters.source === "openclaw";
-  els.grid.style.display = showOpenClaw ? "" : "none";
+  els.listHost.style.display = showOpenClaw ? "" : "none";
   els.pagination.style.display = showOpenClaw && pagination ? "" : "none";
   if (showOpenClaw) renderPagination(els);
   els.subagentStrip.style.display = showOpenClaw ? "" : "none";
@@ -863,16 +1028,8 @@ function applySourceVisibility(els) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Grid + pagination                                                   */
+/* Rows + pagination                                                   */
 /* ------------------------------------------------------------------ */
-
-function applyClientFilters(els) {
-  els.grid.querySelectorAll(".session-card").forEach((card) => {
-    const showChannel = filters.channel === "all" || card.dataset.channel === filters.channel;
-    const showKind = filters.kind === "all" || card.dataset.kind === filters.kind;
-    card.classList.toggle("hidden-by-filter", !(showChannel && showKind));
-  });
-}
 
 function renderStatusCounts(els, counts) {
   if (!counts) return;
@@ -882,28 +1039,16 @@ function renderStatusCounts(els, counts) {
   els.countIdle.textContent = counts.idle || 0;
 }
 
-function renderGrid(els, sessions) {
-  const visible = sessions || [];
-  const total = pagination?.total ?? visible.length;
-  els.headerCount.textContent = total;
+/** Re-apply the channel/kind groups to currentSessions and push rows in. */
+function renderRows() {
+  if (!list) return;
+  list.update(filterSessionRows(currentSessions.map(toSessionRow), filters));
+}
 
-  if (visible.length === 0) {
-    const empty = el("div", "empty-state");
-    empty.appendChild(el("div", "empty-state-icon", "📡"));
-    empty.appendChild(
-      el("div", "empty-state-text", t("views.sessions.empty", {}, "No sessions found")),
-    );
-    els.grid.replaceChildren(empty);
-    return;
-  }
-
-  els.grid.replaceChildren(
-    ...visible
-      .slice()
-      .sort((a, b) => (a.minutesAgo || 0) - (b.minutesAgo || 0))
-      .map((session) => buildCard(session, els)),
-  );
-  applyClientFilters(els);
+function renderSessions(els, sessions) {
+  currentSessions = Array.isArray(sessions) ? sessions : [];
+  els.headerCount.textContent = pagination?.total ?? currentSessions.length;
+  renderRows();
 }
 
 function renderPagination(els) {
@@ -967,15 +1112,15 @@ async function load(els) {
         .then((response) => response.json())
         .catch(() => null),
     ]);
-    if (seq !== requestSeq || !els.grid.isConnected) return;
+    if (seq !== requestSeq || !els.listHost.isConnected) return;
     els.error.hidden = true;
     pagination = sessionsRes.pagination || null;
     renderStatusCounts(els, sessionsRes.statusCounts);
-    renderGrid(els, sessionsRes.sessions || []);
+    renderSessions(els, sessionsRes.sessions || []);
     renderPagination(els);
     renderSubagentStrip(els, subagentsRes?.subagents, sessionsRes.sessions);
   } catch (error) {
-    if (seq !== requestSeq || !els.grid.isConnected) return;
+    if (seq !== requestSeq || !els.listHost.isConnected) return;
     els.error.hidden = false;
     els.error.textContent = t(
       "views.sessions.loadError",
@@ -1015,6 +1160,10 @@ function teardown() {
     window.removeEventListener("fleet:state", stateListener);
     stateListener = null;
   }
+  if (list) {
+    list.destroy();
+    list = null;
+  }
 }
 
 /**
@@ -1031,9 +1180,10 @@ export function init(container) {
   pagination = null;
   terminalData = null;
   terminalLive = null;
+  currentSessions = [];
 
   const els = {
-    grid: container.querySelector("#sessions-view-grid"),
+    listHost: container.querySelector("#sessions-view-list"),
     headerCount: container.querySelector("#sessions-view-count"),
     error: container.querySelector("#sessions-view-error"),
     filtersBar: container.querySelector("#sessions-view-filters"),
@@ -1075,6 +1225,8 @@ export function init(container) {
     return;
   }
 
+  buildList(els);
+
   // Filter buttons (event delegation per group)
   els.filtersBar.querySelectorAll(".filter-group").forEach((group) => {
     const groupName = group.dataset.filterGroup;
@@ -1090,7 +1242,7 @@ export function init(container) {
         } else if (groupName === "source") {
           applySourceVisibility(els);
         } else {
-          applyClientFilters(els);
+          renderRows();
         }
       });
     });
@@ -1161,7 +1313,7 @@ export function init(container) {
   // Only the default slice (page 1, no status filter) matches the SSE
   // payload, so re-render from it only in that configuration.
   stateListener = (event) => {
-    if (!els.grid.isConnected) {
+    if (!els.listHost.isConnected) {
       teardown();
       return;
     }
@@ -1171,7 +1323,7 @@ export function init(container) {
     renderStatusCounts(els, state.statusCounts);
     if (page === 1 && filters.status === "all" && Array.isArray(state.sessions)) {
       pagination = state.pagination || pagination;
-      renderGrid(els, state.sessions);
+      renderSessions(els, state.sessions);
       renderPagination(els);
       renderSubagentStrip(els, state.subagents, state.sessions);
     }
@@ -1180,7 +1332,7 @@ export function init(container) {
 
   // Polling fallback: refresh when SSE has gone quiet.
   pollTimer = setInterval(() => {
-    if (!els.grid.isConnected) {
+    if (!els.listHost.isConnected) {
       teardown();
       return;
     }
@@ -1192,7 +1344,7 @@ export function init(container) {
   // Terminal sessions (Claude Code) poll independently — SSE does not carry
   // this slice, and the endpoint may be absent on older deployments.
   terminalTimer = setInterval(() => {
-    if (!els.grid.isConnected) {
+    if (!els.listHost.isConnected) {
       teardown();
       return;
     }
