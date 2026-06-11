@@ -26,6 +26,10 @@ const KILL_ESCALATION_MS = 10000;
 const TAIL_BYTES = 64 * 1024; // initial tail window for offset-less reads
 const MAX_CHUNK_BYTES = 256 * 1024; // max bytes consumed per poll
 const MAX_TEXT_EXCERPT = 600;
+const SEARCH_DEFAULT_RESULTS = 50; // default cap on search matches
+const SEARCH_MAX_RESULTS = 200; // hard server-side cap on search matches
+const SEARCH_MAX_QUERY_LEN = 256;
+const SEARCH_MAX_SCAN_BYTES = 32 * 1024 * 1024; // bail out on absurdly large files
 const TRANSCRIPT_SOURCES = ["terminal", "openclaw"];
 const SAFE_ID_RE = /^[A-Za-z0-9_-]+$/;
 
@@ -297,10 +301,133 @@ function createSessionControl(deps = {}) {
     return { source, id, messages, nextOffset, size, eof: nextOffset >= size };
   }
 
+  /**
+   * Search a whole transcript file for a query string (case-insensitive,
+   * literal substring) and return matching messages with their immediate
+   * neighbours as context.
+   *
+   * Safety mirrors readTranscriptChunk: the id resolves only through the
+   * owning adapter (404 otherwise), reads go through the injected fs, lines
+   * are split on byte boundaries (\n never occurs inside a UTF-8 sequence)
+   * so chunk seams cannot corrupt content, and a trailing partial line —
+   * a writer caught mid-append — is ignored unless it parses cleanly.
+   *
+   * Matching happens on the parsed viewer message (text excerpt + tool
+   * names), i.e. exactly what the transcript viewer renders.
+   *
+   * @param {object} params - { source, id, query, maxResults }
+   * @returns {Promise<object>}
+   *   { source, id, query, matches: [{ before, message, after }],
+   *     matchCount, truncated, size } or { error, code }
+   */
+  async function searchTranscript({ source, id, query, maxResults = SEARCH_DEFAULT_RESULTS } = {}) {
+    if (!TRANSCRIPT_SOURCES.includes(source)) {
+      return { error: `Invalid source (expected ${TRANSCRIPT_SOURCES.join("|")})`, code: 400 };
+    }
+    if (typeof id !== "string" || id.length === 0) {
+      return { error: "Missing id", code: 400 };
+    }
+    if (typeof query !== "string" || query.trim().length === 0) {
+      return { error: "Missing query", code: 400 };
+    }
+    if (query.length > SEARCH_MAX_QUERY_LEN) {
+      return { error: `Query too long (max ${SEARCH_MAX_QUERY_LEN} chars)`, code: 400 };
+    }
+    if (!Number.isInteger(maxResults) || maxResults < 1) {
+      return { error: "Invalid maxResults", code: 400 };
+    }
+    const limit = Math.min(maxResults, SEARCH_MAX_RESULTS);
+
+    const filePath = await resolveTranscript(source, id);
+    if (!filePath) {
+      return { error: `Unknown ${source} session: ${id}`, code: 404 };
+    }
+
+    let size;
+    try {
+      size = fsImpl.statSync(filePath).size;
+    } catch (e) {
+      return { error: `Transcript unreadable: ${e.message}`, code: 404 };
+    }
+
+    const needle = query.toLowerCase();
+    const matches = [];
+    let hitLimit = false;
+    let previous = null;
+    // Matches still waiting for their `after` context (filled by the very
+    // next parsed message; consecutive matches chain naturally).
+    let awaitingAfter = [];
+
+    const considerLine = (line) => {
+      const message = parseTranscriptLine(line);
+      if (!message) return;
+      for (const entry of awaitingAfter) entry.after = message;
+      awaitingAfter = [];
+      const haystack = message.text.toLowerCase() + "\n" + message.tools.join("\n").toLowerCase();
+      if (haystack.includes(needle)) {
+        if (matches.length >= limit) {
+          hitLimit = true;
+        } else {
+          const entry = { before: previous, message, after: null };
+          matches.push(entry);
+          awaitingAfter.push(entry);
+        }
+      }
+      previous = message;
+    };
+
+    const scanEnd = Math.min(size, SEARCH_MAX_SCAN_BYTES);
+    try {
+      const fd = fsImpl.openSync(filePath, "r");
+      try {
+        let position = 0;
+        let leftover = Buffer.alloc(0);
+        while (position < scanEnd && !hitLimit) {
+          const wanted = Math.min(MAX_CHUNK_BYTES, scanEnd - position);
+          const buffer = Buffer.alloc(wanted);
+          const bytesRead = fsImpl.readSync(fd, buffer, 0, wanted, position);
+          if (bytesRead <= 0) break;
+          position += bytesRead;
+          let buf = leftover.length
+            ? Buffer.concat([leftover, buffer.subarray(0, bytesRead)])
+            : buffer.subarray(0, bytesRead);
+          let lineStart = 0;
+          while (!hitLimit) {
+            const newline = buf.indexOf(0x0a, lineStart);
+            if (newline === -1) break;
+            considerLine(buf.toString("utf8", lineStart, newline));
+            lineStart = newline + 1;
+          }
+          leftover = buf.subarray(lineStart);
+        }
+        // Trailing line without a newline: only counts if it parses as a
+        // complete message (writer mid-append is ignored, like the tailer).
+        if (!hitLimit && leftover.length > 0 && position >= size) {
+          considerLine(leftover.toString("utf8"));
+        }
+      } finally {
+        fsImpl.closeSync(fd);
+      }
+    } catch (e) {
+      return { error: `Transcript read failed: ${e.message}`, code: 500 };
+    }
+
+    return {
+      source,
+      id,
+      query,
+      matches,
+      matchCount: matches.length,
+      truncated: hitLimit || scanEnd < size,
+      size,
+    };
+  }
+
   return {
     killTerminalSession,
     getTerminalLive,
     readTranscriptChunk,
+    searchTranscript,
     isPidAlive,
     KILL_ESCALATION_MS,
   };

@@ -207,6 +207,7 @@
       padding: 24px;
     }
     #sessions-view-section .sessions-transcript-modal {
+      position: relative; /* anchors the floating jump-to-bottom button */
       width: min(860px, 100%);
       max-height: min(80vh, 720px);
       display: flex;
@@ -297,6 +298,59 @@
       color: var(--text-muted);
       font-style: italic;
       padding: 8px 0;
+    }
+    /* ---- Transcript search + match navigation ---- */
+    #sessions-view-section .sessions-transcript-search {
+      flex: 0 1 180px;
+      min-width: 90px;
+      font-size: 0.72rem;
+      font-weight: 400;
+      padding: 3px 8px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+    }
+    #sessions-view-section .sessions-transcript-search:focus {
+      outline: none;
+      border-color: var(--accent, #58a6ff);
+    }
+    #sessions-view-section .sessions-transcript-matchcount {
+      font-size: 0.7rem;
+      font-weight: 400;
+      color: var(--text-muted);
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    #sessions-view-section .tmatch {
+      background: rgba(210, 153, 34, 0.35);
+      border-radius: 2px;
+      color: inherit;
+    }
+    #sessions-view-section .tmatch-current {
+      background: rgba(210, 153, 34, 0.75);
+      outline: 1px solid var(--yellow, #d29922);
+    }
+    #sessions-view-section .tmsg.tmsg-context {
+      opacity: 0.6;
+    }
+    #sessions-view-section .tmsg-result-sep {
+      border-bottom: 1px dashed var(--border);
+      margin: 10px 0;
+    }
+    #sessions-view-section .sessions-transcript-jump {
+      position: absolute;
+      right: 18px;
+      bottom: 44px;
+      z-index: 1;
+      font-size: 0.78rem;
+      padding: 5px 10px;
+      border-radius: 14px;
+      border: 1px solid var(--accent, #58a6ff);
+      background: var(--card-bg);
+      color: var(--accent, #58a6ff);
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
     }
   </style>
   <section class="view-panel">
@@ -438,6 +492,53 @@
           <span>📜</span>
           <span class="sessions-transcript-title" id="sessions-transcript-title"></span>
           <span class="sessions-transcript-status" id="sessions-transcript-status"></span>
+          <input
+            class="sessions-transcript-search"
+            id="sessions-transcript-search"
+            type="search"
+            placeholder="Search…"
+            autocomplete="off"
+          />
+          <span
+            class="sessions-transcript-matchcount"
+            id="sessions-transcript-matchcount"
+            hidden
+          ></span>
+          <button
+            class="session-action-btn"
+            id="sessions-transcript-prev"
+            type="button"
+            title="Previous match"
+            hidden
+          >
+            ↑
+          </button>
+          <button
+            class="session-action-btn"
+            id="sessions-transcript-next"
+            type="button"
+            title="Next match"
+            hidden
+          >
+            ↓
+          </button>
+          <button
+            class="session-action-btn"
+            id="sessions-transcript-searchall"
+            type="button"
+            title="Search the full transcript (server-side)"
+            hidden
+          >
+            🔎 all
+          </button>
+          <button
+            class="session-action-btn kill"
+            id="sessions-transcript-kill"
+            type="button"
+            hidden
+          >
+            ✕ Kill
+          </button>
           <button
             class="session-action-btn"
             id="sessions-transcript-close"
@@ -448,6 +549,15 @@
           </button>
         </div>
         <div class="sessions-transcript-body" id="sessions-transcript-body"></div>
+        <button
+          class="sessions-transcript-jump"
+          id="sessions-transcript-jump"
+          type="button"
+          title="Jump to bottom and resume tailing"
+          hidden
+        >
+          ⤓ bottom
+        </button>
         <div class="sessions-transcript-foot">
           Read-only transcript tail — refreshes every 3s while open.
         </div>
