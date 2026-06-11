@@ -30,6 +30,8 @@
     "settings",
     "docker",
     "agents",
+    "cerebro",
+    "operators",
   ];
   const VIEW_HASH_PREFIX = "#view-";
 
