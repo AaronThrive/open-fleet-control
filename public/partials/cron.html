@@ -12,6 +12,16 @@
       border-radius: 10px;
       white-space: nowrap;
     }
+    #cron-view-section .cron-status {
+      font-size: 0.7rem;
+      white-space: nowrap;
+    }
+    #cron-view-section .cron-status.enabled {
+      color: var(--green);
+    }
+    #cron-view-section .cron-status.disabled {
+      color: var(--text-muted);
+    }
     #cron-view-section .cron-last-status.ok {
       color: var(--green);
       background: rgba(63, 185, 80, 0.12);
@@ -24,25 +34,11 @@
       color: var(--text-muted);
       background: var(--bg);
     }
-    #cron-view-section .cron-badges {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-top: 5px;
-    }
     #cron-view-section .cron-badge {
       font-size: 0.65rem;
       padding: 1px 8px;
       border-radius: 10px;
       white-space: nowrap;
-    }
-    #cron-view-section .cron-badge.agent {
-      color: var(--green);
-      background: rgba(63, 185, 80, 0.12);
-    }
-    #cron-view-section .cron-badge.node {
-      color: #2dd4bf;
-      background: rgba(45, 212, 191, 0.12);
     }
     #cron-view-section .cron-badge.source {
       color: var(--text-muted);
@@ -58,9 +54,34 @@
       display: none !important;
     }
     #cron-view-section .cron-actions {
+      display: inline-flex;
+      gap: 6px;
+    }
+    #cron-view-section .cron-detail {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 8px 18px;
+    }
+    #cron-view-section .cron-detail-item {
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 2px;
+      min-width: 0;
+    }
+    #cron-view-section .cron-detail-label {
+      font-size: 0.64rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    #cron-view-section .cron-detail-value {
+      font-size: 0.78rem;
+      color: var(--text);
+      overflow-wrap: anywhere;
+    }
+    #cron-view-section .cron-detail-value.mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--purple);
     }
     #cron-view-section .cron-action-btn {
       font-size: 0.7rem;
@@ -129,23 +150,7 @@
     <div class="cron-view-error" id="cron-view-error" hidden></div>
     <div class="cron-filter-empty" id="cron-view-filter-empty" hidden></div>
 
-    <div class="card-grid" id="cron-view-grid">
-      <div class="skeleton-card" style="display: flex; gap: 12px; align-items: center">
-        <div class="skeleton-circle"></div>
-        <div style="flex: 1">
-          <div class="skeleton-bar title" style="width: 50%"></div>
-          <div class="skeleton-bar subtitle" style="width: 70%"></div>
-        </div>
-        <div class="skeleton-bar short" style="width: 60px"></div>
-      </div>
-      <div class="skeleton-card" style="display: flex; gap: 12px; align-items: center">
-        <div class="skeleton-circle"></div>
-        <div style="flex: 1">
-          <div class="skeleton-bar title" style="width: 50%"></div>
-          <div class="skeleton-bar subtitle" style="width: 70%"></div>
-        </div>
-        <div class="skeleton-bar short" style="width: 60px"></div>
-      </div>
-    </div>
+    <!-- Detail list host (built by views/cron.js via the shared component) -->
+    <div id="cron-view-list"></div>
   </section>
 </div>
