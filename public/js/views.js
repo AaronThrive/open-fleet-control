@@ -24,7 +24,7 @@
     "alerts",
     "sessions",
     "cron",
-    "vitals",
+    "memory",
     "llm-usage",
     "tokens",
     "settings",

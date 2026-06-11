@@ -1,0 +1,153 @@
+<!-- Memory View Partial -->
+<div class="section" id="memory-view-section">
+  <style>
+    #memory-view-section [hidden] {
+      display: none !important;
+    }
+    #memory-view-section .memory-view-error {
+      color: var(--red);
+      font-size: 0.8rem;
+      margin-bottom: 8px;
+    }
+    #memory-view-section .memory-stats-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-bottom: 12px;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+    #memory-view-section .memory-stat strong {
+      color: var(--text);
+      font-weight: 700;
+      margin-right: 4px;
+    }
+    #memory-view-section .memory-stat.md strong {
+      color: var(--accent);
+    }
+    #memory-view-section .memory-stat.daily strong {
+      color: var(--green);
+    }
+    #memory-view-section .memory-type-badge {
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 10px;
+      white-space: nowrap;
+    }
+    #memory-view-section .memory-type-badge.daily {
+      color: var(--green);
+      background: rgba(63, 185, 80, 0.12);
+    }
+    #memory-view-section .memory-type-badge.state {
+      color: var(--accent);
+      background: rgba(88, 166, 255, 0.12);
+    }
+    #memory-view-section .memory-detail-grid {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: 4px 16px;
+      font-size: 0.78rem;
+    }
+    #memory-view-section .memory-detail-grid dt {
+      color: var(--text-muted);
+      text-transform: uppercase;
+      font-size: 0.68rem;
+      letter-spacing: 0.05em;
+      align-self: center;
+    }
+    #memory-view-section .memory-detail-grid dd {
+      margin: 0;
+      color: var(--text);
+      word-break: break-word;
+    }
+    #memory-view-section .memory-cortex-strip {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    #memory-view-section .memory-cortex-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+    #memory-view-section .memory-cortex-total {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    #memory-view-section .memory-cortex-scope-chip {
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 1px 8px;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+    #memory-view-section .memory-cortex-link {
+      font-size: 0.8rem;
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    #memory-view-section .memory-recent-title {
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+  </style>
+  <section class="view-panel">
+    <div class="view-header">
+      <div class="view-title">
+        <span class="view-icon">🧠</span>
+        <span>Memory</span>
+        <span class="section-count" id="memory-view-count">0 files</span>
+      </div>
+      <div class="view-subtitle">
+        MEMORY.md, daily notes, and recent memory files for this workspace
+      </div>
+    </div>
+
+    <div class="memory-view-error" id="memory-view-error" hidden></div>
+
+    <div class="vitals-panel">
+      <div class="memory-stats-strip">
+        <span class="memory-stat md" title="Long-term curated memories"
+          >📜 MEMORY.md <strong id="memory-view-md-size">-</strong
+          ><span id="memory-view-md-lines">- lines</span></span
+        >
+        <span class="memory-stat daily" title="Raw logs by date"
+          >📅 Daily notes <strong id="memory-view-total-files">-</strong><span>files</span></span
+        >
+        <span class="memory-stat" title="Total size of all memory files"
+          >💾 Total <strong id="memory-view-total-size">-</strong></span
+        >
+      </div>
+
+      <div class="memory-recent-title">🕐 Recent Memory Files</div>
+      <div id="memory-view-list"></div>
+
+      <div class="memory-cortex-strip">
+        <div class="memory-cortex-left">
+          <span>🧠 Long-term memories:</span>
+          <span class="memory-cortex-total" id="memory-view-cortex-total">–</span>
+          <span
+            id="memory-view-cortex-scopes"
+            style="display: inline-flex; gap: 6px; flex-wrap: wrap"
+          ></span>
+        </div>
+        <a href="/#view-cortex" class="memory-cortex-link">Open Memory Browser →</a>
+      </div>
+    </div>
+  </section>
+</div>
