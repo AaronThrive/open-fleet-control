@@ -33,6 +33,35 @@ export default [
   {
     ignores: ["lib/server.js"],
   },
+  // Browser globals for the zero-build ESM frontend
+  {
+    files: ["public/**/*.js"],
+    languageOptions: {
+      globals: {
+        window: "readonly",
+        document: "readonly",
+        fetch: "readonly",
+        navigator: "readonly",
+        location: "readonly",
+        history: "readonly",
+        localStorage: "readonly",
+        sessionStorage: "readonly",
+        CustomEvent: "readonly",
+        EventSource: "readonly",
+        WebSocket: "readonly",
+        FormData: "readonly",
+        Blob: "readonly",
+        requestAnimationFrame: "readonly",
+        cancelAnimationFrame: "readonly",
+        getComputedStyle: "readonly",
+        performance: "readonly",
+        IntersectionObserver: "readonly",
+        ResizeObserver: "readonly",
+        MutationObserver: "readonly",
+        morphdom: "readonly",
+      },
+    },
+  },
   // Relax rules for source code (many patterns)
   {
     files: ["src/**/*.js"],

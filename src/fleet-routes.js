@@ -818,6 +818,15 @@ function createFleetRoutes({
           return true;
         }
         return false;
+      case "budgets":
+        // Read-only burn-down snapshot for the LLM Usage gauges: no
+        // rate-limit token, no audit entry. Returns { enabled: false }
+        // when budgets are disabled or unconfigured.
+        if (segments[1] === "status" && segments.length === 2 && method === "GET") {
+          json(res, 200, await fleet.budgets.getStatus());
+          return true;
+        }
+        return false;
       case "chat":
         return handleChat(req, res, method, segments, query);
       case "kanban":
