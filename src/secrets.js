@@ -4,31 +4,37 @@
  * guarantees.
  *
  * Design notes:
- *   - Values that do NOT look like op:// references pass through untouched,
- *     so literals and env-sourced secrets keep working unchanged.
+ *   - ANY string value matching op://<vault>/<item>/<field> is eligible:
+ *     resolveDeep* walks the whole tree and resolves on the VALUE shape, not
+ *     the key name (an explicit key allowlist is still accepted to narrow
+ *     the scope). Values that do NOT look like op:// references pass through
+ *     untouched, so literals and env-sourced secrets keep working unchanged.
  *   - Resolved values are cached per ref (default TTL 5 minutes) and are
  *     NEVER logged, never included in error messages, and never exposed via
  *     getStatus(). Error scrubbing deliberately ignores the child process
  *     stdout (which could contain a partial secret) and keeps only the exit
  *     condition + first line of stderr.
- *   - Failures resolve to {ok:false, ref, error}; resolveDeep* replaces the
- *     failed value with "" so the owning module treats that secret as
- *     unconfigured/unavailable and startup continues.
+ *   - Failures resolve to {ok:false, ref, error}; resolveDeep* keeps the
+ *     LITERAL op:// string in place so downstream code sees an obviously
+ *     invalid credential (never a silent ""/undefined) and a later retry —
+ *     e.g. the settings hot-apply path or a lazy consumer — can recover.
  *
  * RESOLUTION TIMING (documented decision): the dashboard builds CONFIG as a
  * synchronous singleton at require time (src/config.js) and src/index.js —
  * which may not be modified — consumes resolved values (e.g.
  * fleet.usage.openrouterKey) immediately. The least invasive integration is
- * therefore SYNCHRONOUS boot-time resolution via execFileSync inside
- * buildFleetConfig (resolveDeepSync), plus sync re-resolution on the
- * settings hot-apply path (fleet.applyAlertsConfig). resolveDeepSync
+ * therefore SYNCHRONOUS boot-time resolution via execFileSync over the whole
+ * config tree inside loadConfig (resolveDeepSync), plus sync re-resolution
+ * on the settings hot-apply path (fleet.applyAlertsConfig). resolveDeepSync
  * short-circuits without spawning anything when the config contains no
  * op:// refs, so the common case (and the test suite) never shells out.
  */
 
 const { execFile, execFileSync } = require("child_process");
 
-const OP_REF_RE = /^op:\/\/\S+$/;
+// Full op://<vault>/<item>/<field> shape (a field may itself contain `/`
+// when a section is addressed: op://vault/item/section/field).
+const OP_REF_RE = /^op:\/\/[^/\s]+\/[^/\s]+\/\S+$/;
 const DEFAULT_OP_PATH = "op";
 const DEFAULT_CACHE_TTL_MS = 300000; // 5 min
 const DEFAULT_TIMEOUT_MS = 10000; // 10 s
@@ -36,9 +42,11 @@ const MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_ERROR_LENGTH = 300;
 
 /**
- * Config keys that may carry secrets and are eligible for op:// resolution
- * (webhook HMAC secret, Slack gateway URL w/ embedded token, ntfy topic,
- * fleet.usage.openrouterKey, federation remote bearer token).
+ * Documented secret-bearing config keys (webhook HMAC secret, Slack gateway
+ * URL w/ embedded token, ntfy topic, fleet.usage.openrouterKey, federation
+ * remote bearer token). Kept as an OPTIONAL narrowing allowlist for callers
+ * that want it — by default resolveDeep* resolves any op:// string value
+ * regardless of key.
  */
 const DEFAULT_SECRET_KEYS = Object.freeze([
   "secret",
@@ -70,14 +78,22 @@ function scrubExecError(err) {
   return parts.length > 0 ? parts.join(": ") : "op read failed";
 }
 
-/** Depth-first scan: does this object tree contain any op:// ref under an allowlisted key? */
+/** True when this key is eligible (null allowlist = every key). */
+function keyAllowed(key, allowKeys) {
+  return allowKeys === null || allowKeys.includes(key);
+}
+
+/** Depth-first scan: does this object tree contain any eligible op:// ref? */
 function containsSecretRef(node, allowKeys) {
+  if (typeof node === "string") {
+    return allowKeys === null && isSecretRef(node);
+  }
   if (Array.isArray(node)) {
     return node.some((item) => containsSecretRef(item, allowKeys));
   }
   if (node !== null && typeof node === "object") {
     return Object.entries(node).some(([key, value]) => {
-      if (typeof value === "string") return allowKeys.includes(key) && isSecretRef(value);
+      if (typeof value === "string") return keyAllowed(key, allowKeys) && isSecretRef(value);
       return containsSecretRef(value, allowKeys);
     });
   }
@@ -173,27 +189,34 @@ function createSecrets({
   }
 
   /**
-   * Walk a config tree and resolve op:// refs found under allowlisted keys,
-   * using the provided per-value resolver. Returns a NEW tree (input is
-   * never mutated); failed refs become "" and are reported in `failures`
-   * as {path, ref, error} — never the secret.
+   * Walk a config tree and resolve eligible op:// string values (any key by
+   * default; restricted when an explicit allowlist is given), using the
+   * provided per-value resolver. Returns a NEW tree (input is never
+   * mutated); failed refs KEEP the literal op:// string in place and are
+   * reported in `failures` as {path, ref, error} — never the secret.
    */
   function deepWalk(node, allowKeys, path, failures, resolveValue) {
+    const resolveLeaf = (value, leafPath) => {
+      const result = resolveValue(value);
+      if (result.ok) return result.value;
+      failures.push({ path: leafPath, ref: result.ref, error: result.error });
+      return value; // keep the obviously-invalid ref literal in place
+    };
     if (Array.isArray(node)) {
-      return node.map((item, i) => deepWalk(item, allowKeys, `${path}[${i}]`, failures, resolveValue));
+      return node.map((item, i) => {
+        const childPath = `${path}[${i}]`;
+        if (typeof item === "string" && allowKeys === null && isSecretRef(item)) {
+          return resolveLeaf(item, childPath);
+        }
+        return deepWalk(item, allowKeys, childPath, failures, resolveValue);
+      });
     }
     if (node !== null && typeof node === "object") {
       const out = {};
       for (const [key, value] of Object.entries(node)) {
         const childPath = path ? `${path}.${key}` : key;
-        if (typeof value === "string" && allowKeys.includes(key) && isSecretRef(value)) {
-          const result = resolveValue(value);
-          if (result.ok) {
-            out[key] = result.value;
-          } else {
-            out[key] = "";
-            failures.push({ path: childPath, ref: result.ref, error: result.error });
-          }
+        if (typeof value === "string" && keyAllowed(key, allowKeys) && isSecretRef(value)) {
+          out[key] = resolveLeaf(value, childPath);
         } else if (value !== null && typeof value === "object") {
           out[key] = deepWalk(value, allowKeys, childPath, failures, resolveValue);
         } else {
@@ -211,10 +234,11 @@ function createSecrets({
    * ever spawned for ref-free configs.
    *
    * @param {object} obj - config tree (never mutated)
-   * @param {string[]} [keyAllowlist=DEFAULT_SECRET_KEYS]
+   * @param {string[]|null} [keyAllowlist=null] - null = any key (default);
+   *   pass an array (e.g. DEFAULT_SECRET_KEYS) to narrow the scope
    * @returns {{value: object, failures: Array<{path, ref, error}>}}
    */
-  function resolveDeepSync(obj, keyAllowlist = DEFAULT_SECRET_KEYS) {
+  function resolveDeepSync(obj, keyAllowlist = null) {
     if (!containsSecretRef(obj, keyAllowlist)) return { value: obj, failures: [] };
     const failures = [];
     const value = deepWalk(obj, keyAllowlist, "", failures, resolveSync);
@@ -225,14 +249,18 @@ function createSecrets({
    * Async deep resolution: pre-resolves every distinct ref concurrently,
    * then performs the same walk against the warmed cache.
    */
-  async function resolveDeep(obj, keyAllowlist = DEFAULT_SECRET_KEYS) {
+  async function resolveDeep(obj, keyAllowlist = null) {
     if (!containsSecretRef(obj, keyAllowlist)) return { value: obj, failures: [] };
     const refs = new Set();
     (function collect(node) {
+      if (typeof node === "string") {
+        if (keyAllowlist === null && isSecretRef(node)) refs.add(node.trim());
+        return;
+      }
       if (Array.isArray(node)) return node.forEach(collect);
       if (node !== null && typeof node === "object") {
         for (const [key, value] of Object.entries(node)) {
-          if (typeof value === "string" && keyAllowlist.includes(key) && isSecretRef(value)) {
+          if (typeof value === "string" && keyAllowed(key, keyAllowlist) && isSecretRef(value)) {
             refs.add(value.trim());
           } else {
             collect(value);
@@ -251,9 +279,15 @@ function createSecrets({
     return { value, failures };
   }
 
-  /** Resolution status per ref — refs and errors only, never values. */
+  /**
+   * Resolution status — refs and scrubbed errors only, NEVER values.
+   * @returns {{configured: number, ok: number, failed: number,
+   *            refs: Array<{ref, ok, error, ts}>}}
+   */
   function getStatus() {
-    return [...status.values()].map((entry) => ({ ...entry }));
+    const refs = [...status.values()].map((entry) => ({ ...entry }));
+    const ok = refs.filter((entry) => entry.ok).length;
+    return { configured: refs.length, ok, failed: refs.length - ok, refs };
   }
 
   function clearCache() {

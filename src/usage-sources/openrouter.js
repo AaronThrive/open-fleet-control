@@ -5,10 +5,16 @@
  *   GET /api/v1/auth/key  -> { data: { label, usage, limit, rate_limit, ... } }
  *
  * The API key is accepted as a constructor parameter only (the orchestrator
- * sources it from env/config). The key is never logged and never included in
- * any returned object or error message. Requests time out after 10 seconds.
- * Errors are returned as { error } — never thrown to callers.
+ * sources it from env/config). It may be a 1Password reference
+ * (op://vault/item/field): refs count as "configured" and are resolved
+ * LAZILY through the secrets layer right before each API call (the layer
+ * caches per ref), so a ref that failed at boot recovers without a restart.
+ * The key is never logged and never included in any returned object or
+ * error message. Requests time out after 10 seconds. Errors are returned as
+ * { error } — never thrown to callers.
  */
+
+const { defaultSecrets } = require("../secrets");
 
 const DEFAULT_BASE_URL = "https://openrouter.ai";
 const DEFAULT_TIMEOUT_MS = 10000;
@@ -30,28 +36,49 @@ function toNumber(value) {
  * Create the OpenRouter usage source.
  *
  * @param {object} [options]
- * @param {string} [options.apiKey] - OpenRouter API key (caller-provided only)
+ * @param {string} [options.apiKey] - OpenRouter API key, literal or op:// ref
+ *   (caller-provided only)
  * @param {function} [options.fetchFn] - fetch-compatible function (for tests)
+ * @param {object} [options.secrets] - secrets resolver for op:// keys
+ *   (default: shared resolver; injectable so tests never spawn the op CLI)
  * @param {string} [options.baseUrl] - default https://openrouter.ai
  * @param {number} [options.timeoutMs] - default 10000
  */
 function createOpenRouterSource(options = {}) {
   const apiKey = typeof options.apiKey === "string" ? options.apiKey.trim() : "";
   const fetchFn = options.fetchFn || defaultFetchFn;
+  const secrets = options.secrets || defaultSecrets;
   const baseUrl = (options.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
   const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_TIMEOUT_MS;
   const available = apiKey.length > 0;
+  const isRef = secrets.isSecretRef(apiKey);
+
+  /**
+   * Effective key for one request: literals pass through; op:// refs resolve
+   * lazily through the (caching) secrets layer. Returns null when an op://
+   * ref cannot be resolved — the caller must NOT hit the API in that case.
+   */
+  function effectiveKey() {
+    if (!isRef) return apiKey;
+    const result = secrets.resolveSync(apiKey);
+    return result.ok ? result.value : null;
+  }
 
   /** Strip the key from any string that might echo request details. */
-  function scrub(text) {
+  function scrub(text, key) {
     const message = String(text || "");
-    return available ? message.split(apiKey).join("[redacted]") : message;
+    return key ? message.split(key).join("[redacted]") : message;
   }
 
   /** GET an API path; resolves { ok, status, body } or { error }. */
   async function request(pathname) {
     if (!available) {
       return { error: "OpenRouter API key not configured" };
+    }
+    const key = effectiveKey();
+    if (key === null) {
+      // Ref + scrubbed failure detail live in the secrets module status.
+      return { error: "OpenRouter API key (1Password ref) could not be resolved" };
     }
     const controller =
       typeof globalThis.AbortController === "function" ? new globalThis.AbortController() : null;
@@ -61,7 +88,7 @@ function createOpenRouterSource(options = {}) {
     try {
       const res = await fetchFn(`${baseUrl}${pathname}`, {
         method: "GET",
-        headers: { Authorization: `Bearer ${apiKey}` },
+        headers: { Authorization: `Bearer ${key}` },
         signal: controller ? controller.signal : undefined,
       });
       if (!res.ok) {
@@ -76,7 +103,9 @@ function createOpenRouterSource(options = {}) {
       return { body };
     } catch (e) {
       const reason =
-        e && e.name === "AbortError" ? `request timed out after ${timeoutMs}ms` : scrub(e.message);
+        e && e.name === "AbortError"
+          ? `request timed out after ${timeoutMs}ms`
+          : scrub(e.message, key);
       return { error: reason };
     } finally {
       clearTimeout(timer);
