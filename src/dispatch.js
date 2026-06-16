@@ -171,7 +171,7 @@ function composeKickoffMessage(task, { agent, baseUrl, briefsDir, slackChannel, 
     `   OpenClaw bot account. This Slack post IS the canonical answer — post the SAME complete text`,
     `   you want recorded as the result (do not summarize it down; the dashboard stores exactly what`,
     `   you post). Run:`,
-    `   openclaw message send --channel slack --account ${agent} --target ${channelHint} --message "<your full answer>"`,
+    `   openclaw message send --channel slack --account ${agent} --target ${channelHint} --message "<your full answer>" --json`,
     ...(isBoard
       ? [`   Because this is a BOARD task, lead the post with "@Chief" and light emojis are welcome.`]
       : [`   Keep it factual and self-contained — a teammate reading only the Slack post should understand the outcome.`]),
