@@ -99,6 +99,43 @@ describe("composeKickoffMessage", () => {
     assert.match(message, /Due: none/);
     assert.match(message, /\(none\)/);
   });
+
+  it("carries the Slack canonical-answer kickoff step for a single task", () => {
+    const task = { id: "tsk_000001", title: "T", description: "", priority: 2, due: null };
+    const message = composeKickoffMessage(task, {
+      agent: "dev",
+      baseUrl: "http://x",
+      briefsDir: null,
+    });
+    assert.match(
+      message,
+      /openclaw message send --channel slack --account dev --target #dev-command/,
+    );
+    assert.match(message, /This Slack post IS the canonical answer/);
+  });
+
+  it("uses the board channel + @Chief framing for a board task", () => {
+    const task = { id: "tsk_000001", title: "T", description: "", priority: 2, due: null };
+    const message = composeKickoffMessage(task, {
+      agent: "chief",
+      baseUrl: "http://x",
+      briefsDir: null,
+      isBoard: true,
+    });
+    assert.match(message, /--target #ceo-boardroom/);
+    assert.match(message, /lead the post with "@Chief"/);
+  });
+
+  it("lets an explicit slackChannel override the derived default", () => {
+    const task = { id: "tsk_000001", title: "T", description: "", priority: 2, due: null };
+    const message = composeKickoffMessage(task, {
+      agent: "dev",
+      baseUrl: "http://x",
+      briefsDir: null,
+      slackChannel: "channel:C123",
+    });
+    assert.match(message, /--target channel:C123/);
+  });
 });
 
 describe("dispatchTask", () => {
@@ -351,6 +388,48 @@ describe("dispatch follow-through (watcher)", () => {
 
     const after = kanban.getBoard().tasks.find((t) => t.id === task.id);
     assert.match(after.attempts[0].note, /^dispatched · session sess-9 · result: All done\./);
+  });
+
+  it("stores the FULL agent answer on result_text while keeping the snippet in note", async () => {
+    const exec = makeExecFn({ stdout: SUCCESS_STDOUT });
+    const dispatch = makeDispatch({ kanban, execFn: exec.fn });
+    const task = kanban.createTask({ title: "T" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "dev" });
+    exec.release();
+    await result.completion;
+
+    const after = kanban.getBoard().tasks.find((t) => t.id === task.id);
+    assert.strictEqual(after.attempts[0].result_text, "All done. Opened PR #42.");
+    assert.match(after.attempts[0].note, /result: All done\./);
+  });
+
+  it("preserves newlines on result_text (unlike the collapsed snippet)", async () => {
+    const exec = makeExecFn({
+      stdout: JSON.stringify({ result: { payloads: [{ text: "line one\nline two" }] } }),
+    });
+    const dispatch = makeDispatch({ kanban, execFn: exec.fn });
+    const task = kanban.createTask({ title: "T" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "dev" });
+    exec.release();
+    await result.completion;
+
+    const after = kanban.getBoard().tasks.find((t) => t.id === task.id);
+    assert.strictEqual(after.attempts[0].result_text, "line one\nline two");
+  });
+
+  it("leaves result_text null on the failure path", async () => {
+    const exec = makeExecFn({
+      stdout: JSON.stringify({ error: "agent turn aborted", result: null }),
+    });
+    const dispatch = makeDispatch({ kanban, execFn: exec.fn });
+    const task = kanban.createTask({ title: "T" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "dev" });
+    exec.release();
+    await result.completion;
+
+    const after = kanban.getBoard().tasks.find((t) => t.id === task.id);
+    assert.strictEqual(after.attempts[0].result, "failure");
+    assert.strictEqual(after.attempts[0].result_text, null);
   });
 
   it("truncates long output snippets on the attempt note", async () => {

@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.3.0 — 2026-06-16
+
+- Multi-agent orchestration: new `src/orchestrate.js` composes the single-agent dispatch
+  primitive into fan-in (runBoard — ask N agents the same question in parallel, collect every
+  answer for the Chief to synthesize) and chain (runChain — a pipeline where each step's output
+  feeds the next step's context) patterns; async fire-and-forget with an in-memory run registry
+  (open → running → done/failed), `getRun`/`waitForRun` lifecycle, TTL reaping, and an
+  `orchestration.completed` SSE emit. `POST /api/fleet/orchestrate` returns 202 + runId
+  instantly; `GET /api/fleet/orchestrate/:runId` polls to completion (with a `?wait=true`
+  bounded-sync escape hatch).
+- Dispatch verbs single/board/chain wired through `src/dispatch.js`, `src/index.js`, and
+  `src/fleet-routes.js`; canonical `result_text` captured per attempt; board results route to
+  `#ceo-boardroom` (chain/single to each agent's command channel); Chief-orchestrator router
+  selects the pattern and synthesizes.
+- Budget gate on orchestration (`src/budgets.js`): OPEN/CLOSED guard re-checked before each
+  seat/step; CLOSED ceiling halts mid-run with a clear block descriptor.
+- Phase 2 remote dispatch: new `src/agent-locator.js` resolves agent → node
+  (local/remote/unknown/unreachable, `agent@node` qualifier, mesh-health precheck); the
+  dispatch remote branch POSTs an `agent-run` verb to the target node and synthesizes stdout so
+  the existing watcher records attempts byte-for-byte identically to a local run (full
+  back-compat — with no resolver wired, behavior is unchanged). New `src/action-guard.js`
+  fail-closed authorization for the privileged `agent-run` POST verb (localhost / registered
+  mesh peer / bearer token).
+- Tests: +46 new (orchestrate sync/async/routes, budget-orchestration gate, agent-locator,
+  remote dispatch, action-guard, action POST route, actions agent-run); full suite 1573 green.
+
 ## 2.2.0 — 2026-06-11
 
 - Overview and Memory are separate tabs; System Vitals merged into the Overview's uniform

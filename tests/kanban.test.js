@@ -437,6 +437,7 @@ describe("kanban module", () => {
       assert.strictEqual(updated.attempts[0].agent, "drone-2");
       assert.strictEqual(updated.attempts[0].ended_at, null);
       assert.strictEqual(updated.attempts[0].result, null);
+      assert.strictEqual(updated.attempts[0].result_text, null);
       assert.ok(events.some((e) => e.type === "attempt.added"));
     });
 
@@ -468,6 +469,20 @@ describe("kanban module", () => {
       assert.strictEqual(updated.attempts[1].agent, "drone-2");
       assert.strictEqual(updated.attempts[1].result, null);
       assert.ok(events.some((e) => e.type === "attempt.updated"));
+    });
+
+    it("patches result_text in place", () => {
+      const kanban = makeKanban();
+      const task = kanban.createTask({ title: "T" }, "overmind");
+      kanban.addAttempt(task.id, { agent: "drone-1", note: "dispatched" });
+      const updated = kanban.updateAttempt(task.id, 0, {
+        result: "success",
+        result_text: "the full canonical answer\nwith newlines",
+      });
+      assert.strictEqual(updated.attempts[0].result_text, "the full canonical answer\nwith newlines");
+      // Persists through a fresh board read
+      const after = kanban.getBoard().tasks.find((t) => t.id === task.id);
+      assert.strictEqual(after.attempts[0].result_text, "the full canonical answer\nwith newlines");
     });
 
     it("rejects out-of-range indexes and immutable/unknown fields", () => {

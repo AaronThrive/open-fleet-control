@@ -51,6 +51,8 @@ describe("budgets module", () => {
         weekly: { totalUSD: 0, perProvider: {} },
         checkIntervalMs: 900000,
         enforce: { enabled: false },
+        allowOpen: false,
+        closedCeilingUSD: 0,
       });
       const normalized = normalizeBudgetsConfig({
         enabled: true,

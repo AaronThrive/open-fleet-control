@@ -74,6 +74,7 @@ function normalizePeriod(raw) {
 /** Normalize the full fleet.budgets config section to safe values. */
 function normalizeBudgetsConfig(raw) {
   const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const closedCeilingUSD = Number(src.closedCeilingUSD);
   return {
     enabled: src.enabled === true,
     daily: normalizePeriod(src.daily),
@@ -87,6 +88,13 @@ function normalizeBudgetsConfig(raw) {
         src.enforce && typeof src.enforce === "object" && src.enforce.enabled === true,
       ),
     },
+    // Orchestration mode gate (src/orchestrate.js + the orchestrate route).
+    // OPEN mode is OFF unless explicitly opted in — burns unbounded tokens.
+    allowOpen: src.allowOpen === true,
+    // Default per-orchestration CLOSED ceiling (USD). 0 / absent = no
+    // per-orchestration ceiling (the fleet daily/weekly ceilings still apply).
+    closedCeilingUSD:
+      Number.isFinite(closedCeilingUSD) && closedCeilingUSD > 0 ? closedCeilingUSD : 0,
   };
 }
 
@@ -365,6 +373,76 @@ function createBudgets({
     return { acked };
   }
 
+  // ---- orchestration mode gate (OPEN vs CLOSED) -------------------------------
+
+  /**
+   * Orchestration-mode guard. Called by POST /api/fleet/orchestrate BEFORE
+   * dispatching, and re-called between chain steps / before each board dispatch
+   * for CLOSED runs (the caller passes the running spend as `spentUSD`).
+   *
+   * Composes WITH — does not replace — checkDispatchBlock(): an orchestration
+   * must clear BOTH the fleet daily/weekly window block AND this per-run gate.
+   * This guard is independent of cfg.enabled/cfg.enforce.enabled — the OPEN
+   * policy and CLOSED per-task ceiling are always honored, because they govern
+   * a single run's mode rather than the fleet spend window.
+   *
+   * @param {object} args
+   * @param {"closed"|"open"} [args.mode="closed"] unknown/blank → CLOSED (safe)
+   * @param {number} [args.ceiling]   per-orchestration USD ceiling (CLOSED only).
+   *                                  Defaults to cfg.closedCeilingUSD. 0 = none.
+   * @param {number} [args.spentUSD]  spend accrued by THIS orchestration so far
+   *                                  (mid-run re-check). Omit/0 on the pre-check.
+   * @param {number} [args.projectedUSD] optional projected spend of the NEXT
+   *                                  step; lets CLOSED refuse before overspending.
+   * @returns {null | {reason, mode, ...}}  null = allowed; object = refuse.
+   */
+  function checkOrchestrationBlock({
+    mode = "closed",
+    ceiling,
+    spentUSD = 0,
+    projectedUSD = 0,
+  } = {}) {
+    // 1. Normalize mode. Unknown/blank → CLOSED (fail safe).
+    const m = mode === "open" ? "open" : "closed";
+
+    // 2. OPEN gate: blocked unless the unlimited opt-in is set.
+    if (m === "open") {
+      if (!cfg.allowOpen) {
+        return {
+          reason: "open-mode-disabled",
+          mode: "open",
+          message: "OPEN mode requires unlimited-budget opt-in (fleet.budgets.allowOpen=true).",
+        };
+      }
+      // OPEN + opt-in: intentionally unbounded. The fleet-wide daily/weekly
+      // hard stop (checkDispatchBlock) still applies, but NO per-orch ceiling.
+      return null;
+    }
+
+    // 3. CLOSED gate: enforce the per-orchestration ceiling.
+    const cap = Number.isFinite(ceiling) && ceiling > 0 ? ceiling : cfg.closedCeilingUSD;
+    if (cap > 0) {
+      // projectedUSD lets us refuse the NEXT step before it overspends;
+      // spentUSD catches an already-exceeded run on a mid-run re-check.
+      const spent = Number(spentUSD) || 0;
+      const projected = Number(projectedUSD) || 0;
+      const worst = Math.max(spent, spent + projected);
+      if (worst >= cap) {
+        return {
+          reason: "closed-ceiling-exceeded",
+          mode: "closed",
+          ceiling: round2(cap),
+          spent: round2(spent),
+          projected: round2(projected),
+          message:
+            `CLOSED orchestration halted: projected spend $${round2(worst)} ` +
+            `reaches the $${round2(cap)} per-task ceiling.`,
+        };
+      }
+    }
+    return null;
+  }
+
   // ---- breach checks ----------------------------------------------------------
 
   function firedKey(period, key, scope, severity) {
@@ -594,6 +672,7 @@ function createBudgets({
     getState,
     getStatus,
     checkDispatchBlock,
+    checkOrchestrationBlock,
     ack,
   };
 }
