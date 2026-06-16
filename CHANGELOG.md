@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.3.1 — 2026-06-16
+
+- fix(dispatch): append `--json` to the kickoff Slack-send command (`composeKickoffMessage`) so
+  the gateway-routed send emits a final result line and the agent's exec exits promptly. This
+  eliminates the false `⚠️ run openclaw message (agent) failed` trailer that every dispatched
+  agent appended to its result — the Slack post always succeeded (real message `ts` returned);
+  the warning was a teardown-timeout misclassification by the exec wrapper, not a delivery
+  failure.
+
 ## 2.3.0 — 2026-06-16
 
 - Multi-agent orchestration: new `src/orchestrate.js` composes the single-agent dispatch
