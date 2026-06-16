@@ -24,6 +24,7 @@ const ALLOWED_ACTIONS = new Set([
   "cron-list",
   "health-check",
   "clear-stale-sessions",
+  "agent-run", // node→node remote dispatch: run a local agent turn, return the parsed result
 ]);
 
 // Front-end / legacy names → canonical action names.
@@ -35,6 +36,28 @@ const ACTION_ALIASES = {
 const DEFAULT_STALE_MINUTES = 24 * 60;
 const MIN_STALE_MINUTES = 5;
 const MAX_STALE_MINUTES = 30 * 24 * 60;
+
+// agent-run boundary validation (input arrives over the tailnet — fail closed).
+const AGENT_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+const SESSION_KEY_PATTERN = /^[a-zA-Z0-9:_.-]{1,200}$/;
+const AGENT_RUN_MAX_TIMEOUT_SEC = 1800;
+const AGENT_RUN_DEFAULT_TIMEOUT_SEC = 600;
+const AGENT_RUN_MESSAGE_MAX = 64 * 1024;
+const AGENT_RUN_SNIPPET_MAX = 300;
+
+/** Clamp a requested agent-run timeout (seconds) into a sane range. */
+function clampAgentTimeout(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return AGENT_RUN_DEFAULT_TIMEOUT_SEC;
+  return Math.min(AGENT_RUN_MAX_TIMEOUT_SEC, Math.max(30, Math.round(n)));
+}
+
+/** Collapse whitespace and cap text for a one-line summary. */
+function snippetOneLine(text) {
+  const collapsed = String(text).replace(/\s+/g, " ").trim();
+  if (collapsed.length <= AGENT_RUN_SNIPPET_MAX) return collapsed;
+  return `${collapsed.slice(0, AGENT_RUN_SNIPPET_MAX)}…`;
+}
 
 /** Resolve an incoming action name to its canonical allowlisted form. */
 function normalizeAction(action) {
@@ -138,6 +161,9 @@ function countSessions(getRawSessions) {
  * @param {function} deps.extractJSON - (output) => json string|null
  * @param {number} deps.PORT - dashboard port (health summary)
  * @param {function} [deps.getRawSessions] - () => raw session entries (ageMs)
+ * @param {function} [deps.runAgent] - async (argv[], {timeoutMs}) => stdout|null;
+ *   long-timeout openclaw agent runner used by the agent-run verb (an agent
+ *   turn needs minutes, not the 20s runOpenClawAsync budget)
  * @param {object} [opts]
  * @param {number} [opts.staleMinutes] - staleness window for clear-stale-sessions
  * @returns {Promise<{success: boolean, action: string, output: string, error: string|null, detail?: object}>}
@@ -152,7 +178,9 @@ async function executeAction(action, deps, opts = {}) {
     results.error = `Unknown action: ${results.action}`;
     return results;
   }
-  if (typeof runOpenClawAsync !== "function") {
+  // agent-run uses its own long-timeout runner (deps.runAgent), validated in
+  // the case body; every other action goes through the 20s runOpenClawAsync.
+  if (canonical !== "agent-run" && typeof runOpenClawAsync !== "function") {
     results.error = "OpenClaw runner unavailable";
     return results;
   }
@@ -252,6 +280,67 @@ async function executeAction(action, deps, opts = {}) {
         results.success = true;
         break;
       }
+      case "agent-run": {
+        // opts: { agent, message, sessionKey, timeoutSec }. This is the server
+        // side of remote dispatch — a remote OFC POSTs here to make THIS node
+        // run the agent locally and return the parsed result.
+        const agent = typeof opts.agent === "string" ? opts.agent.trim() : "";
+        const message = typeof opts.message === "string" ? opts.message : "";
+        const sessionKey = typeof opts.sessionKey === "string" ? opts.sessionKey.trim() : "";
+        const timeoutSec = clampAgentTimeout(opts.timeoutSec);
+
+        // Validate at the boundary (untrusted: arrives over the tailnet).
+        if (!AGENT_ID_PATTERN.test(agent)) {
+          results.error = "Invalid agent id";
+          break;
+        }
+        if (sessionKey && !SESSION_KEY_PATTERN.test(sessionKey)) {
+          results.error = "Invalid sessionKey";
+          break;
+        }
+        if (message.length === 0 || message.length > AGENT_RUN_MESSAGE_MAX) {
+          results.error = "message must be 1..64KB";
+          break;
+        }
+        if (typeof deps.runAgent !== "function") {
+          results.error = "Agent runner unavailable on this node";
+          break;
+        }
+
+        // argv as a no-shell array — injection-safe even though validated.
+        const args = [
+          "agent",
+          "--agent",
+          agent,
+          ...(sessionKey ? ["--session-key", sessionKey] : []),
+          "--message",
+          message,
+          "--json",
+          "--timeout",
+          String(timeoutSec),
+        ];
+        const stdout = await deps.runAgent(args, { timeoutMs: timeoutSec * 1000 + 5000 });
+        if (stdout === null || stdout === undefined) {
+          results.error = "openclaw agent failed or timed out";
+          break;
+        }
+        // Reuse the dispatch parser so local & remote yield identical fields.
+        const parsed = require("./dispatch").parseRunResult(stdout);
+        results.output = parsed.outputText
+          ? snippetOneLine(parsed.outputText)
+          : "agent run complete";
+        results.detail = {
+          sessionId: parsed.sessionId,
+          outputText: parsed.outputText, // FULL text — the caller stores result_text
+          cliError: parsed.error, // CLI-reported error inside a clean exit
+        };
+        // success here means "the CLI ran"; a CLI-reported error is surfaced
+        // via detail.cliError and re-mapped to failure by the CALLER so local
+        // and remote success/failure semantics line up.
+        results.success = parsed.error ? false : true;
+        if (parsed.error) results.error = parsed.error;
+        break;
+      }
     }
   } catch (e) {
     results.error = e.message;
@@ -265,7 +354,13 @@ module.exports = {
   executeAction,
   normalizeAction,
   parseGatewayStatus,
+  clampAgentTimeout,
+  snippetOneLine,
   ALLOWED_ACTIONS,
   ACTION_ALIASES,
   DEFAULT_STALE_MINUTES,
+  AGENT_ID_PATTERN,
+  SESSION_KEY_PATTERN,
+  AGENT_RUN_MAX_TIMEOUT_SEC,
+  AGENT_RUN_DEFAULT_TIMEOUT_SEC,
 };

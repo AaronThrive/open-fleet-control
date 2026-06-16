@@ -59,6 +59,7 @@ const DISPATCH_NOTE = "dispatched";
 const PROTOCOL_BRIEF = "agent-task-protocol";
 const EXEC_MAX_BUFFER = 16 * 1024 * 1024;
 const RESULT_SNIPPET_MAX = 300;
+const RESULT_TEXT_MAX = 12 * 1024; // cap full canonical answer stored on the attempt (bytes-ish)
 // Statuses the watcher may auto-move FROM; operator-final columns are immune.
 const AUTO_MOVE_SOURCES = Object.freeze(["assigned", "inprogress"]);
 const WATCHER_ACTOR = "dispatch";
@@ -67,6 +68,39 @@ function httpError(statusCode, message) {
   const err = new Error(message);
   err.statusCode = statusCode;
   return err;
+}
+
+/** AbortSignal.timeout with an undefined fallback (mirrors bulk.js). */
+function timeoutSignal(ms) {
+  if (globalThis.AbortSignal && typeof globalThis.AbortSignal.timeout === "function") {
+    return globalThis.AbortSignal.timeout(ms);
+  }
+  return undefined;
+}
+
+/**
+ * Rebuild a minimal stdout JSON that parseRunResult() understands from a
+ * remote agent-run envelope, so handleRunSettled records the sessionId +
+ * result_text identically to a local run. parseRunResult reads
+ * result.meta.agentMeta.sessionId, result.text, and error — so we shape
+ * exactly those.
+ *
+ * @param {object} body - remote agent-run envelope {success, error, detail}
+ * @returns {string} synthetic stdout
+ */
+function synthStdout(body) {
+  const detail = body && typeof body.detail === "object" && body.detail ? body.detail : {};
+  return JSON.stringify({
+    result: {
+      meta: { agentMeta: { sessionId: detail.sessionId || null } },
+      text: detail.outputText || null,
+    },
+    error:
+      detail.cliError ||
+      (body && body.success === false
+        ? body.error || "agent run reported failure"
+        : undefined),
+  });
 }
 
 /**
@@ -103,11 +137,12 @@ function isOpenDispatchAttempt(attempt, nowMs, openTtlMs) {
  * Compose the kick-off message for an agent from a kanban card plus the
  * standing fleet-control instructions.
  * @param {object} task - kanban task
- * @param {object} options - {agent, baseUrl, briefsDir}
+ * @param {object} options - {agent, baseUrl, briefsDir, slackChannel?, isBoard?}
  * @returns {string}
  */
-function composeKickoffMessage(task, { agent, baseUrl, briefsDir }) {
+function composeKickoffMessage(task, { agent, baseUrl, briefsDir, slackChannel, isBoard }) {
   const protocolPath = briefsDir ? path.join(briefsDir, `${PROTOCOL_BRIEF}.md`) : null;
+  const channelHint = slackChannel || (isBoard ? "#ceo-boardroom" : `#${agent}-command`);
   const lines = [
     `You have been dispatched a task from the Open Fleet Control kanban board.`,
     ``,
@@ -132,6 +167,14 @@ function composeKickoffMessage(task, { agent, baseUrl, briefsDir }) {
     `   POST ${baseUrl}/api/fleet/chat/publish {"sender":"${agent}","payload":{"text":"..."}}`,
     `5. Submit a lesson learned:`,
     `   POST ${baseUrl}/api/fleet/evolution/lessons {"title":"...","body":"...","author":"${agent}"}`,
+    `6. WHEN FINISHED, post your FINAL human-readable answer to Slack ${channelHint} from your own`,
+    `   OpenClaw bot account. This Slack post IS the canonical answer — post the SAME complete text`,
+    `   you want recorded as the result (do not summarize it down; the dashboard stores exactly what`,
+    `   you post). Run:`,
+    `   openclaw message send --channel slack --account ${agent} --target ${channelHint} --message "<your full answer>"`,
+    ...(isBoard
+      ? [`   Because this is a BOARD task, lead the post with "@Chief" and light emojis are welcome.`]
+      : [`   Keep it factual and self-contained — a teammate reading only the Slack post should understand the outcome.`]),
   ];
   return lines.join("\n");
 }
@@ -148,6 +191,17 @@ function snippet(text) {
   const collapsed = String(text).replace(/\s+/g, " ").trim();
   if (collapsed.length <= RESULT_SNIPPET_MAX) return collapsed;
   return `${collapsed.slice(0, RESULT_SNIPPET_MAX)}…`;
+}
+
+/**
+ * Canonical full-answer text stored on the attempt (result_text). Trims and
+ * caps length but PRESERVES the agent's original formatting/newlines (unlike
+ * snippet(), which collapses whitespace for the one-line UI note).
+ */
+function canonicalResultText(text) {
+  const trimmed = String(text).trim();
+  if (trimmed.length <= RESULT_TEXT_MAX) return trimmed;
+  return `${trimmed.slice(0, RESULT_TEXT_MAX)}…`;
 }
 
 /** Best-effort extraction of the agent's output text from the parsed JSON. */
@@ -219,6 +273,17 @@ function parseRunResult(stdout) {
  * @param {function} [options.fireAlert] - (event) => void|Promise; fired with a
  *   `dispatchComplete` alert when a run settles. Gating (rule default OFF) and
  *   sink delivery (ntfy/Slack/webhooks) belong to the alerts engine.
+ * @param {function} [options.resolveAgentNode] - async (agentRef) =>
+ *   {kind:"local"|"remote"|"unknown"|"unreachable", node?, baseUrl?, online?}.
+ *   When supplied, dispatch routes remote agents over the tailnet; when ABSENT,
+ *   behaviour is identical to the legacy local-only path (ensureLocalNode guard).
+ * @param {function} [options.fetchFn] - fetch-compatible transport for the
+ *   remote agent-run call (injectable for tests; defaults to globalThis.fetch)
+ * @param {string} [options.meshIdentity] - value for the Tailscale-User-Login
+ *   header on node→node calls (this node's identity)
+ * @param {number} [options.remoteTimeoutMs] - remote-call timeout; defaults to
+ *   timeoutSec*1000 + 5000 so a real remote timeout fires AFTER timeoutSec
+ *   elapsed (the watcher's elapsed-time clause then classifies it as timedOut)
  * @returns {object} dispatch API
  */
 function createDispatch(options = {}) {
@@ -230,6 +295,10 @@ function createDispatch(options = {}) {
     config = {},
     nowFn = Date.now,
     fireAlert = null,
+    resolveAgentNode = null,
+    fetchFn = (...a) => globalThis.fetch(...a),
+    meshIdentity = null,
+    remoteTimeoutMs = null,
   } = options;
   if (!kanban) throw new Error("createDispatch: kanban is required");
 
@@ -265,6 +334,117 @@ function createDispatch(options = {}) {
         },
       );
     });
+  }
+
+  /**
+   * Run the agent LOCALLY via the injected execFn (or the default openclaw
+   * runner). Returns the {ok, stdout} / {ok:false, error} contract the watcher
+   * consumes — unchanged from the legacy inline path.
+   */
+  function runLocal(args) {
+    const run = typeof execFn === "function" ? execFn : defaultExecFn;
+    return Promise.resolve(run(args, { timeoutMs: timeoutSec * 1000 + 5000 })).then(
+      ({ stdout }) => ({ ok: true, stdout }),
+      (error) => ({ ok: false, error }),
+    );
+  }
+
+  /**
+   * Run the agent on a REMOTE node by POSTing the agent-run verb to its
+   * /api/action endpoint, then mapping the envelope back into the {ok, stdout}
+   * the watcher expects (via synthStdout, so bookkeeping is identical to local).
+   */
+  async function runRemote(route, { agent, message, sessionKey }) {
+    const url = `${route.baseUrl}/api/action`;
+    const ms = remoteTimeoutMs || timeoutSec * 1000 + 5000;
+    let res;
+    try {
+      res = await fetchFn(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          // Tailnet identity so the remote node can authorise the node→node call.
+          ...(meshIdentity ? { "Tailscale-User-Login": meshIdentity } : {}),
+          "X-OFC-Dispatch": "1",
+        },
+        body: JSON.stringify({ action: "agent-run", agent, message, sessionKey, timeoutSec }),
+        signal: timeoutSignal(ms),
+      });
+    } catch (e) {
+      // network error / DNS / abort(timeout) → failure
+      return { ok: false, error: e };
+    }
+    if (!res || res.ok !== true) {
+      return {
+        ok: false,
+        error: new Error(`HTTP ${res && res.status ? res.status : "error"} from ${url}`),
+      };
+    }
+    let body;
+    try {
+      body = await res.json();
+    } catch (e) {
+      return { ok: false, error: new Error("Malformed agent-run response") };
+    }
+
+    // Remote ran but the AGENT reported an error → treat as a clean exit
+    // carrying a CLI error, so handleRunSettled → settleFailure(reason),
+    // matching a local CLI error exactly.
+    if (body && body.success === false && (body.error || (body.detail && body.detail.cliError))) {
+      return { ok: true, stdout: synthStdout(body) };
+    }
+    if (!body || body.success !== true) {
+      return {
+        ok: false,
+        error: new Error(body && body.error ? body.error : "Remote agent-run failed"),
+      };
+    }
+    return { ok: true, stdout: synthStdout(body) };
+  }
+
+  /**
+   * Resolve where an agent lives and start the run, producing the same
+   * Promise<{ok,stdout}|{ok:false,error}> contract for local and remote.
+   *
+   * With NO resolver wired the legacy behaviour is preserved exactly: the
+   * ensureLocalNode guard throws on a foreign node and everything runs local.
+   * With a resolver wired, the local fast path stays synchronous (no extra
+   * await beyond the run itself); only the remote branch pays the resolve await.
+   *
+   * @param {string|undefined} node - explicit node pin from opts.node
+   * @param {object} ctx - { args, agent, message, sessionKey }
+   * @returns {Promise<{ok: boolean, stdout?: string, error?: Error}>}
+   */
+  function startRun(node, { args, agent, message, sessionKey }) {
+    if (typeof resolveAgentNode !== "function") {
+      ensureLocalNode(node); // legacy guard/throw — back-compat
+      return runLocal(args);
+    }
+    // An explicit "@node" pin rides through the agent ref the resolver parses;
+    // a bare opts.node pin is folded into the ref so the resolver honours it.
+    const agentRef = node && !agent.includes("@") ? `${agent}@${node}` : agent;
+    return Promise.resolve(resolveAgentNode(agentRef))
+      .then((route) => {
+        if (!route || route.kind === "local") return runLocal(args);
+        if (route.kind === "unknown") {
+          return { ok: false, error: new Error(`Unknown agent '${agent}' in fleet roster`) };
+        }
+        if (route.kind === "unreachable") {
+          return {
+            ok: false,
+            error: new Error(`No mesh node hosts agent '${agent}' (node ${route.node})`),
+          };
+        }
+        // route.kind === "remote"
+        if (route.online === false) {
+          return {
+            ok: false,
+            error: new Error(`Target node ${route.node} is offline (mesh precheck)`),
+          };
+        }
+        return runRemote(route, { agent, message, sessionKey });
+      })
+      .catch((error) => ({ ok: false, error }));
   }
 
   function emit(event) {
@@ -304,6 +484,26 @@ function createDispatch(options = {}) {
     }
   }
 
+  /**
+   * Resolve the Slack channel hint + board framing for a kickoff. A board task
+   * is caller-supplied via opts.isBoard; a caller-supplied opts.slackChannel
+   * overrides the derived default (single → #<agent>-command, board →
+   * #ceo-boardroom).
+   * @param {string} agent - resolved agent id
+   * @param {{isBoard?: boolean, slackChannel?: string}} [opts]
+   * @returns {{isBoard: boolean, slackChannel: string}}
+   */
+  function resolveSlack(agent, opts = {}) {
+    const isBoard = opts.isBoard === true;
+    const slackChannel =
+      typeof opts.slackChannel === "string" && opts.slackChannel.trim()
+        ? opts.slackChannel.trim()
+        : isBoard
+          ? "#ceo-boardroom"
+          : `#${agent}-command`;
+    return { isBoard, slackChannel };
+  }
+
   /** Count board cards holding an open dispatched attempt. */
   function countOpenDispatches(board) {
     const nowMs = nowFn();
@@ -321,12 +521,13 @@ function createDispatch(options = {}) {
    * Close the dispatch attempt when the CLI run settles. Best-effort: the
    * card may have been deleted or hand-edited meanwhile — never throws.
    */
-  function closeAttempt(taskId, attemptIndex, { result, note }) {
+  function closeAttempt(taskId, attemptIndex, { result, note, result_text }) {
     try {
       kanban.updateAttempt(taskId, attemptIndex, {
         ended_at: new Date(nowFn()).toISOString(),
         result,
         note,
+        ...(result_text !== undefined ? { result_text } : {}),
       });
     } catch (e) {
       console.error(`[Dispatch] Could not close attempt on ${taskId}:`, e.message);
@@ -410,7 +611,12 @@ function createDispatch(options = {}) {
         run.sessionId ? `session ${run.sessionId}` : "completed",
         ...(run.outputText ? [`result: ${snippet(run.outputText)}`] : []),
       ];
-      closeAttempt(taskId, attemptIndex, { result: "success", note: noteParts.join(" · ") });
+      const fullText = run.outputText ? canonicalResultText(run.outputText) : null;
+      closeAttempt(taskId, attemptIndex, {
+        result: "success",
+        note: noteParts.join(" · "),
+        result_text: fullText,
+      });
       autoMoveOnSettle(taskId, "review");
       emit({ type: "task.dispatch_completed", taskId, agent, sessionId: run.sessionId });
       notifyCompletion({ taskId, agent, ok: true, detail: null });
@@ -448,19 +654,21 @@ function createDispatch(options = {}) {
   /**
    * Preview the kick-off message without side effects.
    * @param {string} taskId
-   * @param {{agent: string, node?: string}} opts
-   * @returns {{taskId, agent, node, message}}
+   * @param {{agent: string, node?: string, isBoard?: boolean, slackChannel?: string}} opts
+   * @returns {{taskId, agent, node, slackChannel, message}}
    */
   function previewDispatch(taskId, opts = {}) {
     ensureAvailable();
     const agent = requireAgent(opts.agent);
     ensureLocalNode(opts.node);
     const { task } = requireTask(taskId);
+    const { isBoard, slackChannel } = resolveSlack(agent, opts);
     return {
       taskId: task.id,
       agent,
       node: selfNode,
-      message: composeKickoffMessage(task, { agent, baseUrl, briefsDir }),
+      slackChannel,
+      message: composeKickoffMessage(task, { agent, baseUrl, briefsDir, slackChannel, isBoard }),
     };
   }
 
@@ -470,13 +678,17 @@ function createDispatch(options = {}) {
    * waits for the agent turn itself.
    *
    * @param {string} taskId
-   * @param {{agent: string, node?: string, actor?: string}} opts
+   * @param {{agent: string, node?: string, actor?: string, isBoard?: boolean, slackChannel?: string}} opts
    * @returns {{task, sessionKey, agent, attemptIndex, completion: Promise}}
    */
   function dispatchTask(taskId, opts = {}) {
     ensureAvailable();
     const agent = requireAgent(opts.agent);
-    ensureLocalNode(opts.node);
+    // Legacy local-only mode (no resolver): keep the synchronous foreign-node
+    // guard up front so a 400 is thrown BEFORE any card bookkeeping — identical
+    // to the pre-Phase-2 behaviour. With a resolver wired, node routing (incl.
+    // remote) is decided inside startRun below.
+    if (typeof resolveAgentNode !== "function") ensureLocalNode(opts.node);
     const actor = typeof opts.actor === "string" && opts.actor ? opts.actor : "operator";
     const { board, task } = requireTask(taskId);
 
@@ -492,7 +704,8 @@ function createDispatch(options = {}) {
 
     const startedMs = nowFn();
     const sessionKey = `agent:${agent}:kanban-${taskId}-${startedMs}`;
-    const message = composeKickoffMessage(task, { agent, baseUrl, briefsDir });
+    const { isBoard, slackChannel } = resolveSlack(agent, opts);
+    const message = composeKickoffMessage(task, { agent, baseUrl, briefsDir, slackChannel, isBoard });
     const args = [
       "agent",
       "--agent",
@@ -506,15 +719,13 @@ function createDispatch(options = {}) {
       String(timeoutSec),
     ];
 
-    // Fire the agent run NOW (async, never awaited here). Spawn-time
-    // failures surface through the same settled handler as run failures.
-    const run = typeof execFn === "function" ? execFn : defaultExecFn;
+    // Fire the agent run NOW (async, never awaited here). startRun resolves
+    // the route (local vs remote) and produces the same {ok, stdout} /
+    // {ok:false, error} contract the watcher consumes. Spawn-time failures
+    // surface through the same settled handler as run failures.
     let settledPromise;
     try {
-      settledPromise = Promise.resolve(run(args, { timeoutMs: timeoutSec * 1000 + 5000 })).then(
-        ({ stdout }) => ({ ok: true, stdout }),
-        (error) => ({ ok: false, error }),
-      );
+      settledPromise = startRun(opts.node, { args, agent, message, sessionKey });
     } catch (e) {
       throw httpError(503, `Dispatch invocation failed: ${e.message}`);
     }
@@ -549,5 +760,6 @@ module.exports = {
   resolveBinary,
   isOpenDispatchAttempt,
   parseRunResult,
+  synthStdout,
   DISPATCH_NOTE,
 };

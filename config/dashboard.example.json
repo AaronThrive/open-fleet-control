@@ -129,6 +129,21 @@
       "_comment": "Read-only Docker container panel. portainerUrl (e.g. \"https://host:9443\") enables per-container deep links while a running Portainer container is detected; null disables links.",
       "portainerUrl": null
     },
+    "budgets": {
+      "_comment": "Cost budgets (src/budgets.js). daily/weekly totalUSD 0 = no limit. enforce.enabled blocks new dispatches when an enforced scope hits 100%. allowOpen gates OPEN-mode orchestration (unbounded token burn) — OFF by default. closedCeilingUSD is the default per-orchestration CLOSED ceiling in USD (0 = no per-orchestration ceiling; fleet daily/weekly ceilings still apply).",
+      "enabled": false,
+      "daily": { "totalUSD": 0, "perProvider": {} },
+      "weekly": { "totalUSD": 0, "perProvider": {} },
+      "checkIntervalMs": 900000,
+      "enforce": { "enabled": false },
+      "allowOpen": false,
+      "closedCeilingUSD": 0
+    },
+    "orchestrate": {
+      "_comment": "Multi-agent orchestration (src/orchestrate.js): fan-in councils + sequential chains composed over the dispatch primitive. timeoutSec is the per-step / overall board wait budget.",
+      "enabled": true,
+      "timeoutSec": 600
+    },
     "usage": {
       "_comment": "LLM usage source paths (supports ~ and $HOME). headroomStats empty = reuse fleet.cortex.headroomStats. openrouterKey: OPENROUTER_API_KEY env var takes precedence.",
       "claudeProjectsDir": "~/.claude/projects",

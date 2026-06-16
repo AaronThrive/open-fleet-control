@@ -40,6 +40,7 @@ const TITLE_MAX = 200;
 const DESCRIPTION_MAX_BYTES = 10 * 1024;
 const NAME_MAX = 128;
 const COMMENT_MAX_BYTES = 4 * 1024;
+const RESULT_TEXT_MAX_BYTES = 16 * 1024; // attempt.result_text upper bound
 const PRIORITIES = Object.freeze([1, 2, 3]);
 const ATTEMPT_RESULTS = Object.freeze(["success", "failure"]);
 
@@ -70,6 +71,7 @@ const ATTEMPT_FIELDS = Object.freeze([
   "result",
   "branch",
   "note",
+  "result_text",
 ]);
 
 const COMMENT_FIELDS = Object.freeze(["author", "ts", "text"]);
@@ -138,6 +140,17 @@ function checkAttempt(attempt, basePath, errors) {
   }
   if (attempt.note !== null && typeof attempt.note !== "string") {
     errors.push({ path: `${basePath}.note`, reason: "note must be a string or null" });
+  }
+  if (
+    attempt.result_text !== undefined &&
+    attempt.result_text !== null &&
+    (typeof attempt.result_text !== "string" ||
+      byteLength(attempt.result_text) > RESULT_TEXT_MAX_BYTES)
+  ) {
+    errors.push({
+      path: `${basePath}.result_text`,
+      reason: `result_text must be null or a string of at most ${RESULT_TEXT_MAX_BYTES} bytes`,
+    });
   }
 }
 

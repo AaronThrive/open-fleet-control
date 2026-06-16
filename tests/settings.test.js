@@ -598,6 +598,8 @@ describe("settings module", () => {
         weekly: { totalUSD: 0, perProvider: {} },
         checkIntervalMs: 900000,
         enforce: { enabled: false },
+        allowOpen: false,
+        closedCeilingUSD: 0,
       });
     });
 
@@ -618,6 +620,8 @@ describe("settings module", () => {
         weekly: { totalUSD: 50, perProvider: {} },
         checkIntervalMs: 60000,
         enforce: { enabled: false },
+        allowOpen: false,
+        closedCeilingUSD: 0,
       });
       // No onBudgetsChange hook → honestly restartRequired.
       assert.ok(restartRequired.some((p) => p.startsWith("budgets.")));

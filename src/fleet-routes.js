@@ -115,6 +115,8 @@ function parseIntParam(query, name, fallback) {
  *   omitted the /api/fleet/settings routes respond 404
  * @param {object} [options.dispatch] - module from createDispatch(); when
  *   omitted the kanban dispatch routes respond 503 (clean "not configured")
+ * @param {object} [options.orchestrate] - module from createOrchestrate(); when
+ *   omitted POST /api/fleet/orchestrate responds 503 (clean "not configured")
  * @param {object} [options.orgChart] - module from createOrgChart(); when
  *   omitted the /api/fleet/org-chart routes respond 404
  * @param {object} [options.bulk] - module from createBulk(); when omitted
@@ -138,6 +140,7 @@ function createFleetRoutes({
   fleet,
   settings = null,
   dispatch = null,
+  orchestrate = null,
   orgChart = null,
   bulk = null,
   rosterFn = null,
@@ -506,6 +509,212 @@ function createFleetRoutes({
       sessionKey: result.sessionKey,
     });
     return true;
+  }
+
+  // -------------------------------------------------------------------
+  // Orchestration (multi-agent fan-in / chain over the dispatch primitive)
+  // -------------------------------------------------------------------
+
+  /**
+   * Orchestration mode gate. Composes the two budget guards (response already
+   * sent on refusal). Refuses when:
+   *   - the fleet daily/weekly window is over-limit (reuses checkDispatchBlock
+   *     via refuseWhenOverBudget — 429, ack-able), OR
+   *   - OPEN mode is requested but allowOpen is off (403 policy refusal), OR
+   *   - CLOSED projected spend already reaches the per-task ceiling (429).
+   * Returns true when blocked.
+   *
+   * @param {object} res
+   * @param {string|null} taskId - anchor card for the alert (null pre-dispatch)
+   * @param {{mode, ceiling?, spentUSD?, projectedUSD?}} args
+   */
+  function refuseOrchestration(res, taskId, { mode, ceiling, spentUSD, projectedUSD }) {
+    // (a) fleet-wide window block first — same hard stop as kanban dispatch.
+    if (refuseWhenOverBudget(res, taskId)) return true;
+
+    // (b) per-orchestration mode/ceiling gate.
+    const block =
+      fleet.budgets && typeof fleet.budgets.checkOrchestrationBlock === "function"
+        ? fleet.budgets.checkOrchestrationBlock({ mode, ceiling, spentUSD, projectedUSD })
+        : null;
+    if (!block) return false;
+
+    // Clean refusal. OPEN-disabled is a 403 (policy), ceiling is a 429 (budget).
+    const status = block.reason === "open-mode-disabled" ? 403 : 429;
+    fleet.fireAlert({
+      type: "budgetBreach",
+      severity: "warn",
+      task: taskId,
+      message: `Orchestration refused (${block.reason}): ${block.message}`,
+    });
+    json(res, status, { error: block.message, ...block });
+    return true;
+  }
+
+  /**
+   * POST /api/fleet/orchestrate { mode:"single|board|chain", ... }
+   *
+   * One rate-limit token + one budget gate (OPEN policy + CLOSED pre-check +
+   * the fleet daily/weekly window block) + one audit entry per call. The budget
+   * gate runs BEFORE any card is created. board/chain START the run and return
+   * 202 {runId, status:"running"} IMMEDIATELY — the council/pipeline runs in the
+   * background (registry-tracked); the Chief polls GET :runId until terminal and
+   * synthesizes from results[]. A {wait:true} / ?wait=true escape hatch (capped
+   * at SYNC_WAIT_CAP_MS) keeps the old synchronous 200 for short runs / tests.
+   *
+   *   POST single: { mode, taskId, agent }              -> 200 dispatchTask wrapper
+   *   POST board:  { mode, title, question, agents[] }   -> 202 {runId} (or 200 on wait)
+   *   POST chain:  { mode, title, steps[] }              -> 202 {runId} (or 200 on wait)
+   *   GET  :runId                                        -> 200 run snapshot | 404
+   *
+   * `budgetMode` ("closed"|"open", default CLOSED) + `ceilingUSD` (optional
+   * CLOSED override) drive the gate; board/chain also re-check the CLOSED
+   * ceiling mid-run via the injected budgetCheck closure.
+   *
+   * board/chain agents are validated against the local roster (same fail-closed
+   * requireRosterAgent guard the dispatch route uses) before any card is created.
+   */
+  async function handleOrchestrate(req, res, method, segments = [], query = null) {
+    if (!orchestrate) {
+      json(res, 503, { error: "Orchestration is not configured on this node" });
+      return true;
+    }
+
+    // GET /api/fleet/orchestrate/:runId → poll a run's status + collected
+    // results. A read, so no guardMutation / rate-limit token (matches how
+    // GET /api/fleet/kanban/dispatch is an open read). A 404 lets the Chief
+    // distinguish "unknown/expired run" from "still running".
+    if (method === "GET" && segments.length === 2) {
+      const runId = segments[1];
+      const snapshot = orchestrate.getRun(runId);
+      if (!snapshot) {
+        json(res, 404, { error: `Unknown runId: ${runId}` });
+        return true;
+      }
+      json(res, 200, { success: true, ...snapshot });
+      return true;
+    }
+
+    if (method !== "POST") return false;
+
+    const user = guardMutation(req, res);
+    if (!user) return true;
+
+    const body = await readJsonBody(req);
+    const mode = typeof body.mode === "string" ? body.mode.trim() : "";
+    // Opt-in synchronous wait (capped server-side): body.wait===true OR
+    // ?wait=true. Backward-compat for short runs / tests; default is async 202.
+    const wantWait =
+      body.wait === true || (query && typeof query.get === "function" && query.get("wait") === "true");
+    const budgetMode = body.budgetMode === "open" ? "open" : "closed"; // default CLOSED
+    const ceiling = body.ceilingUSD;
+
+    // PRE-DISPATCH budget gate — before any card is created. task=null because
+    // there is no single anchor card for board/chain yet.
+    const anchorTask = mode === "single" && typeof body.taskId === "string" ? body.taskId : null;
+    if (refuseOrchestration(res, anchorTask, { mode: budgetMode, ceiling })) return true;
+
+    // Mid-run CLOSED ceiling re-check, handed to runBoard/runChain. spentUSD is
+    // the per-unit-of-work accrual the runner passes; the guard halts the run
+    // when the per-task ceiling is reached. OPEN runs never halt here (the gate
+    // returns null once allowOpen is satisfied above).
+    const budgetCheck =
+      fleet.budgets && typeof fleet.budgets.checkOrchestrationBlock === "function"
+        ? ({ spentUSD }) =>
+            fleet.budgets.checkOrchestrationBlock({ mode: budgetMode, ceiling, spentUSD })
+        : null;
+
+    if (mode === "single") {
+      await requireRosterAgent(body.agent);
+      const result = orchestrate.runSingle(body.taskId, { agent: body.agent, actor: user });
+      recordAudit(user, "task.update", body.taskId, {
+        op: "orchestrate:single",
+        agent: result.agent,
+      });
+      json(res, 200, {
+        success: true,
+        mode,
+        task: result.task,
+        agent: result.agent,
+        sessionKey: result.sessionKey,
+      });
+      return true;
+    }
+
+    if (mode === "board") {
+      if (!Array.isArray(body.agents) || body.agents.length === 0) {
+        throw httpError(400, "board mode requires a non-empty 'agents' array");
+      }
+      for (const agent of body.agents) await requireRosterAgent(agent);
+      // START (sync work only) — returns immediately with a runId. The council
+      // runs in the background; the Chief polls GET :runId until done.
+      const run = orchestrate.runBoard({
+        title: body.title,
+        question: body.question,
+        agents: body.agents,
+        actor: user,
+        timeoutSec: body.timeoutSec,
+        budgetCheck,
+      });
+      recordAudit(user, "task.create", run.runId, {
+        op: "orchestrate:board",
+        agents: body.agents.length,
+        async: !wantWait,
+      });
+      if (!wantWait) {
+        json(res, 202, {
+          success: true,
+          mode,
+          runId: run.runId,
+          agents: run.agents,
+          status: "running",
+          startedAt: run.startedAt,
+        });
+        return true;
+      }
+      // Backward-compat sync path (short runs / tests), server-side capped.
+      const snapshot = await orchestrate.waitForRun(run.runId);
+      json(res, 200, { success: true, mode, ...snapshot });
+      return true;
+    }
+
+    if (mode === "chain") {
+      if (!Array.isArray(body.steps) || body.steps.length === 0) {
+        throw httpError(400, "chain mode requires a non-empty 'steps' array");
+      }
+      for (const step of body.steps) await requireRosterAgent(step && step.agent);
+      // START (sync work only) — returns immediately with a runId. The pipeline
+      // runs in the background; the Chief polls GET :runId until done.
+      const run = orchestrate.runChain({
+        title: body.title,
+        steps: body.steps,
+        actor: user,
+        timeoutSec: body.timeoutSec,
+        budgetCheck,
+      });
+      recordAudit(user, "task.create", run.runId, {
+        op: "orchestrate:chain",
+        steps: body.steps.length,
+        async: !wantWait,
+      });
+      if (!wantWait) {
+        json(res, 202, {
+          success: true,
+          mode,
+          runId: run.runId,
+          agents: run.agents,
+          status: "running",
+          startedAt: run.startedAt,
+        });
+        return true;
+      }
+      // Backward-compat sync path (short runs / tests), server-side capped.
+      const snapshot = await orchestrate.waitForRun(run.runId);
+      json(res, 200, { success: true, mode, ...snapshot });
+      return true;
+    }
+
+    throw httpError(400, "Body 'mode' must be one of: single, board, chain");
   }
 
   async function handleKanban(req, res, method, segments, query) {
@@ -1084,6 +1293,8 @@ function createFleetRoutes({
         return handleChat(req, res, method, segments, query);
       case "kanban":
         return handleKanban(req, res, method, segments, query);
+      case "orchestrate":
+        return handleOrchestrate(req, res, method, segments, query);
       case "org-chart":
         return handleOrgChart(req, res, method, segments);
       case "briefs":

@@ -6,6 +6,8 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
+const { execFile } = require("child_process");
 
 // ============================================================================
 // CLI ARGUMENT PARSING
@@ -61,7 +63,7 @@ if (cliPort) {
 const { getVersion } = require("./utils");
 const { CONFIG, getOpenClawDir } = require("./config");
 const { handleJobsRequest, isJobsRoute, setCronFallback, setAuditRecorder } = require("./jobs");
-const { runOpenClaw, runOpenClawAsync, extractJSON } = require("./openclaw");
+const { runOpenClaw, runOpenClawAsync, extractJSON, getSafeEnv } = require("./openclaw");
 const {
   getSystemVitals,
   forceRefreshVitals,
@@ -91,12 +93,14 @@ const {
 } = require("./tokens");
 const { getLlmUsage, getRoutingStats, startLlmUsageRefresh } = require("./llm-usage");
 const { executeAction } = require("./actions");
+const { guardActionPost, PRIVILEGED_POST_ACTIONS } = require("./action-guard");
 const { createBulk } = require("./bulk");
 const { migrateDataDir } = require("./data");
 const { createStateModule } = require("./state");
 const { createFleetRuntime } = require("./fleet");
 const { createFleetRoutes, isFleetRoute } = require("./fleet-routes");
 const { createDispatch } = require("./dispatch");
+const { createOrchestrate } = require("./orchestrate");
 const { createOrgChart } = require("./org-chart");
 const { createSettings } = require("./settings");
 const { createDocker } = require("./docker");
@@ -104,6 +108,7 @@ const { createUsageSources } = require("./usage-sources");
 const { createUsageProvider } = require("./budgets");
 const { createTopConsumersSource } = require("./digest");
 const { createAgentsRoster } = require("./agents-roster");
+const { createAgentLocator } = require("./agent-locator");
 const { createFlightRecorder, createStoreSessionsSource } = require("./flight-recorder");
 const { createTimelineRoutes, isTimelineRoute } = require("./timeline-routes");
 const { createSessionControl } = require("./session-control");
@@ -229,6 +234,7 @@ function recordAudit(user, action, target, detail) {
   }
 }
 
+
 // Jobs routes (src/jobs.js) audit through the shared fleet trail; the
 // recorder is injected so the jobs module stays decoupled from the runtime.
 setAuditRecorder((entry) => fleet.audit.record(entry));
@@ -248,6 +254,11 @@ const settings = createSettings({
 // (attempt result, auto-move review/failed, optional dispatchComplete alert).
 // Board mutations flow through fleet.kanban, whose onChange already fans out
 // the fleet.kanban SSE event; dispatch lifecycle events are broadcast here.
+// Lazy agent→node resolver: agentsRoster is constructed further down, so the
+// closure defers to a module-level binding only invoked at dispatch time (long
+// after evaluation). When the resolver is absent (it never is here), dispatch
+// falls back to its legacy local-only behaviour.
+let agentLocator = null;
 const dispatch = createDispatch({
   kanban: fleet.kanban,
   briefsDir: CONFIG.fleet.briefsDir,
@@ -258,6 +269,38 @@ const dispatch = createDispatch({
   onEvent: (event) =>
     broadcastSSE("fleet.kanban", { type: event.type, taskId: event.taskId || null }),
   fireAlert: (event) => fleet.fireAlert(event),
+  // Remote dispatch (Phase 2): route an agent to the node that hosts it.
+  resolveAgentNode: (agentRef) => agentLocator.resolve(agentRef),
+  fetchFn: (...a) => globalThis.fetch(...a),
+  meshIdentity: CONFIG.fleet.dispatch.identity || os.hostname(),
+});
+
+// Multi-agent orchestration (src/orchestrate.js) — fan-in councils + chains
+// composed over the dispatch primitive. Reuses dispatch's attempt model,
+// concurrency cap, and completion promises; LOCAL-only for now (dispatch
+// refuses remote nodes). Lifecycle events broadcast as fleet.kanban so the
+// board view refetches like any other card change.
+const orchestrate = createOrchestrate({
+  kanban: fleet.kanban,
+  dispatch,
+  config: CONFIG.fleet.orchestrate || {},
+  onEvent: (event) => {
+    // Card-lifecycle events keep going to fleet.kanban so the board refetches.
+    broadcastSSE("fleet.kanban", { type: event.type, taskId: event.taskId || null });
+    // Run-completion → dedicated channel so the UI can flip a run badge live
+    // without re-reading the whole board. SSE is a live-update nicety; polling
+    // GET :runId remains the correctness path.
+    if (event.type === "orchestration.completed") {
+      broadcastSSE("fleet.orchestration", {
+        type: event.type,
+        runId: event.runId,
+        mode: event.mode,
+        status: event.status,
+        collected: event.collected,
+        missing: event.missing,
+      });
+    }
+  },
 });
 
 // Org chart — owner-defined agent hierarchy (purely organizational), stored
@@ -276,6 +319,19 @@ const actionDeps = {
   extractJSON,
   PORT,
   getRawSessions: () => sessions.getRawSessionsCached(),
+  // Long-timeout agent runner for the agent-run verb (an agent turn needs
+  // minutes, not the 20s runOpenClawAsync budget). Mirrors dispatch's
+  // defaultExecFn: openclaw via execFile (no shell — injection-safe), returns
+  // stdout or null on failure/timeout so the verb maps cleanly to an error.
+  runAgent: (args, { timeoutMs }) =>
+    new Promise((resolve) =>
+      execFile(
+        "openclaw",
+        args,
+        { encoding: "utf8", timeout: timeoutMs, env: getSafeEnv(), maxBuffer: 16 * 1024 * 1024 },
+        (err, stdout) => resolve(err && !stdout ? null : stdout),
+      ),
+    ),
 };
 
 // Fleet bulk operations (src/bulk.js): POST /api/fleet/bulk fans quick
@@ -293,6 +349,7 @@ const fleetRoutes = createFleetRoutes({
   fleet,
   settings,
   dispatch,
+  orchestrate,
   orgChart,
   bulk,
   // Lazy closure: agentsRoster is constructed further down; routes only call
@@ -376,6 +433,15 @@ const agentsRoster = createAgentsRoster({
   openclawConfigPath: path.join(getOpenClawDir(), "openclaw.json"),
   agentsDir: path.join(getOpenClawDir(), "agents"),
   mesh: fleet.mesh,
+});
+
+// Agent→node resolver for remote dispatch (Phase 2). Built once agentsRoster +
+// fleet.mesh exist; the dispatch module holds a lazy closure over this binding
+// (see createDispatch above), so it is only ever invoked at dispatch time.
+agentLocator = createAgentLocator({
+  rosterFn: () => agentsRoster.getRoster(),
+  meshFn: () => fleet.mesh.getState(),
+  selfNode: CONFIG.fleet.dispatch.node || os.hostname(),
 });
 
 // Agent flight recorder — read-only per-agent activity timeline aggregated
@@ -613,6 +679,97 @@ const server = http.createServer((req, res) => {
     const data = state.getSubagentStatus();
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ subagents: data }, null, 2));
+  } else if (pathname === "/api/action" && req.method === "POST") {
+    // Privileged verbs (agent-run) carry a structured body too big for a query
+    // string, and run an arbitrary LOCAL agent — so they come in as POST and
+    // are gated by the fail-closed node→node guard (localhost / mesh peer /
+    // dispatch token). The GET branch (param-less quick actions) is unchanged.
+    let rawBody = "";
+    let bodyTooLarge = false;
+    req.on("data", (chunk) => {
+      rawBody += chunk;
+      if (rawBody.length > 64 * 1024) {
+        bodyTooLarge = true;
+        req.destroy();
+      }
+    });
+    req.on("end", () => {
+      if (bodyTooLarge) {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: false, error: "Request body too large" }));
+        return;
+      }
+      let body;
+      try {
+        body = rawBody ? JSON.parse(rawBody) : {};
+      } catch (e) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: false, error: "Invalid JSON body" }));
+        return;
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: false, error: "Request body must be a JSON object" }));
+        return;
+      }
+      const action = typeof body.action === "string" ? body.action : "";
+      // Only known privileged verbs are accepted over POST; everything else
+      // 400s (GET remains the path for the param-less quick actions).
+      if (!PRIVILEGED_POST_ACTIONS.has(action)) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: false, action, error: `Unknown POST action: ${action}` }));
+        return;
+      }
+
+      // Resolve the guard inputs (mesh peer logins are async), then authorise.
+      const token = CONFIG.fleet.dispatch.token || null;
+      Promise.resolve(fleet.mesh.getState())
+        .then((state) => {
+          const nodes = Array.isArray(state && state.nodes) ? state.nodes : [];
+          return new Set(
+            nodes
+              .filter((n) => n && typeof n.hostname === "string")
+              .map((n) => n.hostname.trim().toLowerCase()),
+          );
+        })
+        .catch(() => new Set())
+        .then((meshLogins) => {
+          const verdict = guardActionPost(req, { token, meshLogins });
+          if (!verdict.allowed) {
+            recordAudit(getRequestUser(req), "action.execute", action, {
+              success: false,
+              kind: "remote-dispatch",
+              denied: verdict.reason,
+            });
+            res.writeHead(403, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ success: false, action, error: "Forbidden" }));
+            return;
+          }
+          const opts = {
+            agent: body.agent,
+            message: body.message,
+            sessionKey: body.sessionKey,
+            timeoutSec: body.timeoutSec,
+            staleMinutes: body.staleMinutes,
+          };
+          executeAction(action, actionDeps, opts)
+            .then((result) => {
+              recordAudit(getRequestUser(req), "action.execute", action, {
+                success: result.success,
+                kind: "remote-dispatch",
+                agent: typeof body.agent === "string" ? body.agent : null,
+              });
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify(result, null, 2));
+            })
+            .catch((e) => {
+              console.error("[Action] POST execute failed:", e.message);
+              res.writeHead(500, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ success: false, action, error: "Internal error" }));
+            });
+        });
+    });
+    return;
   } else if (pathname === "/api/action") {
     const action = query.get("action");
     if (!action) {

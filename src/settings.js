@@ -192,6 +192,10 @@ const EDITABLE_DEFAULTS = Object.freeze({
     weekly: { totalUSD: 0, perProvider: {} },
     checkIntervalMs: 900000,
     enforce: { enabled: false },
+    // Orchestration mode gate (src/orchestrate.js). OPEN is OFF by default;
+    // closedCeilingUSD 0 = no per-orchestration ceiling.
+    allowOpen: false,
+    closedCeilingUSD: 0,
   },
   digest: { enabled: false, schedule: "daily", hourUtc: 8, sinks: ["*"] },
 });
@@ -431,12 +435,18 @@ function validateBudgetPeriodPatch(period, label) {
 function validateBudgetsPatch(budgets) {
   requireKnownKeys(
     budgets,
-    ["enabled", "daily", "weekly", "checkIntervalMs", "enforce"],
+    ["enabled", "daily", "weekly", "checkIntervalMs", "enforce", "allowOpen", "closedCeilingUSD"],
     "budgets",
   );
   const out = {};
   if (budgets.enabled !== undefined) {
     out.enabled = requireBool(budgets.enabled, "budgets.enabled");
+  }
+  if (budgets.allowOpen !== undefined) {
+    out.allowOpen = requireBool(budgets.allowOpen, "budgets.allowOpen");
+  }
+  if (budgets.closedCeilingUSD !== undefined) {
+    out.closedCeilingUSD = validateBudgetUSD(budgets.closedCeilingUSD, "budgets.closedCeilingUSD");
   }
   if (budgets.enforce !== undefined) {
     requireKnownKeys(budgets.enforce, ["enabled"], "budgets.enforce");
@@ -465,7 +475,7 @@ function validateBudgetsPatch(budgets) {
   }
   if (Object.keys(out).length === 0) {
     throw badRequest(
-      "budgets must set at least one of enabled/daily/weekly/checkIntervalMs/enforce",
+      "budgets must set at least one of enabled/daily/weekly/checkIntervalMs/enforce/allowOpen/closedCeilingUSD",
     );
   }
   return out;
@@ -885,6 +895,13 @@ function buildEffectiveBudgets(raw, defaults) {
           ? src.enforce.enabled
           : defaults.enforce.enabled,
     },
+    allowOpen: typeof src.allowOpen === "boolean" ? src.allowOpen : defaults.allowOpen,
+    closedCeilingUSD:
+      typeof src.closedCeilingUSD === "number" &&
+      Number.isFinite(src.closedCeilingUSD) &&
+      src.closedCeilingUSD >= 0
+        ? src.closedCeilingUSD
+        : defaults.closedCeilingUSD,
   };
 }
 

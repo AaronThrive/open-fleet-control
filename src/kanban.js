@@ -182,7 +182,7 @@ function createKanban(options = {}) {
   /**
    * Append an attempt record to a task.
    * @param {string} id - task id
-   * @param {object} attempt - {agent, started_at?, ended_at?, result?, branch?, note?}
+   * @param {object} attempt - {agent, started_at?, ended_at?, result?, branch?, note?, result_text?}
    * @returns {object} the updated task
    */
   function addAttempt(id, attempt = {}) {
@@ -195,6 +195,7 @@ function createKanban(options = {}) {
       result: attempt.result ?? null,
       branch: attempt.branch ?? null,
       note: attempt.note ?? null,
+      result_text: attempt.result_text ?? null,
     };
     for (const key of Object.keys(attempt)) {
       if (!(key in full)) throw new Error(`addAttempt: unknown attempt field '${key}'`);
@@ -215,7 +216,7 @@ function createKanban(options = {}) {
    * the dispatch module to close its attempt when the agent run settles.
    * @param {string} id - task id
    * @param {number} index - attempt index within task.attempts
-   * @param {object} patch - subset of {ended_at, result, branch, note}
+   * @param {object} patch - subset of {ended_at, result, branch, note, result_text}
    * @returns {object} the updated task
    */
   function updateAttempt(id, index, patch = {}) {
@@ -224,7 +225,7 @@ function createKanban(options = {}) {
     if (!Number.isInteger(index) || index < 0 || index >= current.attempts.length) {
       throw new Error(`updateAttempt: no attempt at index ${index}`);
     }
-    const allowed = ["ended_at", "result", "branch", "note"];
+    const allowed = ["ended_at", "result", "branch", "note", "result_text"];
     const clean = {};
     for (const [key, value] of Object.entries(patch)) {
       if (!allowed.includes(key)) throw new Error(`updateAttempt: '${key}' cannot be patched`);
