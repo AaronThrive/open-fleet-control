@@ -344,6 +344,62 @@ describe("dispatch remote path", () => {
     assert.match(after.attempts[0].note, /session sess-local/);
   });
 
+  it("sends Authorization: Bearer <token> when dispatchToken is configured", async () => {
+    const fetch = makeFetch();
+    const dispatch = createDispatch({
+      kanban,
+      resolveAgentNode: async () => ({
+        kind: "remote",
+        node: "node-b",
+        baseUrl: "https://node-b.ts.net",
+        online: true,
+      }),
+      fetchFn: fetch.fn,
+      meshIdentity: "node-a",
+      dispatchToken: "s3cret-shared-token",
+      config: { baseUrl: "http://127.0.0.1:4444", node: "node-a" },
+    });
+    const task = kanban.createTask({ title: "Auth" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "scout" });
+    await result.completion;
+
+    assert.strictEqual(fetch.calls.length, 1);
+    assert.strictEqual(
+      fetch.calls[0].opts.headers["Authorization"],
+      "Bearer s3cret-shared-token",
+    );
+    // The other identity headers remain unchanged.
+    assert.strictEqual(fetch.calls[0].opts.headers["Tailscale-User-Login"], "node-a");
+    assert.strictEqual(fetch.calls[0].opts.headers["X-OFC-Dispatch"], "1");
+  });
+
+  it("omits the Authorization header when no dispatchToken is set (back-compat)", async () => {
+    const fetch = makeFetch();
+    // remoteDispatch() does NOT pass dispatchToken → the default (null) applies.
+    const dispatch = remoteDispatch({
+      kanban,
+      resolveAgentNode: async () => ({
+        kind: "remote",
+        node: "node-b",
+        baseUrl: "https://node-b.ts.net",
+        online: true,
+      }),
+      fetchFn: fetch.fn,
+    });
+    const task = kanban.createTask({ title: "NoAuth" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "scout" });
+    await result.completion;
+
+    assert.strictEqual(fetch.calls.length, 1);
+    assert.ok(
+      !("Authorization" in fetch.calls[0].opts.headers),
+      "no Authorization header when dispatchToken is unset",
+    );
+    // Still byte-identical on the other headers.
+    assert.strictEqual(fetch.calls[0].opts.headers["Tailscale-User-Login"], "node-a");
+    assert.strictEqual(fetch.calls[0].opts.headers["X-OFC-Dispatch"], "1");
+  });
+
   it("concurrency cap (429) and open-attempt lock (409) still apply on the remote path", async () => {
     const fetch = makeFetch();
     let release;

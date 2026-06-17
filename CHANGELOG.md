@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.4.3 — 2026-06-17
+
+- **feat(security): node→node `agent-run` authenticates via a shared dispatch token.** `runRemote`
+  (`src/dispatch.js`) now sends `Authorization: Bearer <fleet.dispatch.token>` when configured, so
+  cross-node dispatch and `verifyServeOrigin` **coexist** — the token branch of `guardActionPost`
+  is identity-agnostic and bypasses the user-vs-hostname mismatch that otherwise 403s a
+  Serve-proxied node→node call (Serve identifies by tailnet user; the mesh-peer branch matches
+  hostnames). New `fleet.dispatch.token` / `fleet.dispatch.identity` config keys (env
+  `FLEET_DISPATCH_TOKEN` / `FLEET_DISPATCH_IDENTITY`). **Default empty → token auth off, byte-identical
+  to prior behavior; single-node installs need no token.**
+- **docs:** `docs/security-hardening.md` articulates the production model (three orthogonal switches:
+  loopback+Serve transport, `verifyServeOrigin`+allowlist for humans, dispatch token for node→node);
+  `action-guard.js` header updated to mark the token as the primary node→node path.
+- Companion installer work (separate repo, `openclaw-stack`): zero-touch provisioning of the token +
+  hardening env + `tailscale whois` socket/CLI + an allowlist fail-safe, so a new node comes up
+  auto-hardened. See `openclaw-stack/docs/POST-INSTALL-SETUP.md`.
+
 ## 2.4.2 — 2026-06-17
 
 - **fix(auth): make `verifyServeOrigin` safe to enable without denying local agents.** The Serve-origin

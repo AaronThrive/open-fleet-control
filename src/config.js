@@ -253,7 +253,24 @@ const FLEET_DEFAULTS = {
   // Kanban → agent dispatch (src/dispatch.js). baseUrl empty = this server's
   // own http://127.0.0.1:<port>; node empty = os.hostname() (both resolved at
   // wiring time in src/index.js / the dispatch module itself).
-  dispatch: { enabled: true, baseUrl: "", maxConcurrent: 3, timeoutSec: 600, node: "" },
+  //
+  // token: shared Bearer secret for node→node agent-run auth. When set, the
+  // sender (runRemote) attaches Authorization: Bearer <token> and the receiver's
+  // guardActionPost token branch accepts it — the only branch that works when
+  // verifyServeOrigin is ON (the mesh-peer branch matches HOSTNAMES, but a
+  // verified Serve login is a tailnet USER). Empty = header omitted (today's
+  // behavior, byte-identical). Supports op:// refs (resolved at config load).
+  // identity: this node's Tailscale-User-Login value on node→node calls;
+  // empty = callers fall back to os.hostname().
+  dispatch: {
+    enabled: true,
+    baseUrl: "",
+    maxConcurrent: 3,
+    timeoutSec: 600,
+    node: "",
+    token: "",
+    identity: "",
+  },
   rateLimit: { windowMs: 60000, max: 120 },
   // Cost budgets (USD) over LLM API spend — see src/budgets.js. 0 = no limit.
   // enforce.enabled gates dispatch blocking when a budget crosses 100%.
@@ -333,12 +350,23 @@ function buildFleetConfig(fileFleet) {
     }
   }
 
+  // Dispatch token/identity honor dedicated env vars for parity with the other
+  // knobs (the merged file/FLEET_CONFIG_JSON value is the fallback). token is a
+  // secret, not a path — left untouched here; any op:// ref is resolved by the
+  // deep secret pass in loadConfig().
+  const resolvedDispatch = {
+    ...fleet.dispatch,
+    token: process.env.FLEET_DISPATCH_TOKEN || fleet.dispatch?.token || "",
+    identity: process.env.FLEET_DISPATCH_IDENTITY || fleet.dispatch?.identity || "",
+  };
+
   return {
     ...fleet,
     ...resolvedDirs,
     cortex: resolvedCortex,
     usage: resolvedUsage,
     agents: resolvedAgents,
+    dispatch: resolvedDispatch,
   };
 }
 
