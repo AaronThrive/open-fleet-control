@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.5.0 — 2026-06-17
+
+- **Removed the org-chart feature.** The editable Org Chart tab (drag-and-drop agent tree,
+  unassigned tray, titles, keyboard move mode; shipped in v2.2.0) has been removed entirely —
+  its view, sidebar entry, `GET`/`PUT /api/fleet/org-chart` routes, the `src/org-chart.js`
+  module, the `fleet.org` SSE channel, and persisted `org-chart.json` store are all gone. The
+  chart was purely organizational and drove nothing, so nothing else depended on it.
+
 ## 2.4.4 — 2026-06-17
 
 - **feat(mesh): zero-touch mesh auto-registration via `fleet.mesh.seed[]`.** A node ships the fleet's

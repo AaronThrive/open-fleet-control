@@ -28,7 +28,10 @@ const fleetConfig = {
   logsDir: path.join(tmpDir, "logs"),
   briefsDir: path.join(tmpDir, "briefs"),
   workspaceDir: path.join(tmpDir, "workspace"),
-  mesh: { intervalMs: 60000 },
+  // seed:[] is explicit for the same reason the alert sinks below are: FLEET_CONFIG_JSON
+  // deep-merges over config/dashboard.local.json, so omitting it would inherit the
+  // operator's live fleet.mesh.seed (extra auto-registered nodes) and break the count assert.
+  mesh: { intervalMs: 60000, seed: [] },
   // Never shell out to external CLIs (openclaw memory-pro / gbrain) in tests
   cortex: { enabled: false },
   // Engine ON so the alerts/history endpoints are exercisable, but every
