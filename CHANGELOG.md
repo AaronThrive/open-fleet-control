@@ -1,5 +1,38 @@
 # Changelog
 
+## 2.4.0 — 2026-06-17
+
+Cross-node remote dispatch made functional, plus a config-gated fix for a verified
+header-spoofing hole. The two security-tightening behaviors DEFAULT TO CURRENT
+(pre-change) behavior — deploying this build changes nothing live until an operator
+flips the cutover flags. The routing fixes and the agent-run rate-limit ship active
+(they do not change current behavior).
+
+- **Routing (active): node-aware, fleet-aware dispatch validation.** `requireRosterAgent`
+  (src/fleet-routes.js, mirrored in src/bulk.js) now strips an `@node` qualifier, validates
+  the bare id, and — when a node is given — requires a roster entry matching both id and node.
+  Validation runs against the **fleet** roster (`agentsRoster.getRoster()`, rewired in
+  src/index.js) instead of the local-only roster, so `main@hermes-agent-1` and remote-only
+  agents pass and reach the node-aware resolver. Still fails closed (503) on a roster read error.
+- **Routing (active): resolver selects the OFC-dashboard node, not a gateway proxy.**
+  src/agent-locator.js now deterministically prefers the mesh record whose `healthPath` is the
+  OFC dashboard health path (`/api/health`) over a gateway `/health` when a hostname has
+  multiple mesh records, so agent-run reaches OFC rather than a proxy.
+- **Security (gated, DEFAULT OFF): Tailscale Serve-origin auth verification.** New
+  `auth.tailscale.verifyServeOrigin` (default `false` = exact prior behavior). When `true`,
+  `tailscale-user-login` is only honored if the request arrived via a loopback Serve proxy
+  carrying `x-forwarded-for` AND a `tailscale whois` lookup of that IP resolves to the claimed
+  login (injected `whoisFn`, fail-closed on any error/timeout, briefly cached). The same
+  verified-identity requirement applies to the action-guard mesh-peer branch when the flag is on.
+- **Security (gated, DEFAULT all-interfaces): loopback bind option.** New
+  `server.bindHost` (default unset → bind ALL interfaces, preserving today's behavior).
+  Set to `127.0.0.1`/`localhost` to bind loopback only for the Serve cutover. `0.0.0.0`/`all`/`*`
+  all mean bind-all. (The legacy `server.host` default of `localhost` was never honored at
+  listen() time and is left untouched to avoid flipping live behavior.)
+- **Hardening (active): agent-run rate limit.** POST `/api/action` agent-run is now routed
+  through the shared `fleet.rateLimiter`, keyed by caller login (localhost dispatch exempt),
+  alongside the existing body-size cap and node→node guard.
+
 ## 2.3.1 — 2026-06-16
 
 - fix(dispatch): append `--json` to the kickoff Slack-send command (`composeKickoffMessage`) so

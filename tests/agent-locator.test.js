@@ -104,4 +104,30 @@ describe("agent-locator", () => {
     assert.throws(() => createAgentLocator({ meshFn: async () => ({}), selfNode: SELF }));
     assert.throws(() => createAgentLocator({ rosterFn: async () => ({}), selfNode: SELF }));
   });
+
+  it("prefers the OFC-dashboard mesh record over a gateway proxy for a duplicate hostname", async () => {
+    // node-b registers TWICE: a gateway proxy advertising /health, and the real
+    // OFC dashboard advertising /api/health. The resolver must pick the dashboard
+    // record so agent-run reaches OFC, not the proxy.
+    const gateway = {
+      hostname: "node-b",
+      url: "https://node-b.tail1234.ts.net:443/health",
+      healthPath: "/health",
+      health: { status: "online" },
+    };
+    const dashboard = {
+      hostname: "node-b",
+      url: "https://node-b.tail1234.ts.net:8443/api/health",
+      healthPath: "/api/health",
+      health: { status: "online" },
+    };
+    // Proxy listed FIRST so a naive find() would wrongly pick it.
+    const locator = makeLocator({
+      agents: [{ id: "scout", node: "node-b" }],
+      nodes: [gateway, dashboard],
+    });
+    const route = await locator.resolve("scout");
+    assert.strictEqual(route.kind, "remote");
+    assert.strictEqual(route.baseUrl, "https://node-b.tail1234.ts.net:8443");
+  });
 });

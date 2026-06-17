@@ -85,4 +85,42 @@ describe("action-guard", () => {
     });
     assert.strictEqual(v.allowed, false);
   });
+
+  describe("verifyServeOrigin (mesh-peer branch)", () => {
+    it("trusts the VERIFIED login, not the raw header, when verifying", () => {
+      // Raw header claims node-b (a peer), but the verified identity is node-b too.
+      const v = guardActionPost(
+        req({ headers: { "x-ofc-dispatch": "1", "tailscale-user-login": "node-b" } }),
+        { meshLogins: new Set(["node-b"]), verifyServeOrigin: true, verifiedLogin: "node-b" },
+      );
+      assert.strictEqual(v.allowed, true);
+      assert.strictEqual(v.reason, "mesh-peer");
+    });
+
+    it("DENIES a spoofed peer header when whois could not verify (verifiedLogin null)", () => {
+      // Header claims node-b, but verification yielded nothing — must be denied.
+      const v = guardActionPost(
+        req({ headers: { "x-ofc-dispatch": "1", "tailscale-user-login": "node-b" } }),
+        { meshLogins: new Set(["node-b"]), verifyServeOrigin: true, verifiedLogin: null },
+      );
+      assert.strictEqual(v.allowed, false);
+    });
+
+    it("DENIES when the verified login is not a registered peer", () => {
+      const v = guardActionPost(
+        req({ headers: { "x-ofc-dispatch": "1", "tailscale-user-login": "node-b" } }),
+        { meshLogins: new Set(["node-b"]), verifyServeOrigin: true, verifiedLogin: "stranger" },
+      );
+      assert.strictEqual(v.allowed, false);
+    });
+
+    it("token branch still works unchanged while verifying", () => {
+      const v = guardActionPost(req({ headers: { authorization: "Bearer s3cret" } }), {
+        token: "s3cret",
+        verifyServeOrigin: true,
+      });
+      assert.strictEqual(v.allowed, true);
+      assert.strictEqual(v.reason, "token");
+    });
+  });
 });

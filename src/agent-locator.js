@@ -28,6 +28,40 @@ function nodeBaseUrl(node) {
 }
 
 /**
+ * The OFC dashboard's own health endpoint (src/index.js fast-path
+ * `/api/health`). A gateway proxy in the same mesh typically registers the
+ * generic `/health` instead — POSTing agent-run there hits the proxy, not OFC.
+ */
+const OFC_DASHBOARD_HEALTH_PATH = "/api/health";
+
+/**
+ * Pick the mesh record for a hostname, preferring the OFC dashboard node when a
+ * hostname has multiple records. A hostname can appear twice — e.g. a gateway
+ * proxy advertising `/health` AND the real OFC dashboard advertising
+ * `/api/health`; the first match is non-deterministic and may be the proxy,
+ * which does not serve agent-run. Selection is deterministic:
+ *   1. prefer the record whose healthPath is the OFC dashboard health path
+ *      (`/api/health`);
+ *   2. else prefer the record whose composed base URL exposes the OFC API
+ *      (path ends with `/api`, i.e. the dashboard mounted under a subpath);
+ *   3. else fall back to the first matching record (legacy behaviour).
+ *
+ * @param {Array} meshNodes - mesh.getState().nodes
+ * @param {string} hostname - target node hostname
+ * @returns {object|null} the chosen mesh node, or null when none match
+ */
+function pickDashboardNode(meshNodes, hostname) {
+  const matches = meshNodes.filter((n) => n && n.hostname === hostname);
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0];
+  return (
+    matches.find((n) => n.healthPath === OFC_DASHBOARD_HEALTH_PATH) ||
+    matches.find((n) => nodeBaseUrl(n).endsWith("/api")) ||
+    matches[0]
+  );
+}
+
+/**
  * Create the agent locator.
  *
  * @param {object} options
@@ -69,7 +103,7 @@ function createAgentLocator({ rosterFn, meshFn, selfNode }) {
 
     const mesh = await meshFn();
     const meshNodes = Array.isArray(mesh && mesh.nodes) ? mesh.nodes : [];
-    const node = meshNodes.find((n) => n && n.hostname === chosen.node) || null;
+    const node = pickDashboardNode(meshNodes, chosen.node);
     if (!node) return { kind: "unreachable", agentId, node: chosen.node };
 
     return {

@@ -113,6 +113,8 @@ const { createFlightRecorder, createStoreSessionsSource } = require("./flight-re
 const { createTimelineRoutes, isTimelineRoute } = require("./timeline-routes");
 const { createSessionControl } = require("./session-control");
 const { createRateLimiter } = require("./rate-limit");
+const { resolveBindHost } = require("./bind-host");
+const { createTailscaleWhois, verifyServeLogin } = require("./auth");
 
 // ============================================================================
 // CONFIGURATION
@@ -127,6 +129,15 @@ const AUTH_CONFIG = {
   allowedUsers: CONFIG.auth.allowedUsers,
   allowedIPs: CONFIG.auth.allowedIPs,
   publicPaths: CONFIG.auth.publicPaths,
+  // Serve-origin verification (default OFF). When enabled, checkAuth honors the
+  // tailscale-user-login header only after whois confirms the Serve-injected
+  // x-forwarded-for IP resolves to that login. The real whois impl is only
+  // exercised when the flag is on; building it unconditionally is cheap (no I/O
+  // until called).
+  tailscale: {
+    verifyServeOrigin: CONFIG.auth.tailscale.verifyServeOrigin,
+    whoisFn: createTailscaleWhois({ socket: CONFIG.auth.tailscale.tailscaledSocket }),
+  },
 };
 
 // Profile-aware data directory
@@ -341,7 +352,10 @@ const bulk = createBulk({
   mesh: fleet.mesh,
   chat: fleet.chat,
   dispatch,
-  rosterFn: () => agentsRoster.getLocalRoster(),
+  // Validate dispatch targets against the FLEET roster (local + mesh + federation)
+  // so remote-only and "id@node"-qualified agents pass validation and reach the
+  // node-aware resolver. Lazy closure: agentsRoster is constructed further down.
+  rosterFn: () => agentsRoster.getRoster(),
   runAction: (name, opts) => executeAction(name, actionDeps, opts),
 });
 
@@ -352,9 +366,12 @@ const fleetRoutes = createFleetRoutes({
   orchestrate,
   orgChart,
   bulk,
-  // Lazy closure: agentsRoster is constructed further down; routes only call
-  // this at request time, long after module evaluation completed.
-  rosterFn: () => agentsRoster.getLocalRoster(),
+  // Validate dispatch targets against the FLEET roster (local + mesh + federation)
+  // so "id@node"-qualified and remote-only agents pass and reach the node-aware
+  // resolver (src/agent-locator.js). Lazy closure: agentsRoster is constructed
+  // further down; routes only call this at request time, long after module
+  // evaluation completed.
+  rosterFn: () => agentsRoster.getRoster(),
 });
 
 // Cron write-actions — enable/disable/run-now for OPENCLAW-source jobs via
@@ -569,23 +586,22 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Auth check (unless public path)
+  // Auth check (unless public path). checkAuth normally returns a plain result
+  // synchronously; with auth.tailscale.verifyServeOrigin enabled it returns a
+  // Promise (whois lookup). applyAuthResult sends the 403 on denial and returns
+  // true; on success it sets req.authUser and returns false so routing proceeds.
   const isPublicPath = AUTH_CONFIG.publicPaths.some(
     (p) => pathname === p || pathname.startsWith(p + "/"),
   );
 
-  if (!isPublicPath && AUTH_CONFIG.mode !== "none") {
-    const authResult = checkAuth(req, AUTH_CONFIG);
-
+  function applyAuthResult(authResult) {
     if (!authResult.authorized) {
       console.log(`[AUTH] Denied: ${authResult.reason} (path: ${pathname})`);
       res.writeHead(403, { "Content-Type": "text/html" });
       res.end(getUnauthorizedPage(authResult.reason, authResult.user, AUTH_CONFIG));
-      return;
+      return true;
     }
-
     req.authUser = authResult.user;
-
     if (authResult.user?.login || authResult.user?.email) {
       console.log(
         `[AUTH] Allowed: ${authResult.user.login || authResult.user.email} (path: ${pathname})`,
@@ -593,8 +609,27 @@ const server = http.createServer((req, res) => {
     } else {
       console.log(`[AUTH] Allowed: ${req.socket?.remoteAddress} (path: ${pathname})`);
     }
+    return false;
   }
 
+  if (!isPublicPath && AUTH_CONFIG.mode !== "none") {
+    const authResult = checkAuth(req, AUTH_CONFIG);
+    if (authResult && typeof authResult.then === "function") {
+      authResult.then((resolved) => {
+        if (!applyAuthResult(resolved)) routeRequest(req, res, pathname, query);
+      });
+      return;
+    }
+    if (applyAuthResult(authResult)) return;
+  }
+
+  routeRequest(req, res, pathname, query);
+});
+
+// ============================================================================
+// REQUEST ROUTING (post-auth)
+// ============================================================================
+function routeRequest(req, res, pathname, query) {
   // ---- API Routes ----
 
   if (pathname === "/api/status") {
@@ -722,7 +757,10 @@ const server = http.createServer((req, res) => {
       }
 
       // Resolve the guard inputs (mesh peer logins are async), then authorise.
+      // When Serve-origin verification is on, also resolve the whois-verified
+      // identity so the mesh-peer branch trusts that — not the raw header.
       const token = CONFIG.fleet.dispatch.token || null;
+      const verifyServeOrigin = AUTH_CONFIG.tailscale.verifyServeOrigin === true;
       Promise.resolve(fleet.mesh.getState())
         .then((state) => {
           const nodes = Array.isArray(state && state.nodes) ? state.nodes : [];
@@ -733,8 +771,21 @@ const server = http.createServer((req, res) => {
           );
         })
         .catch(() => new Set())
-        .then((meshLogins) => {
-          const verdict = guardActionPost(req, { token, meshLogins });
+        .then(async (meshLogins) => {
+          let verifiedLogin = null;
+          if (verifyServeOrigin) {
+            const claimed = getRequestUser(req);
+            verifiedLogin =
+              claimed !== "anonymous"
+                ? await verifyServeLogin(req, claimed, AUTH_CONFIG.tailscale.whoisFn)
+                : null;
+          }
+          const verdict = guardActionPost(req, {
+            token,
+            meshLogins,
+            verifyServeOrigin,
+            verifiedLogin,
+          });
           if (!verdict.allowed) {
             recordAudit(getRequestUser(req), "action.execute", action, {
               success: false,
@@ -744,6 +795,30 @@ const server = http.createServer((req, res) => {
             res.writeHead(403, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ success: false, action, error: "Forbidden" }));
             return;
+          }
+          // Rate-limit agent-run through the shared fleet limiter, keyed by the
+          // caller login (same limiter the mutating fleet routes use). Localhost
+          // is exempt — internal/loopback dispatch must not be throttled.
+          if (verdict.reason !== "localhost" && fleet.rateLimiter) {
+            const rlKey = `agent-run|${getRequestUser(req)}`;
+            const rl = fleet.rateLimiter.check(rlKey);
+            if (!rl.allowed) {
+              recordAudit(getRequestUser(req), "action.execute", action, {
+                success: false,
+                kind: "remote-dispatch",
+                denied: "rate-limited",
+              });
+              res.writeHead(429, { "Content-Type": "application/json" });
+              res.end(
+                JSON.stringify({
+                  success: false,
+                  action,
+                  error: "Rate limit exceeded",
+                  retryAfterMs: rl.retryAfterMs,
+                }),
+              );
+              return;
+            }
           }
           const opts = {
             agent: body.agent,
@@ -1203,14 +1278,20 @@ const server = http.createServer((req, res) => {
   } else {
     serveStatic(req, res);
   }
-});
+}
 
 // ============================================================================
 // START SERVER
 // ============================================================================
-server.listen(PORT, () => {
+// Resolve the bind interface. Default (unset/"0.0.0.0"/"all") → null = bind ALL
+// interfaces, preserving today's live behavior. An operator sets
+// CONFIG.server.bindHost to "127.0.0.1" (the Serve cutover) to bind loopback.
+const BIND_HOST = resolveBindHost(CONFIG.server.bindHost);
+const listenArgs = BIND_HOST ? [PORT, BIND_HOST] : [PORT];
+server.listen(...listenArgs, () => {
   const profile = process.env.OPENCLAW_PROFILE;
-  console.log(`\u{1F99E} OpenFleetControl running at http://localhost:${PORT}`);
+  const boundTo = BIND_HOST ? `${BIND_HOST}:${PORT}` : `:${PORT} (all interfaces)`;
+  console.log(`\u{1F99E} OpenFleetControl running at http://localhost:${PORT} (bound ${boundTo})`);
   if (profile) {
     console.log(`   Profile: ${profile} (~/.openclaw-${profile})`);
   }

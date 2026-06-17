@@ -423,15 +423,21 @@ function createFleetRoutes({
   // -------------------------------------------------------------------
 
   /**
-   * Validate the dispatch target agent against the local roster (when a
-   * rosterFn is wired). Throws 400 on unknown agents; tolerates a roster
-   * read failure by failing CLOSED (we never start work for a typo).
+   * Validate the dispatch target agent against the FLEET roster (when a
+   * rosterFn is wired). The reference may carry an "@node" qualifier
+   * (e.g. "main@hermes-agent-1"); we strip it, validate the bare id, and —
+   * when a node was given — require a roster entry matching BOTH id and node
+   * so a remote-only agent (or an explicit node pin) passes validation and
+   * survives through to the node-aware resolver (src/agent-locator.js).
+   * Throws 400 on unknown agents; tolerates a roster read failure by failing
+   * CLOSED (we never start work for a typo).
    */
   async function requireRosterAgent(agent) {
     if (typeof rosterFn !== "function") return;
     if (typeof agent !== "string" || agent.trim().length === 0) {
       throw httpError(400, "Body must include a non-empty 'agent' field");
     }
+    const [id, node] = String(agent).trim().split("@");
     let roster;
     try {
       roster = await rosterFn();
@@ -439,8 +445,8 @@ function createFleetRoutes({
       throw httpError(503, `Agent roster unavailable: ${e.message}`);
     }
     const agents = Array.isArray(roster && roster.agents) ? roster.agents : [];
-    if (!agents.some((a) => a && a.id === agent.trim())) {
-      throw httpError(400, `Unknown agent '${agent.trim()}' — not in the local roster`);
+    if (!agents.some((a) => a && a.id === id && (!node || a.node === node))) {
+      throw httpError(400, `Unknown agent '${agent.trim()}' — not in the fleet roster`);
     }
   }
 
