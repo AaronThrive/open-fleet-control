@@ -122,5 +122,33 @@ describe("action-guard", () => {
       assert.strictEqual(v.allowed, true);
       assert.strictEqual(v.reason, "token");
     });
+
+    it("DENIES a Serve-proxied loopback request (x-forwarded-for) with no verified mesh-peer", () => {
+      // Behind Serve every peer's remoteAddress is loopback; the x-forwarded-for
+      // header marks it as proxied. It must NOT be auto-allowed as localhost —
+      // without a verified mesh-peer identity it is denied.
+      const v = guardActionPost(
+        req({
+          remoteAddress: "127.0.0.1",
+          headers: { "x-forwarded-for": "100.64.0.9", "tailscale-user-login": "node-b" },
+        }),
+        { meshLogins: new Set(["node-b"]), verifyServeOrigin: true, verifiedLogin: null },
+      );
+      assert.strictEqual(v.allowed, false);
+    });
+
+    it("ALLOWS a genuine local loopback request (no x-forwarded-for) while verifying", () => {
+      // A real local agent calls 127.0.0.1 without Serve's x-forwarded-for, even
+      // while carrying an identity header — the localhost allow still applies.
+      const v = guardActionPost(
+        req({
+          remoteAddress: "127.0.0.1",
+          headers: { "tailscale-user-login": "agent-1" },
+        }),
+        { verifyServeOrigin: true, verifiedLogin: null },
+      );
+      assert.strictEqual(v.allowed, true);
+      assert.strictEqual(v.reason, "localhost");
+    });
   });
 });

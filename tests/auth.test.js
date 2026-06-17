@@ -252,14 +252,34 @@ describe("auth module", () => {
         assert.strictEqual(result.authorized, false);
       });
 
-      it("verifyServeOrigin:true + missing x-forwarded-for → denied (not via Serve)", async () => {
+      it("verifyServeOrigin:true + loopback + identity header + NO x-forwarded-for (local agent) → authorized as localhost", () => {
+        // Regression guard: a genuine local agent calls 127.0.0.1 WITH a
+        // tailscale-user-login header (dispatch kickoff tells it to) but WITHOUT
+        // Serve's injected x-forwarded-for. The Serve signal is x-forwarded-for,
+        // not the identity header, so this must short-circuit as localhost.
         const whoisFn = async () => "user@example.com";
         const cfg = {
           mode: "tailscale",
           allowedUsers,
           tailscale: { verifyServeOrigin: true, whoisFn },
         };
-        const result = await checkAuth(tsReq("127.0.0.1", { login: "user@example.com" }), cfg);
+        const result = checkAuth(tsReq("127.0.0.1", { login: "agent-1@example.com" }), cfg);
+        // Synchronous plain object — the localhost short-circuit fired, no whois.
+        assert.strictEqual(typeof result.then, "undefined");
+        assert.strictEqual(result.authorized, true);
+        assert.strictEqual(result.user.type, "localhost");
+      });
+
+      it("verifyServeOrigin:true + non-loopback + NO x-forwarded-for → denied (not local, not via Serve)", async () => {
+        // A direct tailnet connection with no Serve proxy: not loopback, so no
+        // localhost short-circuit; verifyServeLogin then fails (no x-forwarded-for).
+        const whoisFn = async () => "user@example.com";
+        const cfg = {
+          mode: "tailscale",
+          allowedUsers,
+          tailscale: { verifyServeOrigin: true, whoisFn },
+        };
+        const result = await checkAuth(tsReq("100.64.0.50", { login: "user@example.com" }), cfg);
         assert.strictEqual(result.authorized, false);
       });
     });

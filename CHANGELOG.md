@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.4.2 — 2026-06-17
+
+- **fix(auth): make `verifyServeOrigin` safe to enable without denying local agents.** The Serve-origin
+  detection in `checkAuth` (`src/auth.js`) and the localhost branch in `guardActionPost`
+  (`src/action-guard.js`) now key on the presence of Serve's injected `x-forwarded-for` header — NOT the
+  `tailscale-user-login` identity header. Local fleet agents call `127.0.0.1` *with* an identity header
+  (the dispatch kickoff instructs it); the prior logic mis-classified those as Serve proxies and (with
+  verifyServeOrigin on) denied them. Now a genuine loopback request without `x-forwarded-for` keeps the
+  localhost short-circuit regardless of any identity header, while a real Serve-proxied request (loopback +
+  `x-forwarded-for`) is verified via `tailscale whois`. Default remains OFF — byte-identical to prior
+  behavior until the operator enables it.
+- **test:** regression coverage for the local-agent case + a multi-line remote `result_text` capture test
+  (the remote→`synthStdout`→`result_text` round-trip was already correct; the test pins it).
+
 ## 2.4.1 — 2026-06-17
 
 - **fix(dispatch): strip the `@node` qualifier before invoking the agent.** A pinned

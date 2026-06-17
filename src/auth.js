@@ -112,18 +112,23 @@ function checkAuth(req, authConfig) {
   const remoteAddr = req.socket?.remoteAddress || "";
   const isLocalhost =
     remoteAddr === "127.0.0.1" || remoteAddr === "::1" || remoteAddr === "::ffff:127.0.0.1";
-  // Serve-origin verification (when enabled) fronts OFC over loopback, so EVERY
-  // request appears local. Blanket-allowing loopback would bypass the per-user
-  // allowlist entirely. So when verifyServeOrigin is on AND this loopback request
-  // carries Serve's injected identity header, fall through to the tailscale
-  // verification path instead of the localhost short-circuit. A genuine local
-  // CLI call (no tailscale-user-login header) still short-circuits as localhost.
+  // Serve-origin verification (when enabled) fronts OFC over loopback, so a
+  // Serve-proxied request appears local. Blanket-allowing loopback would bypass
+  // the per-user allowlist for those proxied requests. The reliable signal that a
+  // loopback request actually arrived via Serve is Serve's injected
+  // x-forwarded-for header — NOT the identity header, which a genuine local agent
+  // legitimately sets (the dispatch kickoff instructs local agents to send
+  // tailscale-user-login when calling 127.0.0.1). So when verifyServeOrigin is on
+  // AND this loopback request carries x-forwarded-for, fall through to the
+  // tailscale verification path instead of the localhost short-circuit. A genuine
+  // local call (no x-forwarded-for) still short-circuits as localhost, regardless
+  // of any identity header it carries.
   const tsCfg = authConfig.tailscale || {};
   const looksLikeServeProxy =
     mode === "tailscale" &&
     tsCfg.verifyServeOrigin === true &&
-    typeof req.headers[AUTH_HEADERS.tailscale.login] === "string" &&
-    req.headers[AUTH_HEADERS.tailscale.login].length > 0;
+    typeof req.headers["x-forwarded-for"] === "string" &&
+    req.headers["x-forwarded-for"].length > 0;
   if (isLocalhost && !looksLikeServeProxy) {
     return { authorized: true, user: { type: "localhost", login: "localhost" } };
   }
