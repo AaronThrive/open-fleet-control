@@ -33,13 +33,24 @@ function isLocalhostAddr(addr) {
  *   3. a shared dispatch token is presented as Authorization: Bearer <token>.
  * Everything else is denied (403).
  *
+ * Serve-origin verification (default OFF): when ctx.verifyServeOrigin is true,
+ * the mesh-peer branch (2) trusts the WHOIS-verified identity (ctx.verifiedLogin)
+ * instead of the raw, spoofable tailscale-user-login header — the verified login
+ * must itself be a registered mesh peer. The token branch (3) is unaffected
+ * (defense-in-depth). Default OFF preserves exact pre-cutover behavior.
+ *
  * @param {object} req - incoming request (req.headers, req.socket.remoteAddress)
  * @param {object} ctx
  * @param {string|null} [ctx.token] - shared dispatch token (null → disabled)
  * @param {Set<string>} [ctx.meshLogins] - lowercased mesh peer hostnames/logins
+ * @param {boolean} [ctx.verifyServeOrigin=false] - require a verified identity
+ * @param {string|null} [ctx.verifiedLogin=null] - whois-verified login (or null)
  * @returns {{allowed: boolean, reason: string}}
  */
-function guardActionPost(req, { token = null, meshLogins = new Set() } = {}) {
+function guardActionPost(
+  req,
+  { token = null, meshLogins = new Set(), verifyServeOrigin = false, verifiedLogin = null } = {},
+) {
   if (isLocalhostAddr(req && req.socket && req.socket.remoteAddress)) {
     return { allowed: true, reason: "localhost" };
   }
@@ -53,7 +64,13 @@ function guardActionPost(req, { token = null, meshLogins = new Set() } = {}) {
 
   const dispatchFlag = req && req.headers && req.headers["x-ofc-dispatch"];
   if (dispatchFlag === "1") {
-    const login = loginFromReq(req);
+    // When verifying, the peer login MUST be the whois-verified one; the raw
+    // header is never trusted. Otherwise fall back to the header identity.
+    const login = verifyServeOrigin
+      ? typeof verifiedLogin === "string" && verifiedLogin
+        ? verifiedLogin.toLowerCase()
+        : "anonymous"
+      : loginFromReq(req);
     if (login !== "anonymous" && meshLogins.has(login)) {
       return { allowed: true, reason: "mesh-peer" };
     }

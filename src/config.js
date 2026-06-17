@@ -370,6 +370,13 @@ function loadConfig({ secrets = defaultSecrets, localPath } = {}) {
     server: {
       port: parseInt(process.env.PORT || fileConfig.server?.port || "3333", 10),
       host: process.env.HOST || fileConfig.server?.host || "localhost",
+      // Network interface the HTTP server binds to. Distinct from the legacy
+      // `host` field (which was never honored at listen() time — the server has
+      // always bound all interfaces). Default is unset → bind ALL interfaces,
+      // preserving today's live behavior. Set to "127.0.0.1"/"localhost" to bind
+      // loopback only (the Tailscale Serve cutover). Resolved by resolveBindHost
+      // in src/index.js; "0.0.0.0"/"all"/unset all mean bind-all.
+      bindHost: process.env.BIND_HOST || fileConfig.server?.bindHost || "",
     },
 
     // Paths - all relative to workspace unless absolute
@@ -415,6 +422,22 @@ function loadConfig({ secrets = defaultSecrets, localPath } = {}) {
         .split(",")
         .map((s) => s.trim()),
       publicPaths: fileConfig.auth?.publicPaths || ["/api/health", "/api/whoami", "/favicon.ico"],
+      // Tailscale Serve-origin verification (security hardening). DEFAULT OFF =
+      // exactly the prior behavior: the tailscale-user-login header is trusted
+      // from any allowlisted caller. When verifyServeOrigin is true, that header
+      // is only honored if the request arrived via a loopback Serve proxy AND a
+      // `tailscale whois` lookup of the x-forwarded-for IP confirms the login
+      // (fail closed). Flip this ON together with server.bindHost=127.0.0.1 at
+      // the Serve cutover. tailscaledSocket overrides the default socket path.
+      tailscale: {
+        verifyServeOrigin:
+          process.env.AUTH_TAILSCALE_VERIFY_SERVE_ORIGIN === "true" ||
+          fileConfig.auth?.tailscale?.verifyServeOrigin === true,
+        tailscaledSocket:
+          process.env.AUTH_TAILSCALED_SOCKET ||
+          fileConfig.auth?.tailscale?.tailscaledSocket ||
+          "",
+      },
     },
 
     // Branding

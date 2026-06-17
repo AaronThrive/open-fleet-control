@@ -162,9 +162,15 @@ function createBulk(deps = {}) {
     return { ok, detail: String(detail).slice(0, 500) };
   }
 
-  /** Validate a dispatch agent against the local roster (fail closed). */
+  /**
+   * Validate a dispatch agent against the roster (fail closed). The reference
+   * may carry an "@node" qualifier; we strip it, validate the bare id, and —
+   * when a node was given — require a roster entry matching both id and node so
+   * node-qualified references survive to the node-aware resolver.
+   */
   async function requireRosterAgent(agent) {
     if (typeof rosterFn !== "function") return;
+    const [id, node] = String(agent).split("@");
     let roster;
     try {
       roster = await rosterFn();
@@ -172,7 +178,7 @@ function createBulk(deps = {}) {
       throw new Error(`Agent roster unavailable: ${e.message}`);
     }
     const agents = Array.isArray(roster && roster.agents) ? roster.agents : [];
-    if (!agents.some((a) => a && a.id === agent)) {
+    if (!agents.some((a) => a && a.id === id && (!node || a.node === node))) {
       throw new Error(`Unknown agent '${agent}' — not in the local roster`);
     }
   }

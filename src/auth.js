@@ -14,12 +14,117 @@ const AUTH_HEADERS = {
   },
 };
 
+// Short positive/negative cache TTL for whois lookups so a burst of requests
+// from the same Serve front-end does not spawn one CLI per request.
+const WHOIS_CACHE_MS = 5000;
+const WHOIS_TIMEOUT_MS = 2000;
+
+/** True for loopback remote addresses (IPv4/IPv6, incl. ::ffff: mapping). */
+function isLoopbackAddr(addr) {
+  if (typeof addr !== "string" || !addr) return false;
+  const normalized = addr.replace(/^::ffff:/i, "");
+  return normalized === "127.0.0.1" || normalized === "::1" || addr === "::1";
+}
+
+/**
+ * Default Tailscale whois resolver: `tailscale whois --json <ip>` via execFile
+ * (never a shell), against an optional tailscaled socket. Resolves to the
+ * lowercased LoginName, or null on ANY error/timeout/parse failure (fail
+ * CLOSED). Results (incl. nulls) are cached briefly. Injectable for tests.
+ *
+ * @param {object} [opts]
+ * @param {string} [opts.socket] - tailscaled socket path (CONFIG.auth.tailscale.tailscaledSocket)
+ * @param {string} [opts.bin] - tailscale binary (default "tailscale")
+ * @param {function} [opts.execFileFn] - injected execFile (testing)
+ * @param {function} [opts.nowFn] - injected clock (testing)
+ * @returns {function(string): Promise<string|null>}
+ */
+function createTailscaleWhois({ socket = "", bin = "tailscale", execFileFn, nowFn = Date.now } = {}) {
+  const cache = new Map(); // ip -> { at, login }
+  const exec =
+    typeof execFileFn === "function" ? execFileFn : require("child_process").execFile;
+  return function whois(ip) {
+    return new Promise((resolve) => {
+      if (typeof ip !== "string" || ip.trim().length === 0) {
+        resolve(null);
+        return;
+      }
+      const now = nowFn();
+      const hit = cache.get(ip);
+      if (hit && now - hit.at < WHOIS_CACHE_MS) {
+        resolve(hit.login);
+        return;
+      }
+      const args = socket ? ["--socket", socket, "whois", "--json", ip] : ["whois", "--json", ip];
+      let settled = false;
+      const done = (login) => {
+        if (settled) return;
+        settled = true;
+        cache.set(ip, { at: nowFn(), login });
+        resolve(login);
+      };
+      try {
+        exec(bin, args, { encoding: "utf8", timeout: WHOIS_TIMEOUT_MS }, (err, stdout) => {
+          if (err || !stdout) {
+            done(null);
+            return;
+          }
+          try {
+            const parsed = JSON.parse(stdout);
+            const login = parsed && parsed.UserProfile && parsed.UserProfile.LoginName;
+            done(typeof login === "string" && login ? login.toLowerCase() : null);
+          } catch (e) {
+            done(null);
+          }
+        });
+      } catch (e) {
+        done(null); // fail closed if the binary is missing
+      }
+    });
+  };
+}
+
+/**
+ * Verify a Tailscale Serve origin. Serve terminates locally and proxies to the
+ * dashboard over loopback, injecting x-forwarded-for/-proto/-host plus the
+ * tailscale-user-* identity headers. A direct tailnet connection to the bound
+ * port can forge those identity headers — so when enabled we require BOTH:
+ *   1. the TCP peer is loopback (the Serve front-end), carrying x-forwarded-for, and
+ *   2. whois(x-forwarded-for IP) resolves to a login matching the claimed header.
+ * Returns the verified lowercased login on success, or null (fail closed).
+ *
+ * @returns {Promise<string|null>}
+ */
+async function verifyServeLogin(req, claimedLogin, whoisFn) {
+  if (typeof whoisFn !== "function") return null;
+  const remoteAddr = req.socket?.remoteAddress || "";
+  if (!isLoopbackAddr(remoteAddr)) return null; // not behind a loopback Serve proxy
+  const xff = req.headers["x-forwarded-for"];
+  const forwardedIp = typeof xff === "string" ? xff.split(",")[0]?.trim() : "";
+  if (!forwardedIp) return null; // Serve always injects this; absence = not via Serve
+  const resolved = await whoisFn(forwardedIp);
+  if (!resolved || resolved !== claimedLogin) return null; // mismatch / lookup failure
+  return resolved;
+}
+
 function checkAuth(req, authConfig) {
   const mode = authConfig.mode;
   const remoteAddr = req.socket?.remoteAddress || "";
   const isLocalhost =
     remoteAddr === "127.0.0.1" || remoteAddr === "::1" || remoteAddr === "::ffff:127.0.0.1";
-  if (isLocalhost) {
+  // Serve-origin verification (when enabled) fronts OFC over loopback, so EVERY
+  // request appears local. Blanket-allowing loopback would bypass the per-user
+  // allowlist entirely. So when verifyServeOrigin is on AND this loopback request
+  // carries Serve's injected identity header, fall through to the tailscale
+  // verification path instead of the localhost short-circuit. A genuine local
+  // CLI call (no tailscale-user-login header) still short-circuits as localhost.
+  const tsCfg = authConfig.tailscale || {};
+  const looksLikeServeProxy =
+    mode === "tailscale" &&
+    tsCfg.verifyServeOrigin === true &&
+    typeof req.headers[AUTH_HEADERS.tailscale.login] === "string" &&
+    req.headers[AUTH_HEADERS.tailscale.login].length > 0;
+  if (isLocalhost && !looksLikeServeProxy) {
     return { authorized: true, user: { type: "localhost", login: "localhost" } };
   }
   if (mode === "none") {
@@ -40,19 +145,39 @@ function checkAuth(req, authConfig) {
     if (!login) {
       return { authorized: false, reason: "Not accessed via Tailscale Serve" };
     }
-    const isAllowed = authConfig.allowedUsers.some((allowed) => {
-      if (allowed === "*") return true;
-      if (allowed === login) return true;
-      if (allowed.startsWith("*@")) {
-        const domain = allowed.slice(2);
-        return login.endsWith("@" + domain);
+    const decide = () => {
+      const isAllowed = authConfig.allowedUsers.some((allowed) => {
+        if (allowed === "*") return true;
+        if (allowed === login) return true;
+        if (allowed.startsWith("*@")) {
+          const domain = allowed.slice(2);
+          return login.endsWith("@" + domain);
+        }
+        return false;
+      });
+      if (isAllowed) {
+        return { authorized: true, user: { type: "tailscale", login, name, pic } };
       }
-      return false;
-    });
-    if (isAllowed) {
-      return { authorized: true, user: { type: "tailscale", login, name, pic } };
+      return { authorized: false, reason: `User ${login} not in allowlist`, user: { login } };
+    };
+    // Default OFF: trust the header exactly as before (pre-cutover behavior).
+    // When verifyServeOrigin is on, the header is only honored if the request
+    // arrived via a loopback Tailscale Serve proxy AND whois confirms it — this
+    // returns a Promise; the call site awaits it (see src/index.js auth block).
+    const ts = authConfig.tailscale || {};
+    if (!ts.verifyServeOrigin) {
+      return decide();
     }
-    return { authorized: false, reason: `User ${login} not in allowlist`, user: { login } };
+    return verifyServeLogin(req, login, ts.whoisFn).then((verified) => {
+      if (!verified) {
+        return {
+          authorized: false,
+          reason: "Tailscale identity could not be verified via Serve origin",
+          user: { login },
+        };
+      }
+      return decide();
+    });
   }
   if (mode === "cloudflare") {
     const email = (req.headers[AUTH_HEADERS.cloudflare.email] || "").toLowerCase();
@@ -146,4 +271,11 @@ function getUnauthorizedPage(reason, user, authConfig) {
 </html>`;
 }
 
-module.exports = { AUTH_HEADERS, checkAuth, getUnauthorizedPage };
+module.exports = {
+  AUTH_HEADERS,
+  checkAuth,
+  getUnauthorizedPage,
+  createTailscaleWhois,
+  verifyServeLogin,
+  isLoopbackAddr,
+};

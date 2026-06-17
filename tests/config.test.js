@@ -99,6 +99,19 @@ describe("config module", () => {
       assert.strictEqual(config.server.host, "localhost");
     });
 
+    it("defaults server.bindHost to empty (→ bind all interfaces; preserves live behavior)", () => {
+      const { loadConfig } = require("../src/config");
+      const config = loadConfig();
+      assert.strictEqual(config.server.bindHost, "");
+    });
+
+    it("defaults auth.tailscale.verifyServeOrigin to false (Serve-origin auth OFF)", () => {
+      const { loadConfig } = require("../src/config");
+      const config = loadConfig();
+      assert.strictEqual(config.auth.tailscale.verifyServeOrigin, false);
+      assert.strictEqual(config.auth.tailscale.tailscaledSocket, "");
+    });
+
     it("has workspace path set", () => {
       const { loadConfig } = require("../src/config");
       const config = loadConfig();
