@@ -9,7 +9,7 @@ _built by Aaron May_
 [![CI](https://github.com/AaronThrive/open-fleet-control/actions/workflows/ci.yml/badge.svg)](https://github.com/AaronThrive/open-fleet-control/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
-[![Version](https://img.shields.io/badge/version-2.4.3-blue)](package.json)
+[![Version](https://img.shields.io/badge/version-2.4.4-blue)](package.json)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/AaronThrive/open-fleet-control/pulls)
 
 [Feature Tour](#feature-tour) • [Quick Start](#quick-start) • [Fleet Configuration](#fleet-configuration) • [API](#fleet-api) • [Deployment](#deployment)

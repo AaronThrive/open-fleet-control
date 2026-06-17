@@ -250,6 +250,11 @@ function createInitialHealth() {
  *   (including no-transition polls) — consumed by the alert wiring's
  *   failure-streak / recovery tracking, which needs per-poll visibility
  * @param {function} [options.nowFn] - clock function (default Date.now)
+ * @param {Array<object>} [options.seed] - fleet-wide seed list auto-registered
+ *   into the registry ONCE during construction (idempotent across reboots);
+ *   each entry is the same validateNodeInput shape (without id/registeredAt)
+ * @param {string} [options.selfHostname] - this node's hostname; seed entries
+ *   matching it are skipped (a node never seeds itself)
  * @returns {{start, stop, getState, registerNode, unregisterNode, discoverPeers, getFleetCosts, collectNodeStats, _pollOnce}}
  */
 function createMesh(options = {}) {
@@ -262,6 +267,8 @@ function createMesh(options = {}) {
     onChange = null,
     onHealth = null,
     nowFn = Date.now,
+    seed = [],
+    selfHostname = "",
   } = options;
 
   if (!stateDir || typeof stateDir !== "string") {
@@ -299,6 +306,78 @@ function createMesh(options = {}) {
     fs.writeFileSync(tmpFile, JSON.stringify({ nodes }, null, 2));
     fs.renameSync(tmpFile, registryFile);
   }
+
+  // ---------------------------------------------------------------------
+  // Seed auto-registration (zero-touch mesh join)
+  //
+  // Runs ONCE during construction, after the registry is loaded and before
+  // health polling starts. Idempotent across reboots: an instance already
+  // present (hostname + port) is never duplicated — it only has its mutable
+  // metadata (healthPath / label / platform) corrected in place when a seed
+  // entry disagrees with a stale manual record. New entries get a fresh id +
+  // registeredAt. Self (by hostname) is always skipped, and a seed array of
+  // [] is a complete no-op (zero disk writes), keeping pre-seed boots
+  // byte-identical. Deliberately bypasses registerNode's throw-on-duplicate.
+  // ---------------------------------------------------------------------
+
+  /**
+   * Auto-register each seed entry into the registry (see block comment).
+   * @param {Array<object>} seedList - raw seed entries (validateNodeInput shape)
+   * @param {string} self - this node's hostname (entries matching it are skipped)
+   */
+  function seedRegistry(seedList, self) {
+    if (!Array.isArray(seedList) || seedList.length === 0) return;
+
+    let changed = false;
+    for (const raw of seedList) {
+      let validated;
+      try {
+        validated = validateNodeInput({ ...raw, registeredBy: "seed" });
+      } catch (e) {
+        console.warn(`[Mesh] Skipping invalid seed entry: ${e.message}`);
+        continue;
+      }
+
+      // A node never seeds itself.
+      if (self && validated.hostname === self) continue;
+
+      const existing = nodes.find((n) => isSameInstance(n, validated));
+      if (existing) {
+        // Correct stale mutable metadata in place (keyed on id). Never touch
+        // hostname / port / id / registeredAt — those are the record identity.
+        if (
+          existing.healthPath !== validated.healthPath ||
+          existing.label !== validated.label ||
+          existing.platform !== validated.platform
+        ) {
+          const updated = {
+            ...existing,
+            healthPath: validated.healthPath,
+            label: validated.label,
+            platform: validated.platform,
+          };
+          nodes = nodes.map((n) => (n.id === existing.id ? updated : n));
+          changed = true;
+        }
+        continue;
+      }
+
+      nodes = [
+        ...nodes,
+        {
+          id: crypto.randomUUID(),
+          ...validated,
+          registeredAt: new Date(nowFn()).toISOString(),
+        },
+      ];
+      changed = true;
+    }
+
+    // Only persist when something actually changed (no-op boot = no writes).
+    if (changed) saveRegistry();
+  }
+
+  seedRegistry(seed, selfHostname);
 
   // ---------------------------------------------------------------------
   // Registry CRUD

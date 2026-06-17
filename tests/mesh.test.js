@@ -232,6 +232,143 @@ describe("mesh module", () => {
     });
   });
 
+  describe("seed auto-registration", () => {
+    function readRegistry() {
+      const file = path.join(stateDir, "mesh-nodes.json");
+      return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
+    }
+
+    it("seeds a new node into the registry on construction", () => {
+      makeMesh({
+        seed: [{ hostname: "atlas", healthPath: "/api/health", label: "Atlas", platform: "macos" }],
+      });
+      const persisted = readRegistry();
+      assert.strictEqual(persisted.nodes.length, 1);
+      const node = persisted.nodes[0];
+      assert.strictEqual(node.hostname, "atlas");
+      assert.strictEqual(node.healthPath, "/api/health");
+      assert.strictEqual(node.label, "Atlas");
+      assert.strictEqual(node.platform, "macos");
+      assert.strictEqual(node.registeredBy, "seed");
+      assert.ok(node.id, "seeded node should have an id");
+      assert.ok(node.registeredAt, "seeded node should have registeredAt");
+    });
+
+    it("skips the node's own entry by selfHostname", () => {
+      makeMesh({
+        selfHostname: "hermes",
+        seed: [
+          { hostname: "hermes", healthPath: "/api/health" },
+          { hostname: "atlas", healthPath: "/api/health" },
+        ],
+      });
+      const persisted = readRegistry();
+      assert.strictEqual(persisted.nodes.length, 1);
+      assert.strictEqual(persisted.nodes[0].hostname, "atlas");
+    });
+
+    it("is idempotent across two constructions sharing a stateDir", () => {
+      const seed = [{ hostname: "atlas", healthPath: "/api/health", label: "Atlas" }];
+      makeMesh({ seed });
+      const firstRaw = fs.readFileSync(path.join(stateDir, "mesh-nodes.json"), "utf8");
+      const firstMtime = fs.statSync(path.join(stateDir, "mesh-nodes.json")).mtimeMs;
+
+      // Second construction with the SAME seed: no duplicate, identical file.
+      makeMesh({ seed });
+      const secondRaw = fs.readFileSync(path.join(stateDir, "mesh-nodes.json"), "utf8");
+      const secondMtime = fs.statSync(path.join(stateDir, "mesh-nodes.json")).mtimeMs;
+
+      assert.strictEqual(secondRaw, firstRaw, "persisted registry must be byte-identical");
+      assert.strictEqual(JSON.parse(secondRaw).nodes.length, 1, "no duplicate record");
+      // No write on the 2nd boot (nothing changed).
+      assert.strictEqual(secondMtime, firstMtime, "second boot must not rewrite the file");
+    });
+
+    it("updates healthPath/label in place without a 2nd record (Gap-2 guard)", () => {
+      // First boot registers a stale-style record (generic /health, no label).
+      makeMesh({ seed: [{ hostname: "atlas", healthPath: "/health" }] });
+      const firstId = readRegistry().nodes[0].id;
+      const firstRegisteredAt = readRegistry().nodes[0].registeredAt;
+
+      // Second boot's seed corrects healthPath + label on the SAME instance.
+      makeMesh({
+        seed: [{ hostname: "atlas", healthPath: "/api/health", label: "Atlas Dashboard" }],
+      });
+      const persisted = readRegistry();
+      assert.strictEqual(persisted.nodes.length, 1, "no duplicate record created");
+      const node = persisted.nodes[0];
+      assert.strictEqual(node.healthPath, "/api/health", "healthPath corrected in place");
+      assert.strictEqual(node.label, "Atlas Dashboard", "label corrected in place");
+      // Identity fields are never rewritten.
+      assert.strictEqual(node.id, firstId, "id preserved");
+      assert.strictEqual(node.registeredAt, firstRegisteredAt, "registeredAt preserved");
+    });
+
+    it("skips an invalid seed entry (warns, never throws)", () => {
+      assert.doesNotThrow(() => {
+        makeMesh({
+          seed: [
+            { hostname: "BAD HOST!" }, // invalid hostname
+            { hostname: "atlas", healthPath: "/api/health" },
+          ],
+        });
+      });
+      const persisted = readRegistry();
+      assert.strictEqual(persisted.nodes.length, 1);
+      assert.strictEqual(persisted.nodes[0].hostname, "atlas");
+    });
+
+    it("empty seed is a complete no-op (no registry file written)", () => {
+      makeMesh({ seed: [] });
+      assert.strictEqual(readRegistry(), null, "no registry file on empty-seed boot");
+    });
+
+    it("absent seed is a complete no-op (no registry file written)", () => {
+      makeMesh();
+      assert.strictEqual(readRegistry(), null, "no registry file when seed is absent");
+    });
+
+    it("a seeded /api/health node coexists with a manual /health record (distinct ports)", () => {
+      const mesh = makeMesh();
+      mesh.registerNode({ hostname: "atlas", port: 443, healthPath: "/health" });
+      // Same hostname, different port → distinct instance, not a duplicate.
+      makeMesh({
+        seed: [{ hostname: "atlas", port: 8443, healthPath: "/api/health", label: "Atlas OFC" }],
+      });
+      const persisted = readRegistry();
+      assert.strictEqual(persisted.nodes.length, 2);
+      const ofc = persisted.nodes.find((n) => n.healthPath === "/api/health");
+      assert.ok(ofc, "the seeded OFC dashboard record exists");
+      assert.strictEqual(ofc.port, 8443);
+    });
+  });
+
+  describe("seed → agent-locator routing", () => {
+    const { createAgentLocator } = require("../src/agent-locator");
+
+    it("pickDashboardNode selects the seeded /api/health record", async () => {
+      // A gateway proxy advertises /health and the seeded OFC dashboard
+      // advertises /api/health on the same hostname (distinct ports).
+      const mesh = makeMesh();
+      mesh.registerNode({ hostname: "atlas", port: 443, healthPath: "/health" });
+      const seededMesh = makeMesh({
+        seed: [{ hostname: "atlas", port: 8443, healthPath: "/api/health", label: "Atlas OFC" }],
+      });
+
+      const locator = createAgentLocator({
+        rosterFn: async () => ({ agents: [{ id: "scout", node: "atlas" }] }),
+        meshFn: async () => seededMesh.getState(),
+        selfNode: "hermes",
+      });
+
+      const route = await locator.resolve("scout");
+      assert.strictEqual(route.kind, "remote");
+      assert.strictEqual(route.node, "atlas");
+      // baseUrl is the seeded OFC dashboard URL minus /api/health.
+      assert.strictEqual(route.baseUrl, `https://atlas.${SUFFIX}:8443`);
+    });
+  });
+
   describe("health polling", () => {
     it("marks a node online on HTTP 200 and records latency + version", async () => {
       const fetchedUrls = [];

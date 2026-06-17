@@ -14,6 +14,7 @@
  */
 
 const path = require("path");
+const os = require("os");
 const { createMesh } = require("./mesh");
 const { createFederation } = require("./federation");
 const { createTailscaleAdapter } = require("./tailscale");
@@ -186,6 +187,13 @@ function createFleetRuntime({ config, broadcast }) {
   const mesh = createMesh({
     stateDir,
     intervalMs: config.mesh.intervalMs,
+    // Zero-touch mesh join: the fleet-wide seed list is auto-registered on
+    // boot, skipping this node's own entry. selfHostname prefers the
+    // installer-set Tailscale identity (config.dispatch.identity) over the
+    // container hostname — the former is the stable tailnet name seed entries
+    // are keyed on. Empty seed = no-op (byte-identical to pre-seed boots).
+    seed: config.mesh.seed,
+    selfHostname: (config.dispatch && config.dispatch.identity) || os.hostname(),
     // Non-blocking by design: mesh.getState() feeds GET /api/state, which
     // must never wait on the tailscale CLI / LocalAPI at request time.
     tailscale: createNonBlockingTailscale(),

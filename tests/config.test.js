@@ -89,7 +89,9 @@ describe("config module", () => {
 
     it("has default auth mode of 'none'", () => {
       const { loadConfig } = require("../src/config");
-      const config = loadConfig();
+      // Isolate from the host's real dashboard.local.json — a hardened operator
+      // may set auth.mode there. This asserts the shipped DEFAULT.
+      const config = loadConfig({ localPath: "/nonexistent/ofc-test-no-local.json" });
       assert.strictEqual(config.auth.mode, "none");
     });
 
@@ -110,7 +112,9 @@ describe("config module", () => {
 
     it("defaults auth.tailscale.verifyServeOrigin to false (Serve-origin auth OFF)", () => {
       const { loadConfig } = require("../src/config");
-      const config = loadConfig();
+      // Isolate from the host's real dashboard.local.json — which legitimately
+      // sets verifyServeOrigin=true for the live Serve cutover. Asserts the DEFAULT.
+      const config = loadConfig({ localPath: "/nonexistent/ofc-test-no-local.json" });
       assert.strictEqual(config.auth.tailscale.verifyServeOrigin, false);
       assert.strictEqual(config.auth.tailscale.tailscaledSocket, "");
     });
@@ -188,6 +192,38 @@ describe("config module", () => {
       const config = loadConfig({ localPath: "/nonexistent/ofc-test-no-local.json" });
       assert.strictEqual(config.fleet.dispatch.token, "env-shared-token");
       assert.strictEqual(config.fleet.dispatch.identity, "env-node-1");
+    });
+  });
+
+  describe("fleet.mesh.seed config", () => {
+    function freshLoadConfig() {
+      for (const key of Object.keys(require.cache)) {
+        if (key.includes("config.js")) {
+          delete require.cache[key];
+        }
+      }
+      const { loadConfig } = require("../src/config");
+      return loadConfig({ localPath: "/nonexistent/ofc-test-no-local.json" });
+    }
+
+    it("defaults fleet.mesh.seed to an empty array (no-op join)", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.deepStrictEqual(config.fleet.mesh.seed, []);
+    });
+
+    it("FLEET_CONFIG_JSON deep-merges mesh.seed (and keeps intervalMs default)", () => {
+      process.env.FLEET_CONFIG_JSON = JSON.stringify({
+        mesh: {
+          seed: [{ hostname: "atlas", healthPath: "/api/health", label: "Atlas" }],
+        },
+      });
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.mesh.seed.length, 1);
+      assert.strictEqual(config.fleet.mesh.seed[0].hostname, "atlas");
+      assert.strictEqual(config.fleet.mesh.seed[0].healthPath, "/api/health");
+      // The sibling default in the mesh block survives the partial merge.
+      assert.strictEqual(config.fleet.mesh.intervalMs, 15000);
     });
   });
 

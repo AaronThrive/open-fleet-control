@@ -208,7 +208,16 @@ const FLEET_DEFAULTS = {
   // When false this instance never spawns the openclaw CLI nor parses
   // OpenClaw session/usage data (secondary-instance economy mode).
   openclawSources: true,
-  mesh: { intervalMs: 15000 },
+  // mesh.seed: a fleet-wide list of node records auto-registered into this
+  // node's mesh registry on boot (zero-touch join — removes the manual
+  // POST /api/fleet/mesh/nodes step). The SAME list ships on every node;
+  // each node skips its own entry (by hostname) at seed time. Empty = no-op
+  // (byte-identical to pre-seed behavior). Each entry: {hostname, port?,
+  // healthPath?, platform?, label?}; OFC dashboards use healthPath
+  // "/api/health" so agent-locator routes agent-run to the dashboard.
+  // Deep-merges from FLEET_CONFIG_JSON / dashboard(.local).json like the
+  // rest of fleet.*.
+  mesh: { intervalMs: 15000, seed: [] },
   federation: { intervalMs: 30000 },
   watchdog: { thresholdMs: 1800000 },
   alerts: {
