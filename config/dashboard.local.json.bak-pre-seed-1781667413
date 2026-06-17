@@ -1,0 +1,64 @@
+{
+  "fleet": {
+    "cortex": {
+      "gbrainCli": "/home/broclaw2/gbrain/bin/gbrain-cli",
+      "lancedbPath": "/home/broclaw2/.openclaw/memory/lancedb-pro",
+      "headroomStats": "/home/broclaw2/.headroom/subscription_state.json",
+      "leanCtxStats": "/home/broclaw2/.lean-ctx/stats.json",
+      "lcmDb": "/home/broclaw2/.openclaw/lcm.db"
+    },
+    "docker": {
+      "portainerUrl": ":9445"
+    },
+    "alerts": {
+      "enabled": true,
+      "rules": {
+        "nodeOffline": true,
+        "nodeUnreachable": true,
+        "taskFailed": true,
+        "taskStale": true,
+        "lessonPending": true
+      },
+      "sinks": {
+        "ntfy": {
+          "enabled": true,
+          "server": "https://ntfy.sh",
+          "topic": "oc-bot-1-2047bfda5740b5c622c35a189a1b382b"
+        }
+      }
+    },
+    "watchdog": {
+      "thresholdMs": 1800000
+    },
+    "usage": {
+      "openrouterKey": "op://CEO Scale/OPENROUTER_API_KEY/credential"
+    },
+    "budgets": {
+      "enabled": true,
+      "daily": {
+        "totalUSD": 10,
+        "perProvider": {}
+      },
+      "weekly": {
+        "totalUSD": 50,
+        "perProvider": {}
+      }
+    },
+    "dispatch": {
+      "token": "2bd0d9865d0a08fa4e21e02ef0ba859b7beb4f65fc1319136410bd514143f725",
+      "identity": "oc-bot-1"
+    }
+  },
+  "server": {
+    "bindHost": "127.0.0.1"
+  },
+  "auth": {
+    "mode": "tailscale",
+    "allowedUsers": [
+      "aaron@thrivenmedia.com"
+    ],
+    "tailscale": {
+      "verifyServeOrigin": true
+    }
+  }
+}

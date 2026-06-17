@@ -101,7 +101,6 @@ const { createFleetRuntime } = require("./fleet");
 const { createFleetRoutes, isFleetRoute } = require("./fleet-routes");
 const { createDispatch } = require("./dispatch");
 const { createOrchestrate } = require("./orchestrate");
-const { createOrgChart } = require("./org-chart");
 const { createSettings } = require("./settings");
 const { createDocker } = require("./docker");
 const { createUsageSources } = require("./usage-sources");
@@ -317,15 +316,6 @@ const orchestrate = createOrchestrate({
   },
 });
 
-// Org chart — owner-defined agent hierarchy (purely organizational), stored
-// at <stateDir>/org-chart.json with kanban-grade safety (validation, atomic
-// writes, rolling backups). Mutations broadcast a minimal fleet.org SSE
-// event; the view refetches GET /api/fleet/org-chart for detail.
-const orgChart = createOrgChart({
-  stateDir: CONFIG.fleet.stateDir,
-  onChange: (event) => broadcastSSE("fleet.org", { type: event.type, ts: Date.now() }),
-});
-
 // Quick-action runner deps (src/actions.js): async CLI runner + the cached
 // sessions backend for stale counting. Shared by /api/action and bulk ops.
 const actionDeps = {
@@ -367,7 +357,6 @@ const fleetRoutes = createFleetRoutes({
   settings,
   dispatch,
   orchestrate,
-  orgChart,
   bulk,
   // Validate dispatch targets against the FLEET roster (local + mesh + federation)
   // so "id@node"-qualified and remote-only agents pass and reach the node-aware
