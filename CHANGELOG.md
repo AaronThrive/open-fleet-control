@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.4.4 — 2026-06-17
+
+- **feat(mesh): zero-touch mesh auto-registration via `fleet.mesh.seed[]`.** A node ships the fleet's
+  node list (the SAME list on every node, provisioned by the installer from `FLEET_MESH_SEED`) and
+  auto-registers each peer into its mesh registry on boot — idempotent, self-excluding by hostname,
+  correcting stale `healthPath`/`label` in place (no duplicate records). This removes the manual
+  `POST /api/fleet/mesh/nodes` step, so a freshly-installed node comes up auto-hardened **and**
+  auto-registered. Seeding is **routing metadata only** — node→node `agent-run` is still token-authed
+  (v2.4.3), so a seed entry grants no trust. Deregister a node by removing it from the seed list (a
+  one-off `DELETE` is re-added on the next boot, since the seed list is the source of truth). Default
+  empty `seed: []` → no-op, byte-identical to single-node. Seed entries for OFC dashboards must use
+  `healthPath: "/api/health"` so the resolver routes to OFC, not a gateway.
+- **test:** +11 (seed add/skip-self/idempotent/in-place-update/invalid-skip/no-op/distinct-port +
+  agent-locator routing of a seeded node); isolated two config default-tests so the suite is green on a
+  hardened host too. Full suite 1622 green.
+- Companion installer work (`openclaw-stack`): `FLEET_MESH_SEED` → `fleet.mesh.seed` provisioning +
+  `.env.example` + POST-INSTALL deregister rule.
+
 ## 2.4.3 — 2026-06-17
 
 - **feat(security): node→node `agent-run` authenticates via a shared dispatch token.** `runRemote`
