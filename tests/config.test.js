@@ -101,7 +101,10 @@ describe("config module", () => {
 
     it("defaults server.bindHost to empty (→ bind all interfaces; preserves live behavior)", () => {
       const { loadConfig } = require("../src/config");
-      const config = loadConfig();
+      // Isolate from the host's real dashboard.local.json — which legitimately sets
+      // server.bindHost=127.0.0.1 for the live Tailscale Serve cutover. This test
+      // asserts the shipped DEFAULT, so it must not read the operator's local override.
+      const config = loadConfig({ localPath: "/nonexistent/ofc-test-no-local.json" });
       assert.strictEqual(config.server.bindHost, "");
     });
 

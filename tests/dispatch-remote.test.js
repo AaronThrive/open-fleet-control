@@ -108,6 +108,34 @@ describe("dispatch remote path", () => {
     assert.strictEqual(after.attempts[0].result_text, "Remote agent answer.\nLine two.");
   });
 
+  it("strips the @node pin → remote agent-run receives the BARE agent id", async () => {
+    const fetch = makeFetch();
+    const seen = [];
+    const dispatch = remoteDispatch({
+      kanban,
+      // The resolver receives the FULL ref for routing; capture it, then route remote.
+      resolveAgentNode: async (ref) => {
+        seen.push(ref);
+        return { kind: "remote", node: "node-b", baseUrl: "https://node-b.ts.net", online: true };
+      },
+      fetchFn: fetch.fn,
+    });
+    const task = kanban.createTask({ title: "T" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "scout@node-b" });
+    await result.completion;
+
+    // Routing saw the full pinned ref...
+    assert.strictEqual(seen[0], "scout@node-b");
+    // ...but the remote agent-run body carries the BARE id (no "@"), otherwise the
+    // remote agent-run validator rejects it with "Invalid agent id" (the live bug).
+    const sentBody = JSON.parse(fetch.calls[0].opts.body);
+    assert.strictEqual(sentBody.agent, "scout");
+    assert.ok(!sentBody.sessionKey.includes("@"), "session key must not carry the @node qualifier");
+
+    const after = kanban.getBoard().tasks.find((t) => t.id === task.id);
+    assert.strictEqual(after.attempts[0].result, "success");
+  });
+
   it("remote agent-error envelope closes the attempt as failure (card → failed)", async () => {
     const fetch = makeFetch({
       json: { success: false, error: "remote agent crashed", detail: { cliError: "remote agent crashed" } },
