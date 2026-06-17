@@ -108,6 +108,54 @@ describe("dispatch remote path", () => {
     assert.strictEqual(after.attempts[0].result_text, "Remote agent answer.\nLine two.");
   });
 
+  it("captures a MULTI-LINE remote outputText verbatim into result_text (not the note snippet)", async () => {
+    // A realistic canonical answer: many lines + blank lines + leading/trailing
+    // whitespace. result_text must preserve the body EXACTLY as a local run does
+    // (canonicalResultText only trims the outer edges), while the one-line note
+    // snippet collapses whitespace — the two must NOT be conflated.
+    const fullAnswer = [
+      "Summary of the investigation:",
+      "",
+      "1. Root cause was a race in the cache layer.",
+      "2. Fix: added a mutex around the refill path.",
+      "3. Verified with the regression suite (all green).",
+      "",
+      "Follow-up: monitor p99 latency over the next 24h.",
+    ].join("\n");
+    const fetch = makeFetch({
+      json: {
+        success: true,
+        output: "Summary of the investigation: …",
+        error: null,
+        detail: { sessionId: "sess-multiline-1", outputText: `  ${fullAnswer}  `, cliError: null },
+      },
+    });
+    const dispatch = remoteDispatch({
+      kanban,
+      resolveAgentNode: async () => ({
+        kind: "remote",
+        node: "node-b",
+        baseUrl: "https://node-b.ts.net",
+        online: true,
+      }),
+      fetchFn: fetch.fn,
+    });
+    const task = kanban.createTask({ title: "Multi-line" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "scout" });
+    await result.completion;
+
+    const after = kanban.getBoard().tasks.find((t) => t.id === task.id);
+    assert.strictEqual(after.attempts[0].result, "success");
+    // result_text is the FULL answer with newlines intact (outer whitespace trimmed).
+    assert.strictEqual(after.attempts[0].result_text, fullAnswer);
+    // It is NOT the collapsed one-line snippet stored on the note.
+    assert.ok(after.attempts[0].result_text.includes("\n"), "result_text must keep newlines");
+    assert.ok(
+      !after.attempts[0].note.includes("\n"),
+      "note snippet must remain a single collapsed line",
+    );
+  });
+
   it("strips the @node pin → remote agent-run receives the BARE agent id", async () => {
     const fetch = makeFetch();
     const seen = [];
@@ -343,5 +391,14 @@ describe("synthStdout", () => {
     const { parseRunResult } = require("../src/dispatch");
     const stdout = synthStdout({ success: false, error: "boom", detail: { cliError: "boom" } });
     assert.strictEqual(parseRunResult(stdout).error, "boom");
+  });
+
+  it("round-trips a multi-line outputText verbatim (the field that becomes result_text)", () => {
+    const { parseRunResult } = require("../src/dispatch");
+    const multiline = "Line one.\n\nLine three after a blank line.\n  indented line";
+    const stdout = synthStdout({ success: true, detail: { sessionId: "s", outputText: multiline } });
+    // parseRunResult.outputText is the exact field handleRunSettled funnels into
+    // result_text — assert it is byte-for-byte the remote outputText.
+    assert.strictEqual(parseRunResult(stdout).outputText, multiline);
   });
 });

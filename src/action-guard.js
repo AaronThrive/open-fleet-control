@@ -51,7 +51,17 @@ function guardActionPost(
   req,
   { token = null, meshLogins = new Set(), verifyServeOrigin = false, verifiedLogin = null } = {},
 ) {
-  if (isLocalhostAddr(req && req.socket && req.socket.remoteAddress)) {
+  // Behind Serve→loopback EVERY request's remoteAddress is loopback, so the
+  // localhost short-circuit cannot distinguish a real Serve peer from a genuine
+  // local caller. The reliable Serve signal is the injected x-forwarded-for
+  // header. When verifyServeOrigin is on AND x-forwarded-for is present, do NOT
+  // auto-allow as localhost — fall through to require a verified mesh-peer
+  // identity. A genuine local call (no x-forwarded-for) still allows as localhost.
+  const hasForwardedFor =
+    typeof (req && req.headers && req.headers["x-forwarded-for"]) === "string" &&
+    req.headers["x-forwarded-for"].length > 0;
+  const proxiedViaServe = verifyServeOrigin && hasForwardedFor;
+  if (!proxiedViaServe && isLocalhostAddr(req && req.socket && req.socket.remoteAddress)) {
     return { allowed: true, reason: "localhost" };
   }
 
