@@ -415,15 +415,17 @@ function createDispatch(options = {}) {
    * @param {object} ctx - { args, agent, message, sessionKey }
    * @returns {Promise<{ok: boolean, stdout?: string, error?: Error}>}
    */
-  function startRun(node, { args, agent, message, sessionKey }) {
+  function startRun(node, { args, agent, agentRef, message, sessionKey }) {
     if (typeof resolveAgentNode !== "function") {
       ensureLocalNode(node); // legacy guard/throw — back-compat
       return runLocal(args);
     }
     // An explicit "@node" pin rides through the agent ref the resolver parses;
     // a bare opts.node pin is folded into the ref so the resolver honours it.
-    const agentRef = node && !agent.includes("@") ? `${agent}@${node}` : agent;
-    return Promise.resolve(resolveAgentNode(agentRef))
+    // `agent` here is already the BARE id (used for the remote body); the ref
+    // carries the node qualifier purely for routing.
+    const ref = agentRef || (node && !agent.includes("@") ? `${agent}@${node}` : agent);
+    return Promise.resolve(resolveAgentNode(ref))
       .then((route) => {
         if (!route || route.kind === "local") return runLocal(args);
         if (route.kind === "unknown") {
@@ -683,7 +685,13 @@ function createDispatch(options = {}) {
    */
   function dispatchTask(taskId, opts = {}) {
     ensureAvailable();
-    const agent = requireAgent(opts.agent);
+    const agentRef = requireAgent(opts.agent);
+    // The ref may carry an "@node" routing qualifier (e.g. "main@hermes-agent-1").
+    // ROUTING uses the full ref; everything else — the --agent arg, the session
+    // key, the remote agent-run body, the attempt record — uses the BARE id. The
+    // remote agent-run validator (and SESSION_KEY_PATTERN) reject "@" in an id, so
+    // forwarding the pinned form caused an immediate "Invalid agent id" failure.
+    const agent = agentRef.includes("@") ? agentRef.slice(0, agentRef.indexOf("@")) : agentRef;
     // Legacy local-only mode (no resolver): keep the synchronous foreign-node
     // guard up front so a 400 is thrown BEFORE any card bookkeeping — identical
     // to the pre-Phase-2 behaviour. With a resolver wired, node routing (incl.
@@ -725,7 +733,7 @@ function createDispatch(options = {}) {
     // surface through the same settled handler as run failures.
     let settledPromise;
     try {
-      settledPromise = startRun(opts.node, { args, agent, message, sessionKey });
+      settledPromise = startRun(opts.node, { args, agent, agentRef, message, sessionKey });
     } catch (e) {
       throw httpError(503, `Dispatch invocation failed: ${e.message}`);
     }

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.4.1 — 2026-06-17
+
+- **fix(dispatch): strip the `@node` qualifier before invoking the agent.** A pinned
+  dispatch (`main@hermes-agent-1`) routed correctly but forwarded the full pinned string
+  as the agent name to the remote `agent-run` verb, whose `AGENT_ID_PATTERN` rejects `@` —
+  the cross-node attempt failed instantly with "Invalid agent id" (and the session key
+  carried `@` too, which `SESSION_KEY_PATTERN` also rejects). `dispatchTask` now derives a
+  BARE agent id for the `--agent` arg, the session key, the remote body, and the attempt
+  record, while routing still uses the full `id@node` ref. Verified live: a
+  `main@hermes-agent-1` dispatch now runs on hermes and closes on the originating board.
+  Regression test added (`tests/dispatch-remote.test.js`).
+
 ## 2.4.0 — 2026-06-17
 
 Cross-node remote dispatch made functional, plus a config-gated fix for a verified
