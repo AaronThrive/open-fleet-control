@@ -284,6 +284,9 @@ const dispatch = createDispatch({
   resolveAgentNode: (agentRef) => agentLocator.resolve(agentRef),
   fetchFn: (...a) => globalThis.fetch(...a),
   meshIdentity: CONFIG.fleet.dispatch.identity || os.hostname(),
+  // Shared Bearer token for node→node agent-run auth (guardActionPost token
+  // branch). null = header omitted (today's behavior).
+  dispatchToken: CONFIG.fleet.dispatch.token || null,
 });
 
 // Multi-agent orchestration (src/orchestrate.js) — fan-in councils + chains

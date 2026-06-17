@@ -166,6 +166,29 @@ describe("config module", () => {
       const config = loadConfig();
       assert.strictEqual(config.auth.mode, "token");
     });
+
+    it("fleet.dispatch.token/identity default to empty (isolated from host local.json)", () => {
+      const { loadConfig } = require("../src/config");
+      // Isolate from the operator's real dashboard.local.json, which may set a
+      // dispatch token/identity for the live mesh — this asserts the DEFAULTS.
+      const config = loadConfig({ localPath: "/nonexistent/ofc-test-no-local.json" });
+      assert.strictEqual(config.fleet.dispatch.token, "");
+      assert.strictEqual(config.fleet.dispatch.identity, "");
+    });
+
+    it("FLEET_DISPATCH_TOKEN / FLEET_DISPATCH_IDENTITY env vars override dispatch defaults", () => {
+      process.env.FLEET_DISPATCH_TOKEN = "env-shared-token";
+      process.env.FLEET_DISPATCH_IDENTITY = "env-node-1";
+      for (const key of Object.keys(require.cache)) {
+        if (key.includes("config.js")) {
+          delete require.cache[key];
+        }
+      }
+      const { loadConfig } = require("../src/config");
+      const config = loadConfig({ localPath: "/nonexistent/ofc-test-no-local.json" });
+      assert.strictEqual(config.fleet.dispatch.token, "env-shared-token");
+      assert.strictEqual(config.fleet.dispatch.identity, "env-node-1");
+    });
   });
 
   describe("op:// secret resolution at config load", () => {

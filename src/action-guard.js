@@ -39,6 +39,14 @@ function isLocalhostAddr(addr) {
  * must itself be a registered mesh peer. The token branch (3) is unaffected
  * (defense-in-depth). Default OFF preserves exact pre-cutover behavior.
  *
+ * PRIMARY node→node path = the TOKEN (3). As of v2.4.3 runRemote sends
+ * `Authorization: Bearer <fleet.dispatch.token>`, so cross-node agent-run is
+ * authed by the shared token. Branch (2) CANNOT authorise a Serve-proxied
+ * node→node call: Tailscale Serve identifies the caller by tailnet USER (via
+ * whois), but meshLogins holds node HOSTNAMES — user ≠ hostname → it would 403.
+ * That is by design; node→node uses the token, humans use verifyServeOrigin +
+ * the allowlist (two orthogonal axes — see docs/security-hardening.md).
+ *
  * @param {object} req - incoming request (req.headers, req.socket.remoteAddress)
  * @param {object} ctx
  * @param {string|null} [ctx.token] - shared dispatch token (null → disabled)

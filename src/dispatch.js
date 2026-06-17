@@ -281,6 +281,10 @@ function parseRunResult(stdout) {
  *   remote agent-run call (injectable for tests; defaults to globalThis.fetch)
  * @param {string} [options.meshIdentity] - value for the Tailscale-User-Login
  *   header on node→node calls (this node's identity)
+ * @param {string|null} [options.dispatchToken] - shared Bearer token for the
+ *   node→node agent-run call. When set, runRemote sends Authorization: Bearer
+ *   <token> (matched by the receiver's guardActionPost token branch, the only
+ *   branch that authorises with verifyServeOrigin ON). null → header omitted.
  * @param {number} [options.remoteTimeoutMs] - remote-call timeout; defaults to
  *   timeoutSec*1000 + 5000 so a real remote timeout fires AFTER timeoutSec
  *   elapsed (the watcher's elapsed-time clause then classifies it as timedOut)
@@ -298,6 +302,7 @@ function createDispatch(options = {}) {
     resolveAgentNode = null,
     fetchFn = (...a) => globalThis.fetch(...a),
     meshIdentity = null,
+    dispatchToken = null,
     remoteTimeoutMs = null,
   } = options;
   if (!kanban) throw new Error("createDispatch: kanban is required");
@@ -366,6 +371,10 @@ function createDispatch(options = {}) {
           // Tailnet identity so the remote node can authorise the node→node call.
           ...(meshIdentity ? { "Tailscale-User-Login": meshIdentity } : {}),
           "X-OFC-Dispatch": "1",
+          // Shared dispatch token (guardActionPost token branch) — the only
+          // branch that authorises when the remote has verifyServeOrigin ON.
+          // Omitted when unset → byte-identical to the prior behavior.
+          ...(dispatchToken ? { Authorization: `Bearer ${dispatchToken}` } : {}),
         },
         body: JSON.stringify({ action: "agent-run", agent, message, sessionKey, timeoutSec }),
         signal: timeoutSignal(ms),
