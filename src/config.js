@@ -369,6 +369,84 @@ const FLEET_DEFAULTS = {
 };
 
 /**
+ * AC-18 — raise dispatch.maxConcurrent in LOCKSTEP with the spawn pool size.
+ *
+ * The dispatch core (src/dispatch.js) enforces a board-wide open-attempt cap:
+ * once `countOpenDispatches(board) >= maxConcurrent`, the next dispatchTask
+ * throws 429. A PARALLEL board of K seats opens K dispatches at once, so if
+ * `maxConcurrent < K` the later seats 429. When the worker pool is enabled
+ * (AC-17 flips boards to parallel and fans each seat to its OWN isolated remote
+ * worker), the cap must rise WITH the pool so a parallel board at the pool
+ * ceiling never trips the rail.
+ *
+ * The relationship is explicit and configured: when `fleet.spawn.enabled === true`,
+ * the EFFECTIVE `maxConcurrent` is at least the pool ceiling
+ * (`max(configured maxConcurrent, spawn.poolCeiling)`). When spawn is disabled
+ * the configured value is preserved verbatim (byte-identical to today — no
+ * lockstep raise, sequential boards never approach the cap).
+ *
+ * This is PURE so it is independently unit-testable (AC-18 test asserts BOTH
+ * directions: raised when enabled, untouched when disabled).
+ *
+ * @param {object} fleet - a (merged) fleet config object with .dispatch + .spawn
+ * @returns {number} the effective maxConcurrent
+ */
+function resolveDispatchConcurrency(fleet) {
+  const dispatch = (fleet && fleet.dispatch) || {};
+  const spawn = (fleet && fleet.spawn) || {};
+  const configured = Number.isInteger(dispatch.maxConcurrent)
+    ? dispatch.maxConcurrent
+    : Number(dispatch.maxConcurrent) || 3;
+  // Spawn disabled: preserve the configured value exactly (no lockstep raise).
+  if (spawn.enabled !== true) return configured;
+  // Spawn enabled: the cap must be at least the pool ceiling so a parallel
+  // board at peak (one seat per worker) never hits the 429 open-attempt rail.
+  const poolCeiling = Number.isInteger(spawn.poolCeiling)
+    ? spawn.poolCeiling
+    : Number(spawn.poolCeiling) || 8;
+  return Math.max(configured, poolCeiling);
+}
+
+/**
+ * AC-17 — parallel-flip GUARD for the board default.
+ *
+ * `fleet.orchestrate.sequentialBoard` controls whether board councils dispatch
+ * advisors one-at-a-time (sequential, the single-box reliability default) or
+ * fan all seats out at once (parallel). Phase 3 flips the DEFAULT to parallel —
+ * but ONLY when the worker pool is enabled, because parallel only becomes safe
+ * once each seat lands on its OWN isolated remote worker (AC-17) instead of
+ * co-saturating the single gateway event loop, and once maxConcurrent rises in
+ * lockstep so the parallel fan-out never trips the 429 cap (AC-18).
+ *
+ * This is a GUARD, NOT an unconditional flip:
+ *   - An EXPLICIT `sequentialBoard` (true OR false) in config always wins.
+ *   - With NO explicit value, the default is `false` (parallel) WHEN spawn is
+ *     enabled, and `true` (sequential) WHEN spawn is disabled — byte-identical
+ *     to today's single-box behaviour.
+ *
+ * The explicit-vs-defaulted distinction is read from the ORIGINAL file/env
+ * fleet section (before defaults are merged in), so the FLEET_DEFAULTS sentinel
+ * does not mask an operator's intent.
+ *
+ * @param {object} fleet - merged fleet config (has .spawn)
+ * @param {object} [rawFleet] - the pre-merge fleet section (file/env), to detect
+ *   an explicit orchestrate.sequentialBoard
+ * @returns {boolean} the effective sequentialBoard default
+ */
+function resolveSequentialBoard(fleet, rawFleet) {
+  const explicit =
+    rawFleet &&
+    rawFleet.orchestrate &&
+    Object.prototype.hasOwnProperty.call(rawFleet.orchestrate, "sequentialBoard")
+      ? rawFleet.orchestrate.sequentialBoard
+      : undefined;
+  if (explicit !== undefined) return explicit === true;
+  const spawnEnabled = !!(fleet && fleet.spawn && fleet.spawn.enabled === true);
+  // No explicit value: parallel default when spawn enabled, else sequential.
+  return spawnEnabled ? false : true;
+}
+
+/**
  * Build the `fleet` config section: defaults <- dashboard(.local).json
  * <- FLEET_CONFIG_JSON env override (a JSON blob, useful for tests and
  * one-off deployments). Directory paths are expanded (~/$HOME) and resolved
@@ -379,6 +457,18 @@ const FLEET_DEFAULTS = {
  * @returns {object} resolved fleet configuration
  */
 function buildFleetConfig(fileFleet) {
+  // Capture the PRE-DEFAULTS fleet section (file + env) so AC-17's parallel-flip
+  // guard can tell an explicit operator `sequentialBoard` from the FLEET_DEFAULTS
+  // sentinel. Merge env over file the same way the main merge does below.
+  let rawFleet = fileFleet ? deepMerge({}, fileFleet) : {};
+  if (process.env.FLEET_CONFIG_JSON) {
+    try {
+      rawFleet = deepMerge(rawFleet, JSON.parse(process.env.FLEET_CONFIG_JSON));
+    } catch (e) {
+      /* the main merge below logs the parse failure */
+    }
+  }
+
   let fleet = deepMerge(FLEET_DEFAULTS, fileFleet || {});
 
   if (process.env.FLEET_CONFIG_JSON) {
@@ -388,6 +478,18 @@ function buildFleetConfig(fileFleet) {
       console.warn("[Config] Invalid FLEET_CONFIG_JSON, ignoring:", e.message);
     }
   }
+
+  // AC-17 — apply the parallel-flip guard to the board default. The merged
+  // `orchestrate.sequentialBoard` carries the FLEET_DEFAULTS sentinel (true);
+  // override it with the spawn-aware resolution unless the operator set it
+  // explicitly (in which case resolveSequentialBoard returns their value).
+  fleet = {
+    ...fleet,
+    orchestrate: {
+      ...fleet.orchestrate,
+      sequentialBoard: resolveSequentialBoard(fleet, rawFleet),
+    },
+  };
 
   const packageRoot = path.join(__dirname, "..");
   const resolvedDirs = {};
@@ -428,6 +530,11 @@ function buildFleetConfig(fileFleet) {
     ...fleet.dispatch,
     token: process.env.FLEET_DISPATCH_TOKEN || fleet.dispatch?.token || "",
     identity: process.env.FLEET_DISPATCH_IDENTITY || fleet.dispatch?.identity || "",
+    // AC-18 — raise maxConcurrent in lockstep with the spawn pool ceiling when
+    // the worker pool is enabled, so a parallel board at peak never trips the
+    // dispatch 429 open-attempt cap. No-op (preserves the configured value)
+    // when spawn is disabled — byte-identical to today.
+    maxConcurrent: resolveDispatchConcurrency(fleet),
   };
 
   return {
@@ -583,4 +690,12 @@ const CONFIG = loadConfig();
 console.log("[Config] Workspace:", CONFIG.paths.workspace);
 console.log("[Config] Auth mode:", CONFIG.auth.mode);
 
-module.exports = { CONFIG, loadConfig, detectWorkspace, expandPath, getOpenClawDir };
+module.exports = {
+  CONFIG,
+  loadConfig,
+  detectWorkspace,
+  expandPath,
+  getOpenClawDir,
+  resolveDispatchConcurrency,
+  resolveSequentialBoard,
+};
