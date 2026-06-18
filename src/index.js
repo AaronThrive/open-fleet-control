@@ -103,6 +103,7 @@ const { createDispatch } = require("./dispatch");
 const { createOrchestrate } = require("./orchestrate");
 const { createSettings } = require("./settings");
 const { createDocker } = require("./docker");
+const { createDockerPool } = require("./docker-pool");
 const { createUsageSources } = require("./usage-sources");
 const { createUsageProvider } = require("./budgets");
 const { createTopConsumersSource } = require("./digest");
@@ -501,15 +502,13 @@ if (CONFIG.fleet.spawn && CONFIG.fleet.spawn.enabled === true) {
   // Wire the store into the route handler via the late-binding ref (set after
   // createFleetRoutes was called — the getter is evaluated at request time).
   spawnStoreRef.store = spawnStore;
-  // Adapt the existing docker module's socket-API surface to the spawn iface
-  // (ps/start/stop/inspect/subscribeEvents). Lazy — only built when enabled.
-  const dockerIface = {
-    ps: (opts) => docker.listPoolContainers(opts),
-    start: (name) => docker.startContainer(name),
-    stop: (name, o) => docker.stopContainer(name, o),
-    inspect: (name) => docker.inspectContainer(name),
-    subscribeEvents: (cb) => docker.subscribeEvents(cb),
-  };
+  // Build the real Docker pool adapter (src/docker-pool.js). Uses the same
+  // unix-socket idiom as src/docker.js but adds the write operations
+  // (start/stop) and streaming events the spawn controller needs.
+  // Only constructed when spawn is enabled — preserves AC-1 (disabled = inert).
+  const dockerIface = createDockerPool({
+    socketPath: CONFIG.fleet.docker?.socketPath,
+  });
   agentSpawn = createAgentSpawn({
     config: CONFIG,
     mesh: fleet.mesh,
