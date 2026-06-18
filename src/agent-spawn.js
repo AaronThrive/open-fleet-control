@@ -82,6 +82,8 @@ function createAgentSpawn({
   logger = console,
   nowFn = Date.now,
   jitterFn = Math.random,
+  probeHealthFn = null,
+  readMemAvailableFn = null,
 } = {}) {
   const spawnCfg = (config && config.fleet && config.fleet.spawn) || {};
   const enabled = spawnCfg.enabled === true;
@@ -494,7 +496,7 @@ function createAgentSpawn({
    */
   async function reconcile(opts = {}) {
     if (!enabled) return { registered: 0, unregistered: 0, stopped: 0 };
-    const probeFn = opts.probeFn || (async () => true);
+    const probeFn = opts.probeFn || probeHealthFn || (async () => true);
 
     const [containers, meshState] = await Promise.all([
       listPoolContainers().catch(() => []),
@@ -541,7 +543,7 @@ function createAgentSpawn({
       // present-but-unregistered: bring it into the desired pool if there is
       // room, else stop it.
       if (!inMesh) {
-        const cap = admitCapacity(opts.readMemAvailableFn);
+        const cap = admitCapacity(opts.readMemAvailableFn || readMemAvailableFn);
         if (!cap.ok) {
           try {
             await docker.stop(name, { graceful: true });
@@ -703,7 +705,7 @@ function createAgentSpawn({
   function workerHealthPath(container) {
     const labels = (container && (container.Labels || container.labels)) || {};
     const hp = labels[`${POOL_LABEL}.healthPath`];
-    return typeof hp === "string" && hp.startsWith("/") ? hp : "/health";
+    return typeof hp === "string" && hp.startsWith("/") ? hp : "/api/health";
   }
 
   // -------------------------------------------------------------------------
@@ -722,7 +724,7 @@ function createAgentSpawn({
     if (!enabled) return { ok: false, reason: REASON.DISABLED };
 
     // AC-15 — capacity governor BEFORE any spawn.
-    const cap = admitCapacity(opts.readMemAvailableFn);
+    const cap = admitCapacity(opts.readMemAvailableFn || readMemAvailableFn);
     if (!cap.ok) return { ok: false, reason: cap.reason };
 
     // AC-2 — discover a pre-stopped, labelled container; docker start it.
@@ -744,7 +746,10 @@ function createAgentSpawn({
     }
 
     // AC-5 — readiness gate; register LAST after N consecutive OKs.
-    const probeFn = opts.probeFn || (async () => true);
+    // Use the caller-supplied probeFn first, then the constructor-injected
+    // probeHealthFn (the live HTTP probe wired in src/index.js when enabled),
+    // and finally the always-true stub so disabled-path unit tests stay inert.
+    const probeFn = opts.probeFn || probeHealthFn || (async () => true);
     const ready = await awaitReadiness(worker, probeFn);
     if (!ready) {
       logger.warn(`[AgentSpawn] worker ${name} never reached readiness; draining`);
