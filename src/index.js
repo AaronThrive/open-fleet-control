@@ -354,6 +354,12 @@ const bulk = createBulk({
   runAction: (name, opts) => executeAction(name, actionDeps, opts),
 });
 
+// AC-11 / AC-22 — late-binding spawn-store ref for dedup at the orchestrate
+// entry. The spawnStore is only constructed when spawn is enabled (further
+// down). This ref object is filled before any HTTP request arrives, so the
+// lazy getter passed to createFleetRoutes always sees the live store.
+const spawnStoreRef = { store: null };
+
 const fleetRoutes = createFleetRoutes({
   fleet,
   settings,
@@ -366,6 +372,9 @@ const fleetRoutes = createFleetRoutes({
   // further down; routes only call this at request time, long after module
   // evaluation completed.
   rosterFn: () => agentsRoster.getRoster(),
+  // AC-11: lazy getter — evaluated at request time, after spawnStoreRef.store
+  // is filled by the spawn block below. Returns null when spawn is disabled.
+  spawnStoreFn: () => spawnStoreRef.store,
 });
 
 // Cron write-actions — enable/disable/run-now for OPENCLAW-source jobs via
@@ -461,9 +470,17 @@ agentLocator = createAgentLocator({
 // so dispatch/orchestrate behaviour stays byte-identical to today (AC-1). The
 // spawn store (dedup + fencing) and a docker iface adapter are only built when
 // the feature is enabled.
+//
+// AC-11 / AC-22: spawnStoreRef is declared early (before fleetRoutes is
+// constructed above) and filled here so the lazy spawnStoreFn getter passed to
+// createFleetRoutes always sees the live store once enabled. When spawn is
+// disabled, the getter returns null and dedup degrades to no-op.
 let agentSpawn = null;
 if (CONFIG.fleet.spawn && CONFIG.fleet.spawn.enabled === true) {
   const spawnStore = createSpawnStore({ stateDir: CONFIG.fleet.stateDir });
+  // Wire the store into the route handler via the late-binding ref (set after
+  // createFleetRoutes was called — the getter is evaluated at request time).
+  spawnStoreRef.store = spawnStore;
   // Adapt the existing docker module's socket-API surface to the spawn iface
   // (ps/start/stop/inspect/subscribeEvents). Lazy — only built when enabled.
   const dockerIface = {

@@ -144,7 +144,24 @@ function createFleetRoutes({
   secretsStatusFn = () => defaultSecrets.getStatus(),
   exitFn = (code) => process.exit(code),
   restartDelayMs = 300,
+  // AC-11 / AC-22: optional spawn-store accessor for dedup at the orchestrate
+  // entry. Accepts either a spawnStore object directly OR a spawnStoreFn getter
+  // (lazy, for wiring after construction). When absent or unavailable, dedup
+  // degrades to no-op — never crashes the route.
+  spawnStore = null,
+  spawnStoreFn = null,
 }) {
+  // Resolve the live store: prefer spawnStoreFn() (lazy) over the static ref.
+  function resolveSpawnStore() {
+    if (typeof spawnStoreFn === "function") {
+      try {
+        return spawnStoreFn();
+      } catch (e) {
+        return null;
+      }
+    }
+    return spawnStore || null;
+  }
   if (!fleet) throw new Error("createFleetRoutes requires a fleet runtime");
 
   /**
@@ -611,6 +628,53 @@ function createFleetRoutes({
       body.wait === true || (query && typeof query.get === "function" && query.get("wait") === "true");
     const budgetMode = body.budgetMode === "open" ? "open" : "closed"; // default CLOSED
     const ceiling = body.ceilingUSD;
+
+    // AC-11 / AC-22 — Exactly-once Slack event handling via event_id dedup.
+    //
+    // SCOPE BOUNDARY (PRD §10 RESOLVED): OFC never talks to Slack directly.
+    // openclaw's Bolt provider already acks ≤3s and posts/updates messages.
+    // OFC's obligation is ONLY the DATA+CONTROL side:
+    //   - Accept an OPTIONAL event_id (alias dedup_key) from the request body.
+    //   - BEFORE starting any run/spawn, insert into the durable dedup table.
+    //   - If the insert reports duplicate (changes===0 / isDuplicate), return
+    //     a deterministic "deduped" response immediately — never start a second
+    //     run. This is what prevents openclaw's Slack retries from spawning
+    //     multiple workers.
+    //   - If event_id is absent, behave exactly as today (no dedup check).
+    //   - If spawnStore is unavailable (spawn disabled), degrade to no-op.
+    //
+    // AC-22 note: a dedup rejection is a TYPED TERMINAL result to the caller
+    // (deduped:true, status:"deduped") — never a hang. The caller (openclaw's
+    // Chief) reads this and suppresses the second dispatch without any Slack
+    // thread being left unresolved.
+    const eventId =
+      (typeof body.event_id === "string" && body.event_id.trim()) ||
+      (typeof body.dedup_key === "string" && body.dedup_key.trim()) ||
+      null;
+    const activeStore = resolveSpawnStore();
+    if (eventId && activeStore && typeof activeStore.insertDedup === "function") {
+      let dedupResult;
+      try {
+        dedupResult = activeStore.insertDedup(eventId);
+      } catch (e) {
+        // insertDedup can only throw on bad input (empty string). Since we
+        // already trimmed and checked above, this is a programming error —
+        // log and fall through (no dedup, safe degradation per AC-22).
+        console.warn("[Orchestrate] insertDedup failed:", e.message);
+        dedupResult = null;
+      }
+      if (dedupResult && dedupResult.isDuplicate) {
+        // AC-22: typed terminal result to the caller — never a hang.
+        json(res, 200, {
+          success: true,
+          deduped: true,
+          event_id: eventId,
+          status: "deduped",
+          reason: "duplicate_event_id",
+        });
+        return true;
+      }
+    }
 
     // PRE-DISPATCH budget gate — before any card is created. task=null because
     // there is no single anchor card for board/chain yet.
