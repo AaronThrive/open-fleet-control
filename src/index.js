@@ -108,6 +108,8 @@ const { createUsageProvider } = require("./budgets");
 const { createTopConsumersSource } = require("./digest");
 const { createAgentsRoster } = require("./agents-roster");
 const { createAgentLocator } = require("./agent-locator");
+const { createSpawnStore } = require("./spawn-store");
+const { createAgentSpawn } = require("./agent-spawn");
 const { createFlightRecorder, createStoreSessionsSource } = require("./flight-recorder");
 const { createTimelineRoutes, isTimelineRoute } = require("./timeline-routes");
 const { createSessionControl } = require("./session-control");
@@ -452,6 +454,35 @@ agentLocator = createAgentLocator({
   meshFn: () => fleet.mesh.getState(),
   selfNode: CONFIG.fleet.dispatch.node || os.hostname(),
 });
+
+// On-demand isolated-worker pool controller (src/agent-spawn.js — Phase 3,
+// PRD-001). GATED by CONFIG.fleet.spawn.enabled: when disabled (the default),
+// the controller is constructed as a no-op that never touches docker or mesh,
+// so dispatch/orchestrate behaviour stays byte-identical to today (AC-1). The
+// spawn store (dedup + fencing) and a docker iface adapter are only built when
+// the feature is enabled.
+let agentSpawn = null;
+if (CONFIG.fleet.spawn && CONFIG.fleet.spawn.enabled === true) {
+  const spawnStore = createSpawnStore({ stateDir: CONFIG.fleet.stateDir });
+  // Adapt the existing docker module's socket-API surface to the spawn iface
+  // (ps/start/stop/inspect/subscribeEvents). Lazy — only built when enabled.
+  const dockerIface = {
+    ps: (opts) => docker.listPoolContainers(opts),
+    start: (name) => docker.startContainer(name),
+    stop: (name, o) => docker.stopContainer(name, o),
+    inspect: (name) => docker.inspectContainer(name),
+    subscribeEvents: (cb) => docker.subscribeEvents(cb),
+  };
+  agentSpawn = createAgentSpawn({
+    config: CONFIG,
+    mesh: fleet.mesh,
+    roster: agentsRoster,
+    store: spawnStore,
+    docker: dockerIface,
+    logger: console,
+  });
+  agentSpawn.start();
+}
 
 // Agent flight recorder — read-only per-agent activity timeline aggregated
 // from sources the dashboard already collects (sessions store, kanban
