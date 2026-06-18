@@ -33,7 +33,10 @@ describe("spawn-store module", () => {
   describe("createSpawnStore()", () => {
     it("requires a non-empty stateDir", () => {
       assert.throws(() => createSpawnStore({}), /stateDir must be a non-empty string/);
-      assert.throws(() => createSpawnStore({ stateDir: "" }), /stateDir must be a non-empty string/);
+      assert.throws(
+        () => createSpawnStore({ stateDir: "" }),
+        /stateDir must be a non-empty string/,
+      );
     });
 
     it("creates the state directory if missing", () => {

@@ -66,9 +66,7 @@ function createSpawnStore({ stateDir, nowFn = Date.now } = {}) {
     ON CONFLICT (event_id) DO NOTHING
   `);
 
-  const pruneExpiredStmt = db.prepare(
-    "DELETE FROM slack_event_dedup WHERE expires_at < ?",
-  );
+  const pruneExpiredStmt = db.prepare("DELETE FROM slack_event_dedup WHERE expires_at < ?");
 
   /**
    * Record a Slack event_id. Uses INSERT … ON CONFLICT DO NOTHING.

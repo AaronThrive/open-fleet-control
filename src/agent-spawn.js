@@ -106,9 +106,7 @@ function createAgentSpawn({
     "";
   // Built only when a prefix is known; null = fail closed (matches nothing).
   const workerNamePattern = workerNamePrefix
-    ? new RegExp(
-        `^${escapeRegExp(workerNamePrefix)}-worker-[a-z0-9-]+$`,
-      )
+    ? new RegExp(`^${escapeRegExp(workerNamePrefix)}-worker-[a-z0-9-]+$`)
     : null;
 
   /**

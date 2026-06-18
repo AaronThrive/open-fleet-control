@@ -322,7 +322,11 @@ describe("AC-2 — warm start", () => {
 
     const res = await ctl.acquireWorker("advisor-1", { probeFn: async () => true });
     assert.strictEqual(res.ok, true, "acquire succeeds");
-    assert.deepStrictEqual(docker.calls.start, [wn("warm-1")], "docker start called once for warm-1");
+    assert.deepStrictEqual(
+      docker.calls.start,
+      [wn("warm-1")],
+      "docker start called once for warm-1",
+    );
     // Discovery used docker ps -a with the pool label (never hard-coded).
     assert.ok(docker.calls.ps >= 1, "docker ps queried for pool containers");
   });
@@ -353,7 +357,10 @@ describe("AC-3 — resource cap verification", () => {
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.reason, REASON.MISCAP);
     // It was drained (stopped) and never registered.
-    assert.deepStrictEqual(docker.calls.stop.map((s) => s.name), [wn("badcap-1")]);
+    assert.deepStrictEqual(
+      docker.calls.stop.map((s) => s.name),
+      [wn("badcap-1")],
+    );
   });
 
   it("MemorySwap != Memory (swap enabled) is rejected", async () => {
@@ -414,7 +421,11 @@ describe("AC-5 — readiness gate", () => {
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.reason, REASON.READINESS);
     assert.strictEqual(mesh.calls.register.length, 0, "never registered");
-    assert.deepStrictEqual(docker.calls.stop.map((s) => s.name), [wn("never-1")], "drained");
+    assert.deepStrictEqual(
+      docker.calls.stop.map((s) => s.name),
+      [wn("never-1")],
+      "drained",
+    );
   });
 });
 
@@ -522,7 +533,10 @@ describe("H-1 — die-event eviction guards (label + container id)", () => {
     // generations) → must NOT evict the live, tracked worker.
     docker.emit({
       Action: "die",
-      Actor: { ID: "id-some-other-generation", Attributes: { name: wn("h1b"), "com.ofc.pool": "worker" } },
+      Actor: {
+        ID: "id-some-other-generation",
+        Attributes: { name: wn("h1b"), "com.ofc.pool": "worker" },
+      },
     });
     await new Promise((r) => setImmediate(r));
 
@@ -693,7 +707,10 @@ describe("AC-4 — idle reaper", () => {
 
     const reaped = await ctl.reapIdle();
     assert.strictEqual(reaped, 1, "exactly one idle-old worker reaped");
-    assert.deepStrictEqual(docker.calls.stop.map((s) => s.name), ["idle-old"]);
+    assert.deepStrictEqual(
+      docker.calls.stop.map((s) => s.name),
+      ["idle-old"],
+    );
 
     const names = ctl.getPoolState().workers.map((w) => w.workerId);
     assert.ok(names.includes("idle-fresh"), "fresh idle worker untouched");
@@ -833,7 +850,10 @@ describe("AC-9 — max-lifetime recycle", () => {
 
     // Now the lease settles → settleAndRemove stops + unregisters gracefully.
     await ctl.settleAndRemove("aged-1");
-    assert.deepStrictEqual(docker.calls.stop.map((s) => s.name), ["aged-1"]);
+    assert.deepStrictEqual(
+      docker.calls.stop.map((s) => s.name),
+      ["aged-1"],
+    );
   });
 
   it("idle aged worker is drained immediately on recycle", async () => {
@@ -850,7 +870,10 @@ describe("AC-9 — max-lifetime recycle", () => {
     clock.advance(2000);
     const n = await ctl.recycleAged();
     assert.strictEqual(n, 1);
-    assert.deepStrictEqual(docker.calls.stop.map((s) => s.name), ["aged-idle"]);
+    assert.deepStrictEqual(
+      docker.calls.stop.map((s) => s.name),
+      ["aged-idle"],
+    );
   });
 
   it("jitter spreads recycle times across workers", () => {
@@ -1027,7 +1050,10 @@ describe("W-1 — constructor-injected probeHealthFn (real readiness probe)", ()
         setImmediate(() => callback(res));
         const req = new EventEmitter();
         req.setTimeout = () => {};
-        req.on = (ev, fn) => { EventEmitter.prototype.on.call(req, ev, fn); return req; };
+        req.on = (ev, fn) => {
+          EventEmitter.prototype.on.call(req, ev, fn);
+          return req;
+        };
         req.destroy = () => {};
         req.end = () => {};
         return req;
@@ -1039,12 +1065,20 @@ describe("W-1 — constructor-injected probeHealthFn (real readiness probe)", ()
       return (_worker) =>
         new Promise((resolve) => {
           let settled = false;
-          const settle = (ok) => { if (!settled) { settled = true; resolve(ok); } };
+          const settle = (ok) => {
+            if (!settled) {
+              settled = true;
+              resolve(ok);
+            }
+          };
           const req = requestFn({ hostname: "127.0.0.1", port, path, method: "GET" }, (res) => {
             res.resume();
             settle(res.statusCode === 200);
           });
-          req.setTimeout(3000, () => { req.destroy(); settle(false); });
+          req.setTimeout(3000, () => {
+            req.destroy();
+            settle(false);
+          });
           req.on("error", () => settle(false));
           req.end();
         });

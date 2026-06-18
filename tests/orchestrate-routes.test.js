@@ -90,7 +90,14 @@ function makeOrchestrate(overrides = {}) {
       endedAt: "2026-06-16T00:00:01.000Z",
     };
     runs.set(runId, snapshot);
-    return { runId, mode: "board", agents: snapshot.agents, status: "running", startedAt, completion: Promise.resolve() };
+    return {
+      runId,
+      mode: "board",
+      agents: snapshot.agents,
+      status: "running",
+      startedAt,
+      completion: Promise.resolve(),
+    };
   }
 
   function startChain(params) {
@@ -113,7 +120,14 @@ function makeOrchestrate(overrides = {}) {
       endedAt: "2026-06-16T00:00:01.000Z",
     };
     runs.set(runId, snapshot);
-    return { runId, mode: "chain", agents: snapshot.agents, status: "running", startedAt, completion: Promise.resolve() };
+    return {
+      runId,
+      mode: "chain",
+      agents: snapshot.agents,
+      status: "running",
+      startedAt,
+      completion: Promise.resolve(),
+    };
   }
 
   const module = {

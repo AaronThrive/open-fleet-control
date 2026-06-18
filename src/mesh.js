@@ -349,9 +349,7 @@ function createMesh(options = {}) {
     }
     if (!data || !Array.isArray(data.nodes)) return [];
     // Filter defensively in case a backup has partially-valid records
-    return data.nodes.filter(
-      (n) => n && typeof n === "object" && typeof n.hostname === "string",
-    );
+    return data.nodes.filter((n) => n && typeof n === "object" && typeof n.hostname === "string");
   }
 
   function saveRegistry() {

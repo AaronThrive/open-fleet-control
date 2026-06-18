@@ -165,9 +165,7 @@ function createDockerPool(options = {}) {
     const qs = params.toString() ? `?${params.toString()}` : "";
     // Use pre-encoded filters so URLSearchParams does not double-encode them.
     const apiPath = `/${DOCKER_API_VERSION}/containers/json${all ? "?all=true" : ""}${
-      Object.keys(filters).length > 0
-        ? (all ? "&" : "?") + "filters=" + encodeFilters(filters)
-        : ""
+      Object.keys(filters).length > 0 ? (all ? "&" : "?") + "filters=" + encodeFilters(filters) : ""
     }`;
 
     const res = await socketRequest("GET", apiPath);
@@ -258,14 +256,14 @@ function createDockerPool(options = {}) {
   // request and cancels the reconnect timer so the loop terminates cleanly.
   // -------------------------------------------------------------------------
   function subscribeEvents(handler) {
-    if (typeof handler !== "function") throw new Error("[DockerPool] subscribeEvents: handler must be a function");
+    if (typeof handler !== "function")
+      throw new Error("[DockerPool] subscribeEvents: handler must be a function");
 
     const filters = {
       type: ["container"],
       label: ["com.ofc.pool=worker"],
     };
-    const apiPath =
-      `/${DOCKER_API_VERSION}/events?filters=` + encodeFilters(filters);
+    const apiPath = `/${DOCKER_API_VERSION}/events?filters=` + encodeFilters(filters);
 
     let active = true;
     let currentReq = null;

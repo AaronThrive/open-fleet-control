@@ -223,7 +223,10 @@ describe("runSingle", () => {
     const kanban = makeKanban();
     const dispatch = makeDispatch(kanban, []);
     const orch = makeOrchestrate(kanban, dispatch, { enabled: false });
-    assert.throws(() => orch.runSingle("tsk_1", { agent: "dev" }), (e) => e.statusCode === 503);
+    assert.throws(
+      () => orch.runSingle("tsk_1", { agent: "dev" }),
+      (e) => e.statusCode === 503,
+    );
   });
 });
 
@@ -383,7 +386,13 @@ describe("runBoard", () => {
           kanban._settle(taskId, { result: "success", result_text: opts.agent });
           open -= 1;
         });
-        return { task: { id: taskId }, sessionKey: "k", agent: opts.agent, attemptIndex: 0, completion };
+        return {
+          task: { id: taskId },
+          sessionKey: "k",
+          agent: opts.agent,
+          attemptIndex: 0,
+          completion,
+        };
       },
     };
     const orch = makeOrchestrate(kanban, dispatch);
@@ -443,7 +452,13 @@ describe("runBoard", () => {
           kanban._settle(taskId, { result: "success", result_text: opts.agent });
           open -= 1;
         });
-        return { task: { id: taskId }, sessionKey: "k", agent: opts.agent, attemptIndex: 0, completion };
+        return {
+          task: { id: taskId },
+          sessionKey: "k",
+          agent: opts.agent,
+          attemptIndex: 0,
+          completion,
+        };
       },
     };
     const orch = makeOrchestrate(kanban, dispatch, { sequentialBoard: true });
@@ -467,7 +482,13 @@ describe("runBoard", () => {
           kanban._settle(taskId, { result: "success", result_text: opts.agent });
           open -= 1;
         });
-        return { task: { id: taskId }, sessionKey: "k", agent: opts.agent, attemptIndex: 0, completion };
+        return {
+          task: { id: taskId },
+          sessionKey: "k",
+          agent: opts.agent,
+          attemptIndex: 0,
+          completion,
+        };
       },
     };
     const orch = makeOrchestrate(kanban, dispatch, { sequentialBoard: true });
