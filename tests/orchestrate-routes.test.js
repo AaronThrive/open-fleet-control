@@ -21,10 +21,12 @@ function makeFleet({
   allowed = true,
   dispatchBlock = null,
   orchestrationBlock = null,
+  orchestrationBlockFn = null,
 } = {}) {
   const auditRecords = [];
   const rateChecks = [];
   const alerts = [];
+  const orchBlockArgs = [];
   const fleet = {
     rateLimiter: {
       check: (key) => {
@@ -36,13 +38,16 @@ function makeFleet({
     kanban: { getBoard: () => ({ tasks: [] }) },
     budgets: {
       checkDispatchBlock: () => dispatchBlock,
-      checkOrchestrationBlock: () => orchestrationBlock,
+      checkOrchestrationBlock: (args) => {
+        orchBlockArgs.push(args);
+        return orchestrationBlockFn ? orchestrationBlockFn(args) : orchestrationBlock;
+      },
     },
     fireAlert: (event) => {
       alerts.push(event);
     },
   };
-  return { fleet, auditRecords, rateChecks, alerts };
+  return { fleet, auditRecords, rateChecks, alerts, orchBlockArgs };
 }
 
 /**
@@ -85,7 +90,14 @@ function makeOrchestrate(overrides = {}) {
       endedAt: "2026-06-16T00:00:01.000Z",
     };
     runs.set(runId, snapshot);
-    return { runId, mode: "board", agents: snapshot.agents, status: "running", startedAt, completion: Promise.resolve() };
+    return {
+      runId,
+      mode: "board",
+      agents: snapshot.agents,
+      status: "running",
+      startedAt,
+      completion: Promise.resolve(),
+    };
   }
 
   function startChain(params) {
@@ -108,7 +120,14 @@ function makeOrchestrate(overrides = {}) {
       endedAt: "2026-06-16T00:00:01.000Z",
     };
     runs.set(runId, snapshot);
-    return { runId, mode: "chain", agents: snapshot.agents, status: "running", startedAt, completion: Promise.resolve() };
+    return {
+      runId,
+      mode: "chain",
+      agents: snapshot.agents,
+      status: "running",
+      startedAt,
+      completion: Promise.resolve(),
+    };
   }
 
   const module = {
@@ -225,6 +244,100 @@ describe("POST /api/fleet/orchestrate", () => {
     assert.strictEqual(res.body.reason, "closed-ceiling-exceeded");
     assert.strictEqual(calls.board.length, 0);
     assert.strictEqual(alerts.length, 1);
+  });
+
+  // M-2 — a parallel pool board must be gated on the WHOLE fan-out width BEFORE
+  // K seats fan out (the mid-run CLOSED re-check can only halt later seats once
+  // they have already dispatched).
+  it("M-2: parallel pool board projects perSeatCost × seatCount into the pre-dispatch gate", async () => {
+    const CEILING = 5;
+    const PER_SEAT = 2;
+    // Block fires only when projectedUSD pushes the run to/over the ceiling.
+    const { fleet, alerts, orchBlockArgs } = makeFleet({
+      orchestrationBlockFn: ({ projectedUSD = 0 }) =>
+        projectedUSD >= CEILING
+          ? { reason: "closed-ceiling-exceeded", mode: "closed", message: "projected ceiling" }
+          : null,
+    });
+    // Pool routing ACTIVE + a configured per-seat estimate.
+    const { module, calls } = makeOrchestrate({
+      getStatus: () => ({
+        available: true,
+        enabled: true,
+        timeoutSec: 600,
+        routeToPool: true,
+        perSeatCostUSD: PER_SEAT,
+      }),
+    });
+    const routes = createFleetRoutes({ fleet, orchestrate: module, rosterFn: () => ROSTER });
+
+    // 3 seats × $2 = $6 projected ≥ $5 ceiling → refused BEFORE any fan-out.
+    const res = await call(routes, "POST", ORCH_PATH, {
+      mode: "board",
+      title: "C",
+      question: "Q",
+      agents: ["a", "b", "c"],
+    });
+    assert.strictEqual(res.statusCode, 429, "refused on projected fan-out cost");
+    assert.strictEqual(res.body.reason, "closed-ceiling-exceeded");
+    assert.strictEqual(calls.board.length, 0, "no seats fanned out");
+    assert.strictEqual(alerts.length, 1);
+    // The gate received projectedUSD = perSeat × seatCount.
+    assert.ok(
+      orchBlockArgs.some((a) => a && a.projectedUSD === PER_SEAT * 3),
+      "pre-dispatch gate saw projectedUSD = perSeat × seatCount",
+    );
+  });
+
+  it("M-2: a narrow parallel pool board UNDER the projected ceiling still runs", async () => {
+    const CEILING = 5;
+    const PER_SEAT = 2;
+    const { fleet, alerts } = makeFleet({
+      orchestrationBlockFn: ({ projectedUSD = 0 }) =>
+        projectedUSD >= CEILING
+          ? { reason: "closed-ceiling-exceeded", mode: "closed", message: "projected ceiling" }
+          : null,
+    });
+    const { module, calls } = makeOrchestrate({
+      getStatus: () => ({
+        available: true,
+        enabled: true,
+        timeoutSec: 600,
+        routeToPool: true,
+        perSeatCostUSD: PER_SEAT,
+      }),
+    });
+    const routes = createFleetRoutes({ fleet, orchestrate: module, rosterFn: () => ROSTER });
+    // 2 seats × $2 = $4 < $5 → admitted, board starts.
+    const res = await call(routes, "POST", ORCH_PATH, {
+      mode: "board",
+      title: "C",
+      question: "Q",
+      agents: ["a", "b"],
+    });
+    assert.strictEqual(res.statusCode, 202, "narrow board admitted");
+    assert.strictEqual(calls.board.length, 1, "board fanned out");
+    assert.strictEqual(alerts.length, 0);
+  });
+
+  it("M-2: spawn-disabled board is byte-identical — no projected gate applied", async () => {
+    const { fleet, orchBlockArgs } = makeFleet();
+    // getStatus default has NO routeToPool (spawn disabled).
+    const { module, calls } = makeOrchestrate();
+    const routes = createFleetRoutes({ fleet, orchestrate: module, rosterFn: () => ROSTER });
+    const res = await call(routes, "POST", ORCH_PATH, {
+      mode: "board",
+      title: "C",
+      question: "Q",
+      agents: ["a", "b", "c"],
+    });
+    assert.strictEqual(res.statusCode, 202, "board runs");
+    assert.strictEqual(calls.board.length, 1);
+    // No call ever carried a projectedUSD (the M-2 fan-out gate never engaged).
+    assert.ok(
+      orchBlockArgs.every((a) => !a || a.projectedUSD === undefined),
+      "no projected gate when spawn disabled",
+    );
   });
 
   it("429s when the fleet daily/weekly window block is active (reuses checkDispatchBlock)", async () => {
@@ -425,5 +538,54 @@ describe("POST /api/fleet/orchestrate", () => {
       agents: [],
     });
     assert.strictEqual(res.statusCode, 400);
+  });
+
+  // M-3 — event_id / dedup_key length is bounded at the route boundary (before
+  // it can be written into the durable SQLite dedup table).
+  it("M-3: a 257-char event_id is rejected with 400 before any run", async () => {
+    const { fleet } = makeFleet();
+    const { module, calls } = makeOrchestrate();
+    const routes = createFleetRoutes({ fleet, orchestrate: module, rosterFn: () => ROSTER });
+    const res = await call(routes, "POST", ORCH_PATH, {
+      mode: "board",
+      title: "C",
+      question: "Q",
+      agents: ["a"],
+      event_id: "x".repeat(257),
+    });
+    assert.strictEqual(res.statusCode, 400);
+    assert.match(res.body.error, /256 characters/);
+    assert.strictEqual(calls.board.length, 0, "no run started on an over-long event_id");
+  });
+
+  it("M-3: a 256-char event_id is accepted (boundary)", async () => {
+    const { fleet } = makeFleet();
+    const { module, calls } = makeOrchestrate();
+    const routes = createFleetRoutes({ fleet, orchestrate: module, rosterFn: () => ROSTER });
+    const res = await call(routes, "POST", ORCH_PATH, {
+      mode: "board",
+      title: "C",
+      question: "Q",
+      agents: ["a"],
+      event_id: "y".repeat(256),
+    });
+    assert.strictEqual(res.statusCode, 202, "256-char event_id is within bounds");
+    assert.strictEqual(calls.board.length, 1);
+  });
+
+  it("M-3: an over-long dedup_key alias is also rejected with 400", async () => {
+    const { fleet } = makeFleet();
+    const { module, calls } = makeOrchestrate();
+    const routes = createFleetRoutes({ fleet, orchestrate: module, rosterFn: () => ROSTER });
+    const res = await call(routes, "POST", ORCH_PATH, {
+      mode: "board",
+      title: "C",
+      question: "Q",
+      agents: ["a"],
+      dedup_key: "z".repeat(300),
+    });
+    assert.strictEqual(res.statusCode, 400);
+    assert.match(res.body.error, /256 characters/);
+    assert.strictEqual(calls.board.length, 0);
   });
 });

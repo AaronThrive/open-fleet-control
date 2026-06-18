@@ -103,11 +103,14 @@ const { createDispatch } = require("./dispatch");
 const { createOrchestrate } = require("./orchestrate");
 const { createSettings } = require("./settings");
 const { createDocker } = require("./docker");
+const { createDockerPool } = require("./docker-pool");
 const { createUsageSources } = require("./usage-sources");
 const { createUsageProvider } = require("./budgets");
 const { createTopConsumersSource } = require("./digest");
 const { createAgentsRoster } = require("./agents-roster");
 const { createAgentLocator } = require("./agent-locator");
+const { createSpawnStore } = require("./spawn-store");
+const { createAgentSpawn } = require("./agent-spawn");
 const { createFlightRecorder, createStoreSessionsSource } = require("./flight-recorder");
 const { createTimelineRoutes, isTimelineRoute } = require("./timeline-routes");
 const { createSessionControl } = require("./session-control");
@@ -244,7 +247,6 @@ function recordAudit(user, action, target, detail) {
   }
 }
 
-
 // Jobs routes (src/jobs.js) audit through the shared fleet trail; the
 // recorder is injected so the jobs module stays decoupled from the runtime.
 setAuditRecorder((entry) => fleet.audit.record(entry));
@@ -293,10 +295,30 @@ const dispatch = createDispatch({
 // concurrency cap, and completion promises; LOCAL-only for now (dispatch
 // refuses remote nodes). Lifecycle events broadcast as fleet.kanban so the
 // board view refetches like any other card change.
+// AC-17 — late-binding spawn-controller ref for caller-side remote routing.
+// The agentSpawn controller is only constructed when fleet.spawn.enabled (further
+// down). Orchestrate is wired with a thin proxy that forwards lease/release/drain
+// to the live controller once it exists; when spawn is disabled the proxy stays
+// null and orchestrate's routeToPool gate is off (byte-identical to today).
+const spawnControllerRef = { controller: null };
+const spawnEnabled = !!(CONFIG.fleet.spawn && CONFIG.fleet.spawn.enabled === true);
+const orchestrateSpawnProxy = spawnEnabled
+  ? {
+      lease: (advisorId) => spawnControllerRef.controller?.lease(advisorId) ?? null,
+      release: (workerId, generation) =>
+        spawnControllerRef.controller?.release(workerId, generation),
+      beginDrain: (workerId) => spawnControllerRef.controller?.beginDrain(workerId) ?? false,
+      settleAndRemove: (workerId) => spawnControllerRef.controller?.settleAndRemove(workerId),
+    }
+  : null;
+
 const orchestrate = createOrchestrate({
   kanban: fleet.kanban,
   dispatch,
   config: CONFIG.fleet.orchestrate || {},
+  // AC-17: pool routing + parallel flip engage ONLY when spawn is enabled.
+  spawn: orchestrateSpawnProxy,
+  spawnEnabled,
   onEvent: (event) => {
     // Card-lifecycle events keep going to fleet.kanban so the board refetches.
     broadcastSSE("fleet.kanban", { type: event.type, taskId: event.taskId || null });
@@ -352,6 +374,12 @@ const bulk = createBulk({
   runAction: (name, opts) => executeAction(name, actionDeps, opts),
 });
 
+// AC-11 / AC-22 — late-binding spawn-store ref for dedup at the orchestrate
+// entry. The spawnStore is only constructed when spawn is enabled (further
+// down). This ref object is filled before any HTTP request arrives, so the
+// lazy getter passed to createFleetRoutes always sees the live store.
+const spawnStoreRef = { store: null };
+
 const fleetRoutes = createFleetRoutes({
   fleet,
   settings,
@@ -364,6 +392,9 @@ const fleetRoutes = createFleetRoutes({
   // further down; routes only call this at request time, long after module
   // evaluation completed.
   rosterFn: () => agentsRoster.getRoster(),
+  // AC-11: lazy getter — evaluated at request time, after spawnStoreRef.store
+  // is filled by the spawn block below. Returns null when spawn is disabled.
+  spawnStoreFn: () => spawnStoreRef.store,
 });
 
 // Cron write-actions — enable/disable/run-now for OPENCLAW-source jobs via
@@ -452,6 +483,99 @@ agentLocator = createAgentLocator({
   meshFn: () => fleet.mesh.getState(),
   selfNode: CONFIG.fleet.dispatch.node || os.hostname(),
 });
+
+// On-demand isolated-worker pool controller (src/agent-spawn.js — Phase 3,
+// PRD-001). GATED by CONFIG.fleet.spawn.enabled: when disabled (the default),
+// the controller is constructed as a no-op that never touches docker or mesh,
+// so dispatch/orchestrate behaviour stays byte-identical to today (AC-1). The
+// spawn store (dedup + fencing) and a docker iface adapter are only built when
+// the feature is enabled.
+//
+// AC-11 / AC-22: spawnStoreRef is declared early (before fleetRoutes is
+// constructed above) and filled here so the lazy spawnStoreFn getter passed to
+// createFleetRoutes always sees the live store once enabled. When spawn is
+// disabled, the getter returns null and dedup degrades to no-op.
+let agentSpawn = null;
+if (CONFIG.fleet.spawn && CONFIG.fleet.spawn.enabled === true) {
+  const spawnStore = createSpawnStore({ stateDir: CONFIG.fleet.stateDir });
+  // Wire the store into the route handler via the late-binding ref (set after
+  // createFleetRoutes was called — the getter is evaluated at request time).
+  spawnStoreRef.store = spawnStore;
+  // Build the real Docker pool adapter (src/docker-pool.js). Uses the same
+  // unix-socket idiom as src/docker.js but adds the write operations
+  // (start/stop) and streaming events the spawn controller needs.
+  // Only constructed when spawn is enabled — preserves AC-1 (disabled = inert).
+  const dockerIface = createDockerPool({
+    socketPath: CONFIG.fleet.docker?.socketPath,
+  });
+
+  // W-1 — Real readiness probe (AC-5). GETs http://127.0.0.1:<port><healthPath>
+  // over loopback (workers expose their mapped port on the host) and resolves
+  // true on HTTP 200. Timeout is short (3 s) so the readiness loop stays
+  // responsive. Injectable at call-site (unit tests pass their own probeFn via
+  // opts.probeFn); this function is the constructor-injected default used when
+  // spawn.enabled === true and no per-call override is supplied.
+  const spawnCfgLive = CONFIG.fleet.spawn;
+  const probePort = Number(spawnCfgLive.workerPort) || 443;
+  const probeHealthPath = "/api/health";
+  const probeTimeoutMs = 3000;
+  const probeHealthFn = (worker) =>
+    new Promise((resolve) => {
+      let settled = false;
+      const settle = (ok) => {
+        if (!settled) {
+          settled = true;
+          resolve(ok);
+        }
+      };
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: probePort,
+          path: probeHealthPath,
+          method: "GET",
+        },
+        (res) => {
+          res.resume(); // drain to free socket
+          settle(res.statusCode === 200);
+        },
+      );
+      req.setTimeout(probeTimeoutMs, () => {
+        req.destroy();
+        settle(false);
+      });
+      req.on("error", () => settle(false));
+      req.end();
+    });
+
+  // W-2 — Real MemAvailable reader (AC-15). Reads /proc/meminfo and parses the
+  // MemAvailable line (KiB → bytes). Synchronous: /proc/meminfo is an in-kernel
+  // virtual file — no disk I/O — and the capacity governor calls it inline
+  // before any docker operation, so sync is the right idiom here (mirrors the
+  // os.totalmem() pattern). Injectable at call-site for unit tests; this is the
+  // constructor-injected default used when spawn.enabled === true.
+  const readMemAvailableFn = () => {
+    const raw = fs.readFileSync("/proc/meminfo", "utf8");
+    const m = raw.match(/^MemAvailable:\s+(\d+)\s+kB/m);
+    if (!m) throw new Error("[AgentSpawn] MemAvailable not found in /proc/meminfo");
+    return Number(m[1]) * 1024; // KiB → bytes
+  };
+
+  agentSpawn = createAgentSpawn({
+    config: CONFIG,
+    mesh: fleet.mesh,
+    roster: agentsRoster,
+    store: spawnStore,
+    docker: dockerIface,
+    logger: console,
+    probeHealthFn,
+    readMemAvailableFn,
+  });
+  // AC-17 — publish the live controller to the late-binding ref so orchestrate's
+  // spawn proxy (wired above, before this block) routes seats to leased workers.
+  spawnControllerRef.controller = agentSpawn;
+  agentSpawn.start();
+}
 
 // Agent flight recorder — read-only per-agent activity timeline aggregated
 // from sources the dashboard already collects (sessions store, kanban
@@ -744,7 +868,9 @@ function routeRequest(req, res, pathname, query) {
       // 400s (GET remains the path for the param-less quick actions).
       if (!PRIVILEGED_POST_ACTIONS.has(action)) {
         res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ success: false, action, error: `Unknown POST action: ${action}` }));
+        res.end(
+          JSON.stringify({ success: false, action, error: `Unknown POST action: ${action}` }),
+        );
         return;
       }
 

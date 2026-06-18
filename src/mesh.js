@@ -12,12 +12,13 @@
  * stored in this module.
  */
 
-const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { createTailscaleAdapter } = require("./tailscale");
+const { createSafeStore } = require("./state-safety");
 
 const REGISTRY_FILENAME = "mesh-nodes.json";
+const REGISTRY_BACKUP_DIRNAME = "mesh-nodes-backups";
 const DEFAULT_INTERVAL_MS = 15000;
 const DEFAULT_HEALTH_TIMEOUT_MS = 5000;
 const LATENCY_SAMPLE_LIMIT = 60; // ring buffer size for sparklines
@@ -151,6 +152,53 @@ function pickNumber(...candidates) {
 }
 
 /**
+ * Validate a mesh-registry state object (nodes wrapper).
+ * Enforces `{nodes: Array}` shape and checks that each entry is an object
+ * with at least `id` and `hostname` strings — the minimum identity fields
+ * required to distinguish nodes across reboots and migrations.
+ *
+ * Less-than-full records (missing port / registeredAt / etc.) are accepted
+ * so that legacy registries written before individual fields were added
+ * remain readable and survive the backup/restore cycle without corruption.
+ * Missing fields receive their defaults at access time (e.g. instancePort()
+ * defaults a missing port to 443).
+ *
+ * @param {object} obj
+ * @returns {{ valid: boolean, errors: Array<{path: string, reason: string}> }}
+ */
+function validateRegistry(obj) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) {
+    return {
+      valid: false,
+      errors: [{ path: "", reason: "registry must be a non-array object" }],
+    };
+  }
+  if (!Array.isArray(obj.nodes)) {
+    return {
+      valid: false,
+      errors: [{ path: "nodes", reason: "nodes must be an array" }],
+    };
+  }
+  const errors = [];
+  for (let i = 0; i < obj.nodes.length; i++) {
+    const n = obj.nodes[i];
+    if (!n || typeof n !== "object") {
+      errors.push({ path: `nodes[${i}]`, reason: "must be an object" });
+      continue;
+    }
+    // Minimum identity fields: id + hostname. All other fields are optional
+    // so that legacy/partial records survive the safe-store backup cycle.
+    if (typeof n.id !== "string" || n.id.length === 0) {
+      errors.push({ path: `nodes[${i}].id`, reason: "id must be a non-empty string" });
+    }
+    if (typeof n.hostname !== "string" || n.hostname.length === 0) {
+      errors.push({ path: `nodes[${i}].hostname`, reason: "hostname must be a non-empty string" });
+    }
+  }
+  return errors.length > 0 ? { valid: false, errors } : { valid: true, errors: [] };
+}
+
+/**
  * Best-effort extraction of llm-usage / cost totals from a remote
  * command-center /api/state payload. Tolerates any shape mismatch (nulls).
  *
@@ -275,7 +323,38 @@ function createMesh(options = {}) {
     throw new Error("createMesh requires a stateDir string");
   }
 
+  // ---------------------------------------------------------------------
+  // Registry persistence — createSafeStore (AC-20)
+  //
+  // Replaces the inline temp+rename write with createSafeStore, giving the
+  // registry rotated backups + corrupt-file quarantine/auto-restore parity
+  // with the rest of the safe-store ecosystem. A corrupt registry no longer
+  // silently returns [] — the newest valid backup is auto-restored instead.
+  // ---------------------------------------------------------------------
+
   const registryFile = path.join(stateDir, REGISTRY_FILENAME);
+  const registryBackupDir = path.join(stateDir, REGISTRY_BACKUP_DIRNAME);
+
+  const registryStore = createSafeStore({
+    filePath: registryFile,
+    validate: validateRegistry,
+    backupDir: registryBackupDir,
+    createDefault: () => ({ nodes: [] }),
+  });
+
+  function loadRegistry() {
+    const { data, restored, quarantinedPath } = registryStore.read();
+    if (restored) {
+      console.warn(`[Mesh] Registry was corrupt; auto-restored. Quarantined: ${quarantinedPath}`);
+    }
+    if (!data || !Array.isArray(data.nodes)) return [];
+    // Filter defensively in case a backup has partially-valid records
+    return data.nodes.filter((n) => n && typeof n === "object" && typeof n.hostname === "string");
+  }
+
+  function saveRegistry() {
+    registryStore.write({ nodes });
+  }
 
   // Module-level state
   let nodes = loadRegistry();
@@ -283,29 +362,6 @@ function createMesh(options = {}) {
   const nodeStats = {}; // nodeId -> { costs, vitals, vitalsAt } cached from /api/state
   let pollTimer = null;
   let pollCycle = 0; // increments once per _pollOnce; drives the Nth-poll state refresh
-
-  // ---------------------------------------------------------------------
-  // Registry persistence (atomic: temp file + rename)
-  // ---------------------------------------------------------------------
-
-  function loadRegistry() {
-    try {
-      if (!fs.existsSync(registryFile)) return [];
-      const raw = JSON.parse(fs.readFileSync(registryFile, "utf8"));
-      const list = Array.isArray(raw) ? raw : raw && Array.isArray(raw.nodes) ? raw.nodes : [];
-      return list.filter((n) => n && typeof n === "object" && typeof n.hostname === "string");
-    } catch (e) {
-      console.error(`[Mesh] Failed to load registry from ${registryFile}:`, e.message);
-      return [];
-    }
-  }
-
-  function saveRegistry() {
-    fs.mkdirSync(stateDir, { recursive: true });
-    const tmpFile = `${registryFile}.tmp-${process.pid}`;
-    fs.writeFileSync(tmpFile, JSON.stringify({ nodes }, null, 2));
-    fs.renameSync(tmpFile, registryFile);
-  }
 
   // ---------------------------------------------------------------------
   // Seed auto-registration (zero-touch mesh join)
@@ -746,6 +802,7 @@ module.exports = {
   createMesh,
   composeNodeUrl,
   validateNodeInput,
+  validateRegistry,
   nodeInstanceKey,
   isSameInstance,
   extractNodeCosts,

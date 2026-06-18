@@ -275,10 +275,32 @@ const FLEET_DEFAULTS = {
     enabled: true,
     baseUrl: "",
     maxConcurrent: 3,
-    timeoutSec: 600,
+    // Per-agent run timeout (sets the agent CLI --timeout + open-attempt TTL).
+    // Raised 600 -> 1200: real Codex analytical turns ran >11 min and still
+    // weren't done at 600s. This is the load-bearing timeout — orchestrate's
+    // own wait budget never reaches the agent process.
+    timeoutSec: 1200,
     node: "",
     token: "",
     identity: "",
+  },
+  // Multi-agent orchestration (src/orchestrate.js).
+  // sequentialBoard: when true, board councils dispatch advisors ONE-AT-A-TIME
+  // (each with its own fresh timeout) instead of in parallel — the single-box
+  // reliability default, because a parallel council co-saturates the one gateway
+  // event loop. A per-run `sequential` flag on POST /api/fleet/orchestrate
+  // overrides this (true=force-sequential, false=force-parallel).
+  // timeoutSec: the runner's per-seat WAIT budget; kept >= dispatch.timeoutSec so
+  // the runner never gives up before the agent process is actually killed.
+  orchestrate: {
+    sequentialBoard: true,
+    timeoutSec: 1200,
+    // M-2 — projected USD cost of a single parallel board seat. Used ONLY by the
+    // pre-dispatch budget gate when the worker pool is active and the board fans
+    // seats in parallel: it refuses a board whose projected (perSeatCostUSD ×
+    // seatCount) already reaches the CLOSED ceiling, BEFORE K seats fan out.
+    // 0/unset disables the projection (gate behaves exactly as before).
+    perSeatCostUSD: 0,
   },
   rateLimit: { windowMs: 60000, max: 120 },
   // Cost budgets (USD) over LLM API spend — see src/budgets.js. 0 = no limit.
@@ -305,7 +327,141 @@ const FLEET_DEFAULTS = {
     agentsDir: "",
     hermesDir: "~/.hermes",
   },
+  // On-demand isolated-worker pool (src/agent-spawn.js — AC-21).
+  // Defaults to disabled (enabled:false) so no dispatch/orchestrate behaviour
+  // changes until an operator explicitly opts in. All tunables have sane
+  // defaults that match the KVM8 single-box capacity model (32 GiB RAM,
+  // target 4–6 workers, hard ceiling ~8).
+  //
+  // env > FLEET_CONFIG_JSON > dashboard(.local).json > defaults (same
+  // resolution chain as every other fleet.* block).
+  spawn: {
+    // Feature gate — must be explicitly set to true to activate the pool.
+    enabled: false,
+    // H-2 — this instance's worker-roster name prefix. Pool membership is bound
+    // to a rendered container name `^<prefix>-worker-...$` (NOT the bare
+    // com.ofc.pool label, which is not a trust boundary). Empty = derive from
+    // fleet.dispatch.node; if BOTH are empty the controller fails closed and
+    // registers nothing.
+    workerNamePrefix: "",
+    // H-2 — the controller's OWN authority for the worker health/dispatch port.
+    // When > 0 it is pinned and any com.ofc.pool.port container label is ignored
+    // (a label cannot redirect probes/dispatch). 0 = fall back to the label
+    // (only ever reached after the name-pattern trust check passes).
+    workerPort: 0,
+    // Hard ceiling on the number of concurrent worker containers.
+    poolCeiling: 8,
+    // Desired steady-state pool size (target peak).
+    targetPeak: 6,
+    // Per-worker memory cap (bytes): 2.5 GiB, matches the container's
+    // HostConfig.Memory verified at acquire time (AC-3).
+    workerMemBytes: 2684354560,
+    // Number of consecutive /health OKs required before a worker is
+    // registered in the mesh and considered ready for leasing (AC-5).
+    readinessOks: 3,
+    // Maximum time (ms) to wait for a worker to pass the readiness gate.
+    readinessTimeoutMs: 10000,
+    // Time (ms) a worker may be idle before the reaper stops it (AC-4).
+    idleReapMs: 60000,
+    // Reconcile-loop interval (ms): rebuilds pool from docker ps (AC-8).
+    reconcileMs: 5000,
+    // Max worker lifetime before a drain-and-recycle is triggered (AC-9).
+    maxLifetimeMs: 3600000,
+    // Per-worker recycle jitter window (ms) to spread pool recycling (AC-9).
+    recycleJitterMs: 5000,
+    // Maximum in-flight requests per advisor that can wait in the queue (AC-10).
+    queueMax: 100,
+    // Maximum time (ms) a queued request may wait before timing out (AC-10).
+    queueDeadlineMs: 30000,
+    // Maximum time (ms) to wait for a Slack result before the fallback
+    // "couldn't complete" message is posted (AC-16, must be >= dispatch.timeoutSec).
+    slackDeadlineMs: 3000,
+    // RAM budget (bytes): 80% of 32 GiB; admission refuses spawns that
+    // would exceed this (AC-15).
+    ramBudgetBytes: Math.floor(0.8 * 32 * 1024 * 1024 * 1024),
+    // TTL (ms) for a worker's mesh registration; the controller refreshes
+    // it while the worker is alive; a lapsed TTL triggers unregistration (AC-7).
+    registrationTtlMs: 300000,
+  },
 };
+
+/**
+ * AC-18 — raise dispatch.maxConcurrent in LOCKSTEP with the spawn pool size.
+ *
+ * The dispatch core (src/dispatch.js) enforces a board-wide open-attempt cap:
+ * once `countOpenDispatches(board) >= maxConcurrent`, the next dispatchTask
+ * throws 429. A PARALLEL board of K seats opens K dispatches at once, so if
+ * `maxConcurrent < K` the later seats 429. When the worker pool is enabled
+ * (AC-17 flips boards to parallel and fans each seat to its OWN isolated remote
+ * worker), the cap must rise WITH the pool so a parallel board at the pool
+ * ceiling never trips the rail.
+ *
+ * The relationship is explicit and configured: when `fleet.spawn.enabled === true`,
+ * the EFFECTIVE `maxConcurrent` is at least the pool ceiling
+ * (`max(configured maxConcurrent, spawn.poolCeiling)`). When spawn is disabled
+ * the configured value is preserved verbatim (byte-identical to today — no
+ * lockstep raise, sequential boards never approach the cap).
+ *
+ * This is PURE so it is independently unit-testable (AC-18 test asserts BOTH
+ * directions: raised when enabled, untouched when disabled).
+ *
+ * @param {object} fleet - a (merged) fleet config object with .dispatch + .spawn
+ * @returns {number} the effective maxConcurrent
+ */
+function resolveDispatchConcurrency(fleet) {
+  const dispatch = (fleet && fleet.dispatch) || {};
+  const spawn = (fleet && fleet.spawn) || {};
+  const configured = Number.isInteger(dispatch.maxConcurrent)
+    ? dispatch.maxConcurrent
+    : Number(dispatch.maxConcurrent) || 3;
+  // Spawn disabled: preserve the configured value exactly (no lockstep raise).
+  if (spawn.enabled !== true) return configured;
+  // Spawn enabled: the cap must be at least the pool ceiling so a parallel
+  // board at peak (one seat per worker) never hits the 429 open-attempt rail.
+  const poolCeiling = Number.isInteger(spawn.poolCeiling)
+    ? spawn.poolCeiling
+    : Number(spawn.poolCeiling) || 8;
+  return Math.max(configured, poolCeiling);
+}
+
+/**
+ * AC-17 — parallel-flip GUARD for the board default.
+ *
+ * `fleet.orchestrate.sequentialBoard` controls whether board councils dispatch
+ * advisors one-at-a-time (sequential, the single-box reliability default) or
+ * fan all seats out at once (parallel). Phase 3 flips the DEFAULT to parallel —
+ * but ONLY when the worker pool is enabled, because parallel only becomes safe
+ * once each seat lands on its OWN isolated remote worker (AC-17) instead of
+ * co-saturating the single gateway event loop, and once maxConcurrent rises in
+ * lockstep so the parallel fan-out never trips the 429 cap (AC-18).
+ *
+ * This is a GUARD, NOT an unconditional flip:
+ *   - An EXPLICIT `sequentialBoard` (true OR false) in config always wins.
+ *   - With NO explicit value, the default is `false` (parallel) WHEN spawn is
+ *     enabled, and `true` (sequential) WHEN spawn is disabled — byte-identical
+ *     to today's single-box behaviour.
+ *
+ * The explicit-vs-defaulted distinction is read from the ORIGINAL file/env
+ * fleet section (before defaults are merged in), so the FLEET_DEFAULTS sentinel
+ * does not mask an operator's intent.
+ *
+ * @param {object} fleet - merged fleet config (has .spawn)
+ * @param {object} [rawFleet] - the pre-merge fleet section (file/env), to detect
+ *   an explicit orchestrate.sequentialBoard
+ * @returns {boolean} the effective sequentialBoard default
+ */
+function resolveSequentialBoard(fleet, rawFleet) {
+  const explicit =
+    rawFleet &&
+    rawFleet.orchestrate &&
+    Object.prototype.hasOwnProperty.call(rawFleet.orchestrate, "sequentialBoard")
+      ? rawFleet.orchestrate.sequentialBoard
+      : undefined;
+  if (explicit !== undefined) return explicit === true;
+  const spawnEnabled = !!(fleet && fleet.spawn && fleet.spawn.enabled === true);
+  // No explicit value: parallel default when spawn enabled, else sequential.
+  return spawnEnabled ? false : true;
+}
 
 /**
  * Build the `fleet` config section: defaults <- dashboard(.local).json
@@ -318,6 +474,18 @@ const FLEET_DEFAULTS = {
  * @returns {object} resolved fleet configuration
  */
 function buildFleetConfig(fileFleet) {
+  // Capture the PRE-DEFAULTS fleet section (file + env) so AC-17's parallel-flip
+  // guard can tell an explicit operator `sequentialBoard` from the FLEET_DEFAULTS
+  // sentinel. Merge env over file the same way the main merge does below.
+  let rawFleet = fileFleet ? deepMerge({}, fileFleet) : {};
+  if (process.env.FLEET_CONFIG_JSON) {
+    try {
+      rawFleet = deepMerge(rawFleet, JSON.parse(process.env.FLEET_CONFIG_JSON));
+    } catch (e) {
+      /* the main merge below logs the parse failure */
+    }
+  }
+
   let fleet = deepMerge(FLEET_DEFAULTS, fileFleet || {});
 
   if (process.env.FLEET_CONFIG_JSON) {
@@ -327,6 +495,18 @@ function buildFleetConfig(fileFleet) {
       console.warn("[Config] Invalid FLEET_CONFIG_JSON, ignoring:", e.message);
     }
   }
+
+  // AC-17 — apply the parallel-flip guard to the board default. The merged
+  // `orchestrate.sequentialBoard` carries the FLEET_DEFAULTS sentinel (true);
+  // override it with the spawn-aware resolution unless the operator set it
+  // explicitly (in which case resolveSequentialBoard returns their value).
+  fleet = {
+    ...fleet,
+    orchestrate: {
+      ...fleet.orchestrate,
+      sequentialBoard: resolveSequentialBoard(fleet, rawFleet),
+    },
+  };
 
   const packageRoot = path.join(__dirname, "..");
   const resolvedDirs = {};
@@ -367,6 +547,11 @@ function buildFleetConfig(fileFleet) {
     ...fleet.dispatch,
     token: process.env.FLEET_DISPATCH_TOKEN || fleet.dispatch?.token || "",
     identity: process.env.FLEET_DISPATCH_IDENTITY || fleet.dispatch?.identity || "",
+    // AC-18 — raise maxConcurrent in lockstep with the spawn pool ceiling when
+    // the worker pool is enabled, so a parallel board at peak never trips the
+    // dispatch 429 open-attempt cap. No-op (preserves the configured value)
+    // when spawn is disabled — byte-identical to today.
+    maxConcurrent: resolveDispatchConcurrency(fleet),
   };
 
   return {
@@ -471,9 +656,7 @@ function loadConfig({ secrets = defaultSecrets, localPath } = {}) {
           process.env.AUTH_TAILSCALE_VERIFY_SERVE_ORIGIN === "true" ||
           fileConfig.auth?.tailscale?.verifyServeOrigin === true,
         tailscaledSocket:
-          process.env.AUTH_TAILSCALED_SOCKET ||
-          fileConfig.auth?.tailscale?.tailscaledSocket ||
-          "",
+          process.env.AUTH_TAILSCALED_SOCKET || fileConfig.auth?.tailscale?.tailscaledSocket || "",
       },
     },
 
@@ -522,4 +705,12 @@ const CONFIG = loadConfig();
 console.log("[Config] Workspace:", CONFIG.paths.workspace);
 console.log("[Config] Auth mode:", CONFIG.auth.mode);
 
-module.exports = { CONFIG, loadConfig, detectWorkspace, expandPath, getOpenClawDir };
+module.exports = {
+  CONFIG,
+  loadConfig,
+  detectWorkspace,
+  expandPath,
+  getOpenClawDir,
+  resolveDispatchConcurrency,
+  resolveSequentialBoard,
+};
