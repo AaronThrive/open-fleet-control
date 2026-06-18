@@ -249,6 +249,31 @@ describe("spawn-store module", () => {
       assert.throws(() => sink.accept("node-1", NaN, 1, {}), /generation/);
       assert.throws(() => sink.accept("node-1", 0, NaN, {}), /token/);
     });
+
+    // M-4 — the staleness high-water mark must survive a process restart so a
+    // post-OOM-restart zombie result with an old-but-nonzero token is rejected.
+    it("rejects a superseded token after a simulated restart (durable high-water)", () => {
+      const t1 = 41;
+      const t2 = 42;
+
+      // First process: accept t2 for (node-1, gen 0), then crash (close).
+      const s1 = createSpawnStore({ stateDir });
+      const sink1 = s1.createResultSink();
+      assert.strictEqual(sink1.accept("node-1", 0, t2, { answer: "new" }).accepted, true);
+      s1.close();
+
+      // Fresh process on the SAME DB — a brand-new in-memory map. The old token
+      // t1 (< t2) must STILL be rejected because the high-water mark persisted.
+      const s2 = createSpawnStore({ stateDir });
+      store = s2; // afterEach closes it
+      const sink2 = s2.createResultSink();
+      const out = sink2.accept("node-1", 0, t1, { answer: "zombie" });
+      assert.strictEqual(out.accepted, false, "stale zombie token rejected across restart");
+      assert.strictEqual(out.reason, "stale_token");
+
+      // And a genuinely newer token is still accepted post-restart.
+      assert.strictEqual(sink2.accept("node-1", 0, t2 + 1, {}).accepted, true);
+    });
   });
 
   describe("close()", () => {

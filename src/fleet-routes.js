@@ -14,6 +14,7 @@
  */
 
 const { defaultSecrets } = require("./secrets");
+const { isLoopbackAddr } = require("./auth");
 
 const DEFAULT_BODY_LIMIT = 64 * 1024;
 const BRIEF_BODY_LIMIT = Math.floor(1.25 * 1024 * 1024); // 1MB content + JSON overhead
@@ -192,6 +193,22 @@ function createFleetRoutes({
   // Mesh + costs
   // -------------------------------------------------------------------
 
+  /**
+   * M-5 — whether a request is an internal/localhost call. Genuine internal
+   * paths (the controller, a local CLI) arrive over loopback and are allowed to
+   * write without a Tailscale identity. An external request that reached us over
+   * loopback only because a Tailscale Serve proxy fronts us is distinguishable
+   * by the proxy-injected x-forwarded-for header — such a request is NOT treated
+   * as internal (it must carry a real identity).
+   */
+  function isInternalCall(req) {
+    const remoteAddr = req.socket?.remoteAddress || "";
+    if (!isLoopbackAddr(remoteAddr)) return false;
+    // A Serve-proxied external request is loopback-but-forwarded; require identity.
+    if (req.headers["x-forwarded-for"]) return false;
+    return true;
+  }
+
   async function handleMesh(req, res, method, segments) {
     if (segments.length === 1 && method === "GET") {
       json(res, 200, await fleet.mesh.getState());
@@ -205,6 +222,22 @@ function createFleetRoutes({
       const user = guardMutation(req, res);
       if (!user) return true;
       const body = await readJsonBody(req);
+      // M-5 — reserve registeredBy:"spawn" for the internal controller. An HTTP
+      // caller may not claim it (it would forge a pool-trust marker the spawn
+      // reconcile loop keys off). Reject it outright rather than silently
+      // overriding, so the caller learns the field is privileged.
+      if (typeof body.registeredBy === "string" && body.registeredBy.trim() === "spawn") {
+        json(res, 403, { error: 'registeredBy "spawn" is reserved for the internal controller' });
+        return true;
+      }
+      // M-5 — refuse a mutating mesh write from an anonymous EXTERNAL identity.
+      // Internal/localhost calls (no Tailscale header behind no Serve proxy)
+      // still work, so the controller and local tooling are unaffected.
+      if (user === "anonymous" && !isInternalCall(req)) {
+        json(res, 403, { error: "Mesh registration requires an authenticated identity" });
+        return true;
+      }
+      // registeredBy is always the verified caller identity, never body input.
       const node = fleet.mesh.registerNode({ ...body, registeredBy: user });
       recordAudit(user, "node.register", node.hostname, { id: node.id });
       json(res, 200, { success: true, node });
@@ -213,6 +246,12 @@ function createFleetRoutes({
     if (segments[1] === "nodes" && segments.length === 3 && method === "DELETE") {
       const user = guardMutation(req, res);
       if (!user) return true;
+      // M-5 — same anonymous-external-write refusal for unregister (a mutating
+      // mesh route); internal/localhost callers still pass.
+      if (user === "anonymous" && !isInternalCall(req)) {
+        json(res, 403, { error: "Mesh unregistration requires an authenticated identity" });
+        return true;
+      }
       const removed = fleet.mesh.unregisterNode(segments[2]);
       recordAudit(user, "node.unregister", removed.hostname, { id: removed.id });
       json(res, 200, { success: true, node: removed });
@@ -651,6 +690,12 @@ function createFleetRoutes({
       (typeof body.event_id === "string" && body.event_id.trim()) ||
       (typeof body.dedup_key === "string" && body.dedup_key.trim()) ||
       null;
+    // M-3 — bound the dedup key length at the route boundary (before SQLite).
+    // An unbounded event_id is an attacker-controlled write into the durable
+    // dedup table; reject anything over 256 chars with a clean 400.
+    if (eventId !== null && eventId.length > 256) {
+      throw httpError(400, "event_id/dedup_key must be at most 256 characters");
+    }
     const activeStore = resolveSpawnStore();
     if (eventId && activeStore && typeof activeStore.insertDedup === "function") {
       let dedupResult;
@@ -713,6 +758,36 @@ function createFleetRoutes({
         throw httpError(400, "board mode requires a non-empty 'agents' array");
       }
       for (const agent of body.agents) await requireRosterAgent(agent);
+
+      // M-2 — when the worker pool is active, a board fans K seats IN PARALLEL
+      // before the mid-run CLOSED re-check can halt later seats. So the
+      // pre-dispatch gate must account for the WHOLE fan-out width up front:
+      // refuse if projected (perSeatCost × seatCount) already reaches the CLOSED
+      // ceiling. Guarded by routeToPool + a configured perSeatCostUSD, so when
+      // spawn is disabled (or no estimate is set) this is a no-op and the gate
+      // behaves byte-identically to before.
+      const ostatus =
+        orchestrate && typeof orchestrate.getStatus === "function" ? orchestrate.getStatus() : null;
+      const wantsParallel =
+        typeof body.sequential === "boolean" ? body.sequential === false : true;
+      if (
+        ostatus &&
+        ostatus.routeToPool === true &&
+        wantsParallel &&
+        Number(ostatus.perSeatCostUSD) > 0
+      ) {
+        const projectedUSD = Number(ostatus.perSeatCostUSD) * body.agents.length;
+        if (
+          refuseOrchestration(res, anchorTask, {
+            mode: budgetMode,
+            ceiling,
+            projectedUSD,
+          })
+        ) {
+          return true;
+        }
+      }
+
       // START (sync work only) — returns immediately with a runId. The council
       // runs in the background; the Chief polls GET :runId until done.
       const run = orchestrate.runBoard({

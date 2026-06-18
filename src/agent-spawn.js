@@ -54,6 +54,11 @@ const REASON = Object.freeze({
 
 const BYTES_PER_GIB = 1024 * 1024 * 1024;
 
+/** Escape a string for safe literal embedding in a RegExp (H-2 prefix). */
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * Create the spawn controller.
  *
@@ -80,6 +85,41 @@ function createAgentSpawn({
 } = {}) {
   const spawnCfg = (config && config.fleet && config.fleet.spawn) || {};
   const enabled = spawnCfg.enabled === true;
+
+  // H-2 — instance-scoped roster prefix. Pool membership is bound to a rendered
+  // name `^<prefix>-worker-[a-z0-9-]+$`, NOT the bare `com.ofc.pool` label, so a
+  // foreign container that merely carries the label cannot be adopted into THIS
+  // controller's roster. The prefix is sourced from config (explicit
+  // `fleet.spawn.workerNamePrefix`, else the instance identity
+  // `fleet.dispatch.node`). When unset we FAIL CLOSED: no name can match, so the
+  // controller registers nothing (defence in depth — an unconfigured controller
+  // never trusts a label alone).
+  const workerNamePrefix =
+    (spawnCfg.workerNamePrefix && String(spawnCfg.workerNamePrefix).trim()) ||
+    (config &&
+      config.fleet &&
+      config.fleet.dispatch &&
+      typeof config.fleet.dispatch.node === "string" &&
+      config.fleet.dispatch.node.trim()) ||
+    "";
+  // Built only when a prefix is known; null = fail closed (matches nothing).
+  const workerNamePattern = workerNamePrefix
+    ? new RegExp(
+        `^${escapeRegExp(workerNamePrefix)}-worker-[a-z0-9-]+$`,
+      )
+    : null;
+
+  /**
+   * Whether a container name belongs to THIS instance's worker roster.
+   * Fail closed when no prefix is configured (pattern null → never matches).
+   * @param {string} name
+   * @returns {boolean}
+   */
+  function isInstanceWorkerName(name) {
+    if (typeof name !== "string" || name.length === 0) return false;
+    if (!workerNamePattern) return false;
+    return workerNamePattern.test(name);
+  }
 
   // ---------------------------------------------------------------------
   // In-memory pool state. Keyed by workerId (the container name/id, stable
@@ -379,20 +419,64 @@ function createAgentSpawn({
     const action = String(evt.Action || evt.action || "").toLowerCase();
     const isDeath = action === "die" || action === "oom" || action === "stop" || action === "kill";
     if (!isDeath) return;
+
+    // H-1 (a) — re-verify the event actor still carries OUR pool label. A die
+    // event for a like-named container that is NOT a pool worker (no
+    // `com.ofc.pool=worker` label) must be ignored — it is not ours to evict.
+    if (!eventCarriesPoolLabel(evt)) return;
+
     const name = eventContainerName(evt);
     if (!name) return;
-    if (!pool.has(name)) return;
+    const tracked = pool.get(name);
+    if (!tracked) return;
+
+    // H-1 (b) — bind eviction to the tracked container's recorded ID. The event
+    // ID must match the generation we are tracking under this name; a name
+    // collision across recycle generations (same name, different container ID)
+    // must NOT evict the live worker. If we never recorded an ID we fall back to
+    // name-only (legacy adopt path) — but a present, mismatched ID is rejected.
+    const evtId = eventContainerId(evt);
+    if (tracked.containerId && evtId && evtId !== tracked.containerId) {
+      logger.warn(
+        `[AgentSpawn] ignoring die event for ${name}: container id ${evtId} ` +
+          `does not match tracked id ${tracked.containerId} (name collision)`,
+      );
+      return;
+    }
+
     void evictDead(name);
+  }
+
+  /**
+   * H-1 — true when the docker event's actor attributes carry our pool label.
+   * Docker stamps the container's labels onto `Actor.Attributes` for lifecycle
+   * events, so `com.ofc.pool` is observable on the event itself.
+   */
+  function eventCarriesPoolLabel(evt) {
+    const actor = evt.Actor || evt.actor;
+    const attrs = (actor && (actor.Attributes || actor.attributes)) || null;
+    if (!attrs || typeof attrs !== "object") return false;
+    return attrs[POOL_LABEL] === POOL_LABEL_VALUE;
   }
 
   function eventContainerName(evt) {
     const actor = evt.Actor || evt.actor;
-    if (actor && actor.Attributes && typeof actor.Attributes.name === "string") {
-      return actor.Attributes.name.replace(/^\//, "");
+    const attrs = (actor && (actor.Attributes || actor.attributes)) || null;
+    if (attrs && typeof attrs.name === "string") {
+      return attrs.name.replace(/^\//, "");
     }
     if (typeof evt.name === "string") return evt.name.replace(/^\//, "");
-    if (typeof evt.id === "string") return evt.id;
     return "";
+  }
+
+  /** The container ID an event refers to (Actor.ID is the docker truth). */
+  function eventContainerId(evt) {
+    const actor = evt.Actor || evt.actor;
+    if (actor && typeof actor.ID === "string" && actor.ID) return actor.ID;
+    if (actor && typeof actor.id === "string" && actor.id) return actor.id;
+    if (typeof evt.id === "string" && evt.id) return evt.id;
+    if (typeof evt.Id === "string" && evt.Id) return evt.Id;
+    return null;
   }
 
   // -------------------------------------------------------------------------
@@ -434,6 +518,19 @@ function createAgentSpawn({
       const state = String(c.State || c.state || "").toLowerCase();
       const isRunning = state === "running" || c.running === true;
       if (!isRunning) continue;
+
+      // H-2 — the `com.ofc.pool` label is NOT a fleet-trust boundary. A container
+      // is only this instance's worker if its name ALSO matches the rendered
+      // instance pattern `^<prefix>-worker-...$`. A labelled-but-non-matching
+      // container is foreign: never register, never adopt, never count it live
+      // (so Pass 2 won't unregister a genuine node on its behalf).
+      if (!isInstanceWorkerName(name)) {
+        logger.warn(
+          `[AgentSpawn] reconcile: container ${name} carries the pool label but does not ` +
+            `match this instance's worker pattern; refusing to register/adopt`,
+        );
+        continue;
+      }
       liveNames.add(name);
 
       const inMesh = meshByName.has(name);
@@ -454,7 +551,7 @@ function createAgentSpawn({
           }
           continue;
         }
-        const worker = trackWorker(name, { running: true });
+        const worker = trackWorker(name, { running: true, containerId: containerIdOf(c) });
         const ready = await awaitReadiness(worker, probeFn);
         if (!ready) {
           beginDrain(worker.workerId);
@@ -467,7 +564,7 @@ function createAgentSpawn({
       } else if (inMesh && !tracked) {
         // mesh knows it, pool lost track (post-crash): re-adopt as registered.
         const node = meshByName.get(name);
-        const worker = trackWorker(name, { running: true });
+        const worker = trackWorker(name, { running: true, containerId: containerIdOf(c) });
         worker.registered = true;
         worker.nodeId = node && node.id ? node.id : null;
         worker.registeredAt = nowFn();
@@ -511,12 +608,16 @@ function createAgentSpawn({
    * an ABA recycled container never aliases a stale lease (worker identity is
    * (nodeId, generation)).
    */
-  function trackWorker(containerName, { running } = {}) {
+  function trackWorker(containerName, { running, containerId } = {}) {
     const existing = pool.get(containerName);
     const generation = existing ? existing.generation + 1 : 0;
     const worker = {
       workerId: containerName,
       containerName,
+      // H-1 — record the docker container ID so eviction can bind to the exact
+      // tracked container, not just the name (a recycled-name collision across
+      // generations must never evict a different container).
+      containerId: containerId || null,
       nodeId: null,
       generation,
       state: STATE.IDLE,
@@ -531,6 +632,14 @@ function createAgentSpawn({
     return worker;
   }
 
+  /** Extract the docker container ID from a ps/inspect descriptor. */
+  function containerIdOf(c) {
+    if (!c) return null;
+    if (typeof c.Id === "string" && c.Id) return c.Id;
+    if (typeof c.id === "string" && c.id) return c.id;
+    return null;
+  }
+
   function computeRecycleAt() {
     const base = Number(spawnCfg.maxLifetimeMs) || 3600000;
     const jitterWindow = Number(spawnCfg.recycleJitterMs) || 5000;
@@ -540,6 +649,16 @@ function createAgentSpawn({
 
   /** Register a ready worker in the mesh LAST (AC-5), recording its node id. */
   async function registerWorker(worker, container) {
+    // H-2 — fail closed: never register a worker whose container name is not in
+    // THIS instance's roster pattern. This is the single registration choke
+    // point, so the pattern check here guards acquireWorker AND reconcile, and
+    // an unconfigured controller (no prefix → pattern null) registers nothing.
+    if (!isInstanceWorkerName(worker.containerName)) {
+      logger.warn(
+        `[AgentSpawn] refusing to register ${worker.containerName}: not an instance worker name`,
+      );
+      return false;
+    }
     try {
       const port = workerPort(container);
       const record = await mesh.registerNode({
@@ -560,10 +679,25 @@ function createAgentSpawn({
     }
   }
 
+  // H-2 — the health-probe / dispatch port is pinned from the controller's OWN
+  // config (`fleet.spawn.workerPort`), NOT read from a container label as
+  // authority. A container can set `com.ofc.pool.port` to anything; trusting it
+  // would let a foreign/compromised container redirect the controller's probes
+  // and dispatch to an arbitrary port. When a pinned port is configured it wins
+  // unconditionally; only when UNPINNED do we fall back to the label value (and
+  // even then only after the name-pattern trust check in reconcile/register has
+  // already passed).
+  function pinnedWorkerPort() {
+    const p = Number(spawnCfg.workerPort);
+    return Number.isInteger(p) && p > 0 && p <= 65535 ? p : null;
+  }
+
   function workerPort(container) {
+    const pinned = pinnedWorkerPort();
+    if (pinned !== null) return pinned;
     const labels = (container && (container.Labels || container.labels)) || {};
     const p = Number(labels[`${POOL_LABEL}.port`]);
-    return Number.isInteger(p) && p > 0 ? p : 443;
+    return Number.isInteger(p) && p > 0 && p <= 65535 ? p : 443;
   }
 
   function workerHealthPath(container) {
@@ -598,7 +732,7 @@ function createAgentSpawn({
 
     const name = containerName(target);
     await docker.start(name);
-    const worker = trackWorker(name, { running: true });
+    const worker = trackWorker(name, { running: true, containerId: containerIdOf(target) });
 
     // AC-3 — verify the cap on the *started* container; mis-cap → drain + fail.
     const inspect = await docker.inspect(name);
