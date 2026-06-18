@@ -295,6 +295,12 @@ const FLEET_DEFAULTS = {
   orchestrate: {
     sequentialBoard: true,
     timeoutSec: 1200,
+    // M-2 — projected USD cost of a single parallel board seat. Used ONLY by the
+    // pre-dispatch budget gate when the worker pool is active and the board fans
+    // seats in parallel: it refuses a board whose projected (perSeatCostUSD ×
+    // seatCount) already reaches the CLOSED ceiling, BEFORE K seats fan out.
+    // 0/unset disables the projection (gate behaves exactly as before).
+    perSeatCostUSD: 0,
   },
   rateLimit: { windowMs: 60000, max: 120 },
   // Cost budgets (USD) over LLM API spend — see src/budgets.js. 0 = no limit.
@@ -332,6 +338,17 @@ const FLEET_DEFAULTS = {
   spawn: {
     // Feature gate — must be explicitly set to true to activate the pool.
     enabled: false,
+    // H-2 — this instance's worker-roster name prefix. Pool membership is bound
+    // to a rendered container name `^<prefix>-worker-...$` (NOT the bare
+    // com.ofc.pool label, which is not a trust boundary). Empty = derive from
+    // fleet.dispatch.node; if BOTH are empty the controller fails closed and
+    // registers nothing.
+    workerNamePrefix: "",
+    // H-2 — the controller's OWN authority for the worker health/dispatch port.
+    // When > 0 it is pinned and any com.ofc.pool.port container label is ignored
+    // (a label cannot redirect probes/dispatch). 0 = fall back to the label
+    // (only ever reached after the name-pattern trust check passes).
+    workerPort: 0,
     // Hard ceiling on the number of concurrent worker containers.
     poolCeiling: 8,
     // Desired steady-state pool size (target peak).

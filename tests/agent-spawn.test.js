@@ -12,6 +12,15 @@ const { createAgentSpawn, STATE, REASON } = require("../src/agent-spawn");
 // 2.5 GiB — the verified per-worker cap (AC-3).
 const WORKER_MEM = 2684354560;
 
+// H-2 — every pool worker container is named under this instance's roster
+// prefix (`^<prefix>-worker-...$`). The controller now refuses to register or
+// adopt any container whose name doesn't match, so tests render compliant names.
+const WORKER_PREFIX = "ofc";
+/** Render an instance-compliant worker container name from a short suffix. */
+function wn(suffix) {
+  return `${WORKER_PREFIX}-worker-${suffix}`;
+}
+
 // -------------------------------------------------------------------------
 // Test harness: a fake clock + recording stubs.
 // -------------------------------------------------------------------------
@@ -108,15 +117,29 @@ function makeRoster(roster = { agents: [], byNode: {}, counts: {} }) {
   return { getRoster: async () => roster };
 }
 
-function stoppedContainer(name) {
+// Containers are auto-named under the instance prefix (`ofc-worker-<suffix>`)
+// so they pass the H-2 name-pattern trust check. Callers pass a short suffix;
+// the rendered name is `wn(suffix)`.
+function stoppedContainer(suffix) {
   return {
-    Names: [`/${name}`],
+    Id: `id-${suffix}`,
+    Names: [`/${wn(suffix)}`],
     State: "exited",
     Labels: { "com.ofc.pool": "worker" },
   };
 }
-function runningContainer(name) {
+function runningContainer(suffix) {
   return {
+    Id: `id-${suffix}`,
+    Names: [`/${wn(suffix)}`],
+    State: "running",
+    Labels: { "com.ofc.pool": "worker" },
+  };
+}
+/** A container that carries the pool label but a FOREIGN (non-instance) name. */
+function foreignContainer(name) {
+  return {
+    Id: `id-${name}`,
     Names: [`/${name}`],
     State: "running",
     Labels: { "com.ofc.pool": "worker" },
@@ -133,6 +156,9 @@ function makeController(overrides = {}) {
     fleet: {
       spawn: {
         enabled: true,
+        // H-2 — this instance's worker roster prefix; container names must match
+        // `^ofc-worker-...$` to be registered/adopted.
+        workerNamePrefix: WORKER_PREFIX,
         poolCeiling: 8,
         targetPeak: 6,
         workerMemBytes: WORKER_MEM,
@@ -296,7 +322,7 @@ describe("AC-2 — warm start", () => {
 
     const res = await ctl.acquireWorker("advisor-1", { probeFn: async () => true });
     assert.strictEqual(res.ok, true, "acquire succeeds");
-    assert.deepStrictEqual(docker.calls.start, ["warm-1"], "docker start called once for warm-1");
+    assert.deepStrictEqual(docker.calls.start, [wn("warm-1")], "docker start called once for warm-1");
     // Discovery used docker ps -a with the pool label (never hard-coded).
     assert.ok(docker.calls.ps >= 1, "docker ps queried for pool containers");
   });
@@ -319,7 +345,7 @@ describe("AC-3 — resource cap verification", () => {
     const docker = makeDocker({
       containers: [stoppedContainer("badcap-1")],
       inspect: {
-        "badcap-1": { HostConfig: { Memory: 999, MemorySwap: 999 } },
+        [wn("badcap-1")]: { HostConfig: { Memory: 999, MemorySwap: 999 } },
       },
     });
     const { ctl } = makeController({ docker });
@@ -327,14 +353,14 @@ describe("AC-3 — resource cap verification", () => {
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.reason, REASON.MISCAP);
     // It was drained (stopped) and never registered.
-    assert.deepStrictEqual(docker.calls.stop.map((s) => s.name), ["badcap-1"]);
+    assert.deepStrictEqual(docker.calls.stop.map((s) => s.name), [wn("badcap-1")]);
   });
 
   it("MemorySwap != Memory (swap enabled) is rejected", async () => {
     const docker = makeDocker({
       containers: [stoppedContainer("swap-1")],
       inspect: {
-        "swap-1": { HostConfig: { Memory: WORKER_MEM, MemorySwap: WORKER_MEM * 2 } },
+        [wn("swap-1")]: { HostConfig: { Memory: WORKER_MEM, MemorySwap: WORKER_MEM * 2 } },
       },
     });
     const { ctl } = makeController({ docker });
@@ -388,7 +414,7 @@ describe("AC-5 — readiness gate", () => {
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.reason, REASON.READINESS);
     assert.strictEqual(mesh.calls.register.length, 0, "never registered");
-    assert.deepStrictEqual(docker.calls.stop.map((s) => s.name), ["never-1"], "drained");
+    assert.deepStrictEqual(docker.calls.stop.map((s) => s.name), [wn("never-1")], "drained");
   });
 });
 
@@ -408,12 +434,18 @@ describe("AC-7 — leaked-registration eviction", () => {
     const nodeId = res.worker.nodeId;
     assert.ok(nodeId);
 
-    // Emit a die event for the container; controller auto-unregisters.
-    docker.emit({ Action: "die", Actor: { Attributes: { name: "evict-1" } } });
+    // Emit a labelled die event for the tracked container + id; auto-unregisters.
+    docker.emit({
+      Action: "die",
+      Actor: {
+        ID: "id-evict-1",
+        Attributes: { name: wn("evict-1"), "com.ofc.pool": "worker" },
+      },
+    });
     await new Promise((r) => setImmediate(r)); // let the async evict settle
 
     assert.ok(mesh.calls.unregister.includes(nodeId), "DELETE issued for the dead node");
-    const tracked = ctl.getPoolState().workers.find((w) => w.workerId === "evict-1");
+    const tracked = ctl.getPoolState().workers.find((w) => w.workerId === wn("evict-1"));
     assert.strictEqual(tracked, undefined, "removed from pool");
     ctl.stop();
   });
@@ -442,10 +474,146 @@ describe("AC-7 — leaked-registration eviction", () => {
     const { ctl } = makeController({ docker });
     const res = await ctl.acquireWorker("advisor-1", { probeFn: async () => true });
     // Emit die twice — the second unregister 404s but must not throw.
-    docker.emit({ Action: "die", Actor: { Attributes: { name: "g404-1" } } });
+    const dieEvt = {
+      Action: "die",
+      Actor: {
+        ID: "id-g404-1",
+        Attributes: { name: wn("g404-1"), "com.ofc.pool": "worker" },
+      },
+    };
+    docker.emit(dieEvt);
     await new Promise((r) => setImmediate(r));
-    assert.doesNotThrow(() => ctl.onDockerEvent({ Action: "die", id: "g404-1" }));
+    assert.doesNotThrow(() => ctl.onDockerEvent(dieEvt));
     assert.strictEqual(res.ok, true);
+  });
+});
+
+// =========================================================================
+// H-1 — die-event eviction is label- AND id-bound (security remediation)
+// =========================================================================
+describe("H-1 — die-event eviction guards (label + container id)", () => {
+  it("a die event for a pooled name WITHOUT the pool label does NOT evict", async () => {
+    const docker = makeDocker({ containers: [stoppedContainer("h1a")] });
+    const { ctl, mesh } = makeController({ docker });
+    ctl.start();
+    const res = await ctl.acquireWorker("advisor-1", { probeFn: async () => true });
+    assert.strictEqual(res.ok, true);
+    const nodeId = res.worker.nodeId;
+
+    // Same name, but the actor carries NO com.ofc.pool label → must be ignored.
+    docker.emit({ Action: "die", Actor: { ID: "id-h1a", Attributes: { name: wn("h1a") } } });
+    await new Promise((r) => setImmediate(r));
+
+    assert.ok(!mesh.calls.unregister.includes(nodeId), "no DELETE issued for unlabelled event");
+    const tracked = ctl.getPoolState().workers.find((w) => w.workerId === wn("h1a"));
+    assert.ok(tracked, "worker is still tracked (not evicted)");
+    ctl.stop();
+  });
+
+  it("a labelled die event with a MISMATCHED container id does NOT evict", async () => {
+    const docker = makeDocker({ containers: [stoppedContainer("h1b")] });
+    const { ctl, mesh } = makeController({ docker });
+    ctl.start();
+    const res = await ctl.acquireWorker("advisor-1", { probeFn: async () => true });
+    assert.strictEqual(res.ok, true);
+    const nodeId = res.worker.nodeId;
+
+    // Right name + label, but a DIFFERENT container ID (a name-collision across
+    // generations) → must NOT evict the live, tracked worker.
+    docker.emit({
+      Action: "die",
+      Actor: { ID: "id-some-other-generation", Attributes: { name: wn("h1b"), "com.ofc.pool": "worker" } },
+    });
+    await new Promise((r) => setImmediate(r));
+
+    assert.ok(!mesh.calls.unregister.includes(nodeId), "no DELETE for the wrong container id");
+    const tracked = ctl.getPoolState().workers.find((w) => w.workerId === wn("h1b"));
+    assert.ok(tracked, "the live worker survives a foreign-id die event");
+    ctl.stop();
+  });
+
+  it("a legit labelled die for the tracked id DOES evict", async () => {
+    const docker = makeDocker({ containers: [stoppedContainer("h1c")] });
+    const { ctl, mesh } = makeController({ docker });
+    ctl.start();
+    const res = await ctl.acquireWorker("advisor-1", { probeFn: async () => true });
+    assert.strictEqual(res.ok, true);
+    const nodeId = res.worker.nodeId;
+
+    docker.emit({
+      Action: "die",
+      Actor: { ID: "id-h1c", Attributes: { name: wn("h1c"), "com.ofc.pool": "worker" } },
+    });
+    await new Promise((r) => setImmediate(r));
+
+    assert.ok(mesh.calls.unregister.includes(nodeId), "DELETE issued for the matching id");
+    const tracked = ctl.getPoolState().workers.find((w) => w.workerId === wn("h1c"));
+    assert.strictEqual(tracked, undefined, "evicted");
+    ctl.stop();
+  });
+});
+
+// =========================================================================
+// H-2 — registration is bound to the instance worker-name pattern + pinned port
+// =========================================================================
+describe("H-2 — instance-scoped registration + pinned port", () => {
+  it("a labelled but NON-matching container name is NOT registered (reconcile)", async () => {
+    // Foreign container carries com.ofc.pool=worker but a name outside the
+    // instance pattern → must never be registered/adopted.
+    const docker = makeDocker({ containers: [foreignContainer("totally-unrelated")] });
+    const mesh = makeMesh({ nodes: [] });
+    const { ctl } = makeController({ docker, mesh });
+
+    const out = await ctl.reconcile({ probeFn: async () => true });
+    assert.strictEqual(out.registered, 0, "foreign-named container not registered");
+    assert.strictEqual(mesh.calls.register.length, 0);
+  });
+
+  it("a correctly-named instance worker IS registered with the pinned port", async () => {
+    const docker = makeDocker({ containers: [runningContainer("h2-1")] });
+    const mesh = makeMesh({ nodes: [] });
+    const { ctl } = makeController({ docker, mesh, spawnCfg: { workerPort: 8443 } });
+
+    const out = await ctl.reconcile({ probeFn: async () => true });
+    assert.strictEqual(out.registered, 1, "instance-named container registered");
+    assert.strictEqual(mesh.calls.register.length, 1);
+    assert.strictEqual(mesh.calls.register[0].hostname, wn("h2-1"));
+    // Port is pinned from controller config, NOT read from any container label.
+    assert.strictEqual(mesh.calls.register[0].port, 8443, "port pinned from config");
+  });
+
+  it("an UNPINNED label port is ignored when no prefix is configured (fail closed)", async () => {
+    // No workerNamePrefix AND no fleet.dispatch.node → pattern null → registers
+    // nothing, even for a labelled, otherwise-pool-shaped container.
+    const docker = makeDocker({ containers: [runningContainer("h2-2")] });
+    const mesh = makeMesh({ nodes: [] });
+    const clock = makeClock();
+    const config = {
+      fleet: {
+        spawn: {
+          enabled: true,
+          poolCeiling: 8,
+          workerMemBytes: WORKER_MEM,
+          readinessOks: 3,
+          readinessTimeoutMs: 10000,
+          ramBudgetBytes: Math.floor(0.8 * 32 * 1024 * 1024 * 1024),
+          // NOTE: no workerNamePrefix.
+        },
+      },
+    };
+    const ctl = createAgentSpawn({
+      config,
+      mesh: mesh.iface,
+      roster: makeRoster(),
+      store: makeStore(),
+      docker: docker.iface,
+      logger: { info() {}, warn() {}, error() {} },
+      nowFn: clock.now,
+      jitterFn: () => 0,
+    });
+    const out = await ctl.reconcile({ probeFn: async () => true });
+    assert.strictEqual(out.registered, 0, "unconfigured controller registers nothing");
+    assert.strictEqual(mesh.calls.register.length, 0);
   });
 });
 
@@ -484,7 +652,7 @@ describe("AC-8 — reconciliation loop", () => {
     });
     const mesh = makeMesh({
       nodes: [
-        { id: "nb", hostname: "recon-b", registeredBy: "spawn" },
+        { id: "nb", hostname: wn("recon-b"), registeredBy: "spawn" },
         { id: "ng", hostname: "ghost", registeredBy: "spawn" },
       ],
     });
@@ -493,7 +661,7 @@ describe("AC-8 — reconciliation loop", () => {
     const out = await ctl.reconcile({ probeFn: async () => true });
     assert.strictEqual(out.registered, 1, "recon-a registered");
     assert.strictEqual(out.unregistered, 1, "ghost unregistered");
-    assert.ok(mesh.calls.register.some((r) => r.hostname === "recon-a"));
+    assert.ok(mesh.calls.register.some((r) => r.hostname === wn("recon-a")));
     assert.ok(mesh.calls.unregister.includes("ng"));
   });
 });
@@ -738,8 +906,8 @@ describe("AC-12 — drain semantics", () => {
     const { ctl, mesh } = makeController({ docker });
     const res = await ctl.acquireWorker("advisor-1", { probeFn: async () => true });
     const nodeId = res.worker.nodeId;
-    ctl.beginDrain("dr-3");
-    await ctl.settleAndRemove("dr-3");
+    ctl.beginDrain(wn("dr-3"));
+    await ctl.settleAndRemove(wn("dr-3"));
     assert.ok(mesh.calls.unregister.includes(nodeId), "node unregistered on drain-complete");
   });
 });

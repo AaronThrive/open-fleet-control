@@ -600,6 +600,10 @@ describe("getStatus", () => {
       available: true,
       enabled: true,
       timeoutSec: 300,
+      // M-2 — pre-dispatch fan-out gate inputs. Spawn disabled here, so pool
+      // routing is off and no per-seat projection is configured.
+      routeToPool: false,
+      perSeatCostUSD: 0,
     });
   });
 });

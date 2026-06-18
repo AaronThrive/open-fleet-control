@@ -125,21 +125,64 @@ function createSpawnStore({ stateDir, nowFn = Date.now } = {}) {
   }
 
   // -------------------------------------------------------------------------
+  // Table 3: result_high_water (M-4)
+  //
+  // Durable per-(nodeId, generation) high-water mark of the highest accepted
+  // result token. The result sink's staleness guard MUST survive a process
+  // restart: an in-memory-only map resets on restart, so a post-OOM-restart
+  // zombie result carrying an old-but-nonzero token would be wrongly accepted.
+  // Persisting the high-water mark here means a fresh sink on the same DB still
+  // rejects a token that was already superseded before the crash.
+  // -------------------------------------------------------------------------
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS result_high_water (
+      node_id    TEXT    NOT NULL,
+      generation INTEGER NOT NULL,
+      token      INTEGER NOT NULL,
+      PRIMARY KEY (node_id, generation)
+    )
+  `);
+
+  const getHighWaterStmt = db.prepare(
+    "SELECT token FROM result_high_water WHERE node_id = ? AND generation = ?",
+  );
+
+  // Insert-or-raise: only advances the stored token when the new one is higher.
+  // The WHERE on the DO UPDATE makes a stale (lower) token a no-op write.
+  const upsertHighWaterStmt = db.prepare(`
+    INSERT INTO result_high_water (node_id, generation, token)
+    VALUES (?, ?, ?)
+    ON CONFLICT (node_id, generation) DO UPDATE SET token = excluded.token
+      WHERE excluded.token > result_high_water.token
+  `);
+
+  const clearHighWaterStmt = db.prepare("DELETE FROM result_high_water");
+
+  // -------------------------------------------------------------------------
   // Result sink (AC-14 cont.)
   // -------------------------------------------------------------------------
 
   /**
    * Create a result sink that rejects stale-token results.
    *
-   * Tracks the highest accepted token for each (nodeId, generation) pair.
-   * A result whose token is strictly less than the latest accepted token
-   * for that pair is rejected (stale zombie result).
+   * Tracks the highest accepted token for each (nodeId, generation) pair in a
+   * DURABLE sqlite table (M-4), so the fencing guarantee survives a process
+   * restart: a fresh sink on the same DB still rejects a token that was already
+   * superseded before the crash. An in-memory map fronts the table purely as a
+   * read cache; the table is the source of truth.
    *
    * @returns {{ accept: function, reset: function }}
    */
   function createResultSink() {
-    // Map key: `${nodeId}:${generation}` → highest accepted token
+    // Hot cache: `${nodeId}:${generation}` → highest accepted token. Authoritative
+    // value lives in result_high_water; the cache only avoids a read per accept.
     const highWater = new Map();
+
+    function durableHighWater(nodeId, generation) {
+      const row = getHighWaterStmt.get(nodeId, generation);
+      return row && row.token != null ? Number(row.token) : undefined;
+    }
 
     /**
      * @param {string} nodeId
@@ -160,21 +203,33 @@ function createSpawnStore({ stateDir, nowFn = Date.now } = {}) {
       }
 
       const key = `${nodeId}:${generation}`;
-      const current = highWater.get(key);
+      // Source of truth is the durable table; fall back to the cache only when
+      // the table has no row yet (and reconcile the cache from the table so a
+      // restart's first read is correct).
+      let current = durableHighWater(nodeId, generation);
+      if (current === undefined) current = highWater.get(key);
 
       if (current !== undefined && token < current) {
         return { accepted: false, reason: "stale_token" };
       }
 
-      highWater.set(key, token);
+      // Persist durably (monotonic: the WHERE clause ignores a non-advancing
+      // token), then refresh the cache.
+      upsertHighWaterStmt.run(nodeId, generation, token);
+      highWater.set(key, Math.max(current === undefined ? token : current, token));
       return { accepted: true, reason: null, result };
     }
 
     /**
-     * Reset all high-water marks (for tests).
+     * Reset all high-water marks — both the in-memory cache AND the durable
+     * table (explicit operator/test action). NOTE: this is distinct from the
+     * M-4 durability guarantee, which is about a process RESTART (a fresh sink
+     * that never calls reset() still sees the persisted marks). reset() is the
+     * deliberate "forget everything" escape hatch, not a restart.
      */
     function reset() {
       highWater.clear();
+      clearHighWaterStmt.run();
     }
 
     return { accept, reset };

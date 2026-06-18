@@ -1010,10 +1010,39 @@ function createOrchestrate(options = {}) {
    * @returns {{available: boolean, enabled: boolean, timeoutSec: number}}
    */
   function getStatus() {
-    return { available: enabled, enabled, timeoutSec: defaultTimeoutSec };
+    return {
+      available: enabled,
+      enabled,
+      timeoutSec: defaultTimeoutSec,
+      // M-2 — expose whether parallel pool routing is active and the projected
+      // per-seat cost, so the route's PRE-DISPATCH budget gate can refuse a
+      // wide parallel board BEFORE it fans K seats (the mid-run CLOSED re-check
+      // can only halt later seats once they have already been dispatched).
+      routeToPool,
+      perSeatCostUSD: projectedSeatCostUSD(),
+    };
   }
 
-  return { runSingle, runBoard, runChain, getStatus, getRun, waitForRun };
+  /**
+   * Projected USD cost of a single board seat, for the pre-dispatch gate (M-2).
+   * Sourced from config (`fleet.orchestrate.perSeatCostUSD`); 0/unset disables
+   * the projection (the gate then behaves exactly as before — no false refusals
+   * when no estimate is configured).
+   */
+  function projectedSeatCostUSD() {
+    const v = Number(config && config.perSeatCostUSD);
+    return Number.isFinite(v) && v > 0 ? v : 0;
+  }
+
+  return {
+    runSingle,
+    runBoard,
+    runChain,
+    getStatus,
+    getRun,
+    waitForRun,
+    projectedSeatCostUSD,
+  };
 }
 
 module.exports = {
