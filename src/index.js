@@ -295,10 +295,30 @@ const dispatch = createDispatch({
 // concurrency cap, and completion promises; LOCAL-only for now (dispatch
 // refuses remote nodes). Lifecycle events broadcast as fleet.kanban so the
 // board view refetches like any other card change.
+// AC-17 — late-binding spawn-controller ref for caller-side remote routing.
+// The agentSpawn controller is only constructed when fleet.spawn.enabled (further
+// down). Orchestrate is wired with a thin proxy that forwards lease/release/drain
+// to the live controller once it exists; when spawn is disabled the proxy stays
+// null and orchestrate's routeToPool gate is off (byte-identical to today).
+const spawnControllerRef = { controller: null };
+const spawnEnabled = !!(CONFIG.fleet.spawn && CONFIG.fleet.spawn.enabled === true);
+const orchestrateSpawnProxy = spawnEnabled
+  ? {
+      lease: (advisorId) => spawnControllerRef.controller?.lease(advisorId) ?? null,
+      release: (workerId, generation) =>
+        spawnControllerRef.controller?.release(workerId, generation),
+      beginDrain: (workerId) => spawnControllerRef.controller?.beginDrain(workerId) ?? false,
+      settleAndRemove: (workerId) => spawnControllerRef.controller?.settleAndRemove(workerId),
+    }
+  : null;
+
 const orchestrate = createOrchestrate({
   kanban: fleet.kanban,
   dispatch,
   config: CONFIG.fleet.orchestrate || {},
+  // AC-17: pool routing + parallel flip engage ONLY when spawn is enabled.
+  spawn: orchestrateSpawnProxy,
+  spawnEnabled,
   onEvent: (event) => {
     // Card-lifecycle events keep going to fleet.kanban so the board refetches.
     broadcastSSE("fleet.kanban", { type: event.type, taskId: event.taskId || null });
@@ -498,6 +518,9 @@ if (CONFIG.fleet.spawn && CONFIG.fleet.spawn.enabled === true) {
     docker: dockerIface,
     logger: console,
   });
+  // AC-17 — publish the live controller to the late-binding ref so orchestrate's
+  // spawn proxy (wired above, before this block) routes seats to leased workers.
+  spawnControllerRef.controller = agentSpawn;
   agentSpawn.start();
 }
 
