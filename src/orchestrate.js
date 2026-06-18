@@ -224,32 +224,45 @@ function withTimeout(promise, ms, setTimer = setTimeout) {
   });
 }
 
+// AC-19 — explicit failure copy surfaced when result_text is null.
+// This is the canonical "couldn't complete" message surfaced to the caller
+// (board results, chain final) when a run's result_text is null (unparseable
+// stdout / no output / failure). NEVER the 300-char note snippet.
+//
+// AC-16 / AC-22 boundary comment:
+//   OFC provides the terminal result/status + reason to the caller (openclaw's
+//   Chief). Updating the Slack "working…" message (chat.update) is openclaw's
+//   job — its Bolt provider already does this. OFC's obligation is to reliably
+//   surface text:FAILURE_RESULT_COPY when result_text is null so openclaw's
+//   Chief always has a terminal result to post, preventing a "working…" hang.
+const FAILURE_RESULT_COPY =
+  "The agent could not complete this request — please try again.";
+
 /**
  * Read the FULL agent answer back off a settled attempt.
  *
- * Preference order:
- *   1. attempt.result_text — the full output (sibling dispatch change; see
- *      header). This is the field board/chain are designed around.
- *   2. attempt.note "… · result: <snippet>" — the legacy 300-char snippet, so
- *      the module works BEFORE result_text lands. Flagged truncated:true.
+ * AC-19 contract:
+ *   1. attempt.result_text (non-empty string) → { text: result_text, truncated: false }
+ *   2. result_text null/absent (unparseable stdout, no output, failure) →
+ *      { text: null, truncated: false, failureCopy: FAILURE_RESULT_COPY }
+ *
+ * INTENTIONALLY NO note fallback. The 300-char note is a human-readable audit
+ * field only; surfacing it as a result would violate AC-19. If result_text is
+ * absent, the caller surfaces FAILURE_RESULT_COPY (AC-16 / AC-22).
  *
  * @param {object|null} attempt - task.attempts[attemptIndex] after settle
- * @returns {{text: string|null, truncated: boolean}}
+ * @returns {{text: string|null, truncated: boolean, failureCopy: string|null}}
  */
 function readAttemptResultText(attempt) {
-  if (!attempt || typeof attempt !== "object") return { text: null, truncated: false };
+  if (!attempt || typeof attempt !== "object") {
+    return { text: null, truncated: false, failureCopy: FAILURE_RESULT_COPY };
+  }
   if (typeof attempt.result_text === "string" && attempt.result_text.length > 0) {
-    return { text: attempt.result_text, truncated: false };
+    return { text: attempt.result_text, truncated: false, failureCopy: null };
   }
-  // Fallback: pull the snippet back out of the note ("… · result: <snippet>").
-  if (typeof attempt.note === "string") {
-    const idx = attempt.note.lastIndexOf(RESULT_TEXT_NOTE_PREFIX);
-    if (idx !== -1) {
-      const snippet = attempt.note.slice(idx + RESULT_TEXT_NOTE_PREFIX.length).trim();
-      if (snippet.length > 0) return { text: snippet, truncated: true };
-    }
-  }
-  return { text: null, truncated: false };
+  // result_text is null/absent: surface the explicit failure copy (AC-19).
+  // NEVER fall back to the note snippet — the note is a 300-char audit field.
+  return { text: null, truncated: false, failureCopy: FAILURE_RESULT_COPY };
 }
 
 /** True when a settled attempt represents a successful run. */
@@ -406,8 +419,18 @@ function createOrchestrate(options = {}) {
     }
     const attempt = readSettledAttempt(taskId, dispatched.attemptIndex);
     const ok = attemptSucceeded(attempt);
-    const { text, truncated } = readAttemptResultText(attempt);
-    return { agent: dispatched.agent, text, ok, truncated, timedOut: false };
+    // AC-19: read result_text; null → failureCopy (never the note).
+    // When result_text is null (no output / unparseable / failure), text is null
+    // and failureCopy holds the explicit failure marker. OFC surfaces text:null
+    // to the caller so openclaw's Chief can distinguish "no text" from "has text".
+    // The caller reads failureCopy from the result or uses the well-known constant
+    // FAILURE_RESULT_COPY to construct the user-facing message.
+    const { text, truncated, failureCopy } = readAttemptResultText(attempt);
+    // AC-16 / AC-22 boundary: OFC's obligation ends at providing terminal
+    // result+status to the caller. chat.update is openclaw's job. `text` being
+    // null is itself a terminal signal — the caller uses failureCopy to compose
+    // the UX message.
+    return { agent: dispatched.agent, text, ok, truncated, timedOut: false, failureCopy };
   }
 
   /**
@@ -875,4 +898,5 @@ module.exports = {
   buildCardDescription,
   SYNC_WAIT_CAP_MS,
   RUN_TTL_MS,
+  FAILURE_RESULT_COPY,
 };

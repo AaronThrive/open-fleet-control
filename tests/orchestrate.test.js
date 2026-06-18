@@ -145,18 +145,34 @@ describe("normalizeTimeoutSec", () => {
 describe("readAttemptResultText", () => {
   it("prefers result_text (not truncated)", () => {
     const r = readAttemptResultText({ result_text: "full answer", note: "x · result: snip" });
-    assert.deepStrictEqual(r, { text: "full answer", truncated: false });
+    assert.strictEqual(r.text, "full answer");
+    assert.strictEqual(r.truncated, false);
+    assert.strictEqual(r.failureCopy, null);
   });
-  it("falls back to the note snippet and flags truncated", () => {
+  // AC-19: the note fallback is intentionally REMOVED. When result_text is
+  // absent/null, OFC surfaces the explicit failure copy (FAILURE_RESULT_COPY),
+  // NEVER the 300-char note snippet. The old "falls back to note" test is
+  // replaced with the new AC-19 contract.
+  it("AC-19: null result_text → null text + FAILURE_RESULT_COPY (never the note snippet)", () => {
     const r = readAttemptResultText({ note: "dispatched · session abc · result: a snippet" });
-    assert.deepStrictEqual(r, { text: "a snippet", truncated: true });
+    assert.strictEqual(r.text, null, "text must be null when result_text is absent");
+    assert.strictEqual(r.truncated, false);
+    assert.ok(
+      typeof r.failureCopy === "string" && r.failureCopy.length > 0,
+      "failureCopy must be a non-empty string (explicit failure copy)",
+    );
+    // Critical: the note snippet must NOT be surfaced.
+    assert.notStrictEqual(r.text, "a snippet", "note snippet must never be surfaced");
   });
-  it("returns null text for a bare/dispatched attempt", () => {
-    assert.deepStrictEqual(readAttemptResultText({ note: "dispatched" }), {
-      text: null,
-      truncated: false,
-    });
-    assert.deepStrictEqual(readAttemptResultText(null), { text: null, truncated: false });
+  it("returns null text + failureCopy for a bare/dispatched attempt", () => {
+    const r1 = readAttemptResultText({ note: "dispatched" });
+    assert.strictEqual(r1.text, null);
+    assert.strictEqual(r1.truncated, false);
+    assert.ok(typeof r1.failureCopy === "string" && r1.failureCopy.length > 0);
+    const r2 = readAttemptResultText(null);
+    assert.strictEqual(r2.text, null);
+    assert.strictEqual(r2.truncated, false);
+    assert.ok(typeof r2.failureCopy === "string" && r2.failureCopy.length > 0);
   });
 });
 
@@ -276,16 +292,26 @@ describe("runBoard", () => {
     assert.strictEqual(out.missing.length, 0); // it answered, just failed
   });
 
-  it("flags truncated when only the note snippet is present", async () => {
+  // AC-19: when result_text is null (only note present), the board result
+  // surfaces FAILURE_RESULT_COPY — never the note snippet. The old
+  // "flags truncated" test is updated to match the AC-19 contract.
+  it("AC-19: null result_text (only note) → null text, truncated:false (never note snippet)", async () => {
     const kanban = makeKanban();
     const dispatch = makeDispatch(kanban, [
       { result: "success", note: "dispatched · session s · result: snippet only" },
     ]);
     const orch = makeOrchestrate(kanban, dispatch);
     const out = await settleBoard(orch, { title: "C", question: "Q", agents: ["a"] });
-    assert.strictEqual(out.results[0].text, "snippet only");
-    assert.strictEqual(out.results[0].truncated, true);
-    assert.strictEqual(out.truncatedAny, true);
+    // The note snippet must NOT be surfaced.
+    assert.notStrictEqual(out.results[0].text, "snippet only", "note must never be surfaced");
+    // ok reflects what the dispatcher reported (result:"success" → ok:true).
+    // text is null because result_text is absent (dispatcher produced no canonical output).
+    // Per AC-19, text is null (not the note snippet), and truncated:false.
+    assert.strictEqual(out.results[0].ok, true, "ok reflects the dispatcher result field");
+    assert.strictEqual(out.results[0].text, null, "text is null when result_text is absent");
+    assert.strictEqual(out.results[0].truncated, false, "truncated:false per AC-19");
+    // truncatedAny must also be false (no more truncation flag from note fallback).
+    assert.strictEqual(out.truncatedAny, false, "truncatedAny:false per AC-19");
   });
 
   it("surfaces a dispatch 429 per-seat (reason 'dispatch refused'), collects the rest", async () => {
