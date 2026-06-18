@@ -180,7 +180,10 @@ describe("AC-17 — parallel-flip guard (config default)", () => {
   it("an explicit operator value ALWAYS wins (guard, not unconditional flip)", () => {
     // explicit true with spawn enabled → stays sequential
     assert.strictEqual(
-      resolveSequentialBoard({ spawn: { enabled: true } }, { orchestrate: { sequentialBoard: true } }),
+      resolveSequentialBoard(
+        { spawn: { enabled: true } },
+        { orchestrate: { sequentialBoard: true } },
+      ),
       true,
     );
     // explicit false with spawn disabled → stays parallel
@@ -356,8 +359,15 @@ describe("AC-17 — spawn DISABLED: unchanged (sequential, no leasing, bare ids)
 // ---------------------------------------------------------------------------
 describe("AC-17 + AC-18 — parallel needs the raised cap", () => {
   it("enabling spawn flips the board default AND raises maxConcurrent together", () => {
-    const fleetEnabled = { dispatch: { maxConcurrent: 3 }, spawn: { enabled: true, poolCeiling: 6 } };
-    assert.strictEqual(resolveSequentialBoard(fleetEnabled, {}), false, "default flips to parallel");
+    const fleetEnabled = {
+      dispatch: { maxConcurrent: 3 },
+      spawn: { enabled: true, poolCeiling: 6 },
+    };
+    assert.strictEqual(
+      resolveSequentialBoard(fleetEnabled, {}),
+      false,
+      "default flips to parallel",
+    );
     assert.strictEqual(resolveDispatchConcurrency(fleetEnabled), 6, "cap raised in lockstep");
   });
 });

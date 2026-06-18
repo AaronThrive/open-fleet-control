@@ -141,9 +141,7 @@ function createRunRegistry({ nowFn, emit, setTimerFn = setTimeout }) {
         mode: next.mode,
         status: next.status,
         // counts only — keep the SSE payload light, like dispatch's events
-        collected: Array.isArray(next.results)
-          ? next.results.filter((r) => r && r.ok).length
-          : 0,
+        collected: Array.isArray(next.results) ? next.results.filter((r) => r && r.ok).length : 0,
         missing: Array.isArray(next.missing) ? next.missing.length : 0,
       });
       scheduleReap(runId);
@@ -235,8 +233,7 @@ function withTimeout(promise, ms, setTimer = setTimeout) {
 //   job — its Bolt provider already does this. OFC's obligation is to reliably
 //   surface text:FAILURE_RESULT_COPY when result_text is null so openclaw's
 //   Chief always has a terminal result to post, preventing a "working…" hang.
-const FAILURE_RESULT_COPY =
-  "The agent could not complete this request — please try again.";
+const FAILURE_RESULT_COPY = "The agent could not complete this request — please try again.";
 
 /**
  * Read the FULL agent answer back off a settled attempt.
@@ -564,7 +561,10 @@ function createOrchestrate(options = {}) {
         } else if (typeof spawn.beginDrain === "function") {
           // Failure/timeout — drain the worker so a half-broken box never serves
           // again, then finish the drain (graceful stop + unregister).
-          if (spawn.beginDrain(leaseHandle.workerId) && typeof spawn.settleAndRemove === "function") {
+          if (
+            spawn.beginDrain(leaseHandle.workerId) &&
+            typeof spawn.settleAndRemove === "function"
+          ) {
             await spawn.settleAndRemove(leaseHandle.workerId);
           }
         }

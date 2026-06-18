@@ -247,7 +247,6 @@ function recordAudit(user, action, target, detail) {
   }
 }
 
-
 // Jobs routes (src/jobs.js) audit through the shared fleet trail; the
 // recorder is injected so the jobs module stays decoupled from the runtime.
 setAuditRecorder((entry) => fleet.audit.record(entry));
@@ -869,7 +868,9 @@ function routeRequest(req, res, pathname, query) {
       // 400s (GET remains the path for the param-less quick actions).
       if (!PRIVILEGED_POST_ACTIONS.has(action)) {
         res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ success: false, action, error: `Unknown POST action: ${action}` }));
+        res.end(
+          JSON.stringify({ success: false, action, error: `Unknown POST action: ${action}` }),
+        );
         return;
       }
 

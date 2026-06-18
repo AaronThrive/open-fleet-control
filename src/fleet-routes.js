@@ -664,7 +664,8 @@ function createFleetRoutes({
     // Opt-in synchronous wait (capped server-side): body.wait===true OR
     // ?wait=true. Backward-compat for short runs / tests; default is async 202.
     const wantWait =
-      body.wait === true || (query && typeof query.get === "function" && query.get("wait") === "true");
+      body.wait === true ||
+      (query && typeof query.get === "function" && query.get("wait") === "true");
     const budgetMode = body.budgetMode === "open" ? "open" : "closed"; // default CLOSED
     const ceiling = body.ceilingUSD;
 
@@ -768,8 +769,7 @@ function createFleetRoutes({
       // behaves byte-identically to before.
       const ostatus =
         orchestrate && typeof orchestrate.getStatus === "function" ? orchestrate.getStatus() : null;
-      const wantsParallel =
-        typeof body.sequential === "boolean" ? body.sequential === false : true;
+      const wantsParallel = typeof body.sequential === "boolean" ? body.sequential === false : true;
       if (
         ostatus &&
         ostatus.routeToPool === true &&

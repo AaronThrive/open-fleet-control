@@ -21,10 +21,7 @@ const { EventEmitter } = require("node:events");
 
 const { createFleetRoutes } = require("../src/fleet-routes");
 const { createSpawnStore } = require("../src/spawn-store");
-const {
-  readAttemptResultText,
-  FAILURE_RESULT_COPY,
-} = require("../src/orchestrate");
+const { readAttemptResultText, FAILURE_RESULT_COPY } = require("../src/orchestrate");
 
 // =========================================================================
 // Shared test helpers
@@ -58,12 +55,26 @@ function makeOrchestrate() {
     runBoard: (params) => {
       calls.board.push(params);
       const runId = "orx_board_1";
-      return { runId, mode: "board", agents: params.agents, status: "running", startedAt: 0, completion: Promise.resolve() };
+      return {
+        runId,
+        mode: "board",
+        agents: params.agents,
+        status: "running",
+        startedAt: 0,
+        completion: Promise.resolve(),
+      };
     },
     runChain: (params) => {
       calls.chain.push(params);
       const runId = "orx_chain_1";
-      return { runId, mode: "chain", agents: params.steps.map((s) => s.agent), status: "running", startedAt: 0, completion: Promise.resolve() };
+      return {
+        runId,
+        mode: "chain",
+        agents: params.steps.map((s) => s.agent),
+        status: "running",
+        startedAt: 0,
+        completion: Promise.resolve(),
+      };
     },
     getRun: () => null,
     waitForRun: async () => null,
@@ -85,8 +96,12 @@ function makeReq(method, body) {
 
 function makeRes() {
   const res = { statusCode: null, body: null };
-  res.writeHead = (code) => { res.statusCode = code; };
-  res.end = (payload) => { res.body = payload ? JSON.parse(payload) : null; };
+  res.writeHead = (code) => {
+    res.statusCode = code;
+  };
+  res.end = (payload) => {
+    res.body = payload ? JSON.parse(payload) : null;
+  };
   return res;
 }
 
@@ -103,7 +118,11 @@ async function call(routes, method, pathname, body) {
 
 describe("AC-19 — readAttemptResultText reads result_text, null → failure copy", () => {
   it("returns result_text when present and non-empty", () => {
-    const attempt = { result: "success", result_text: "The full agent answer.", note: "ignored note" };
+    const attempt = {
+      result: "success",
+      result_text: "The full agent answer.",
+      note: "ignored note",
+    };
     const { text, truncated, failureCopy } = readAttemptResultText(attempt);
     assert.strictEqual(text, "The full agent answer.", "should return full result_text");
     assert.strictEqual(truncated, false);
@@ -165,7 +184,11 @@ describe("AC-11 — event_id dedup before spawn at POST /api/fleet/orchestrate",
 
   afterEach(() => {
     if (store) {
-      try { store.close(); } catch (e) { /* best-effort */ }
+      try {
+        store.close();
+      } catch (e) {
+        /* best-effort */
+      }
       store = null;
     }
     fs.rmSync(stateDir, { recursive: true, force: true });
@@ -202,7 +225,13 @@ describe("AC-11 — event_id dedup before spawn at POST /api/fleet/orchestrate",
       spawnStore: store,
     });
 
-    const body = { mode: "board", event_id: "slack_evt_002", title: "T", question: "Q", agents: ["a"] };
+    const body = {
+      mode: "board",
+      event_id: "slack_evt_002",
+      title: "T",
+      question: "Q",
+      agents: ["a"],
+    };
 
     const res1 = await call(routes, "POST", ORCH_PATH, body);
     const res2 = await call(routes, "POST", ORCH_PATH, body);
@@ -227,7 +256,13 @@ describe("AC-11 — event_id dedup before spawn at POST /api/fleet/orchestrate",
       spawnStore: store,
     });
 
-    const body = { mode: "board", dedup_key: "slack_evt_003", title: "T", question: "Q", agents: ["a"] };
+    const body = {
+      mode: "board",
+      dedup_key: "slack_evt_003",
+      title: "T",
+      question: "Q",
+      agents: ["a"],
+    };
     const res1 = await call(routes, "POST", ORCH_PATH, body);
     const res2 = await call(routes, "POST", ORCH_PATH, body);
 
@@ -291,7 +326,13 @@ describe("AC-11 — event_id dedup before spawn at POST /api/fleet/orchestrate",
       // spawnStore: intentionally omitted (spawn disabled)
     });
 
-    const body = { mode: "board", event_id: "slack_evt_noop", title: "T", question: "Q", agents: ["a"] };
+    const body = {
+      mode: "board",
+      event_id: "slack_evt_noop",
+      title: "T",
+      question: "Q",
+      agents: ["a"],
+    };
     const res1 = await call(routes, "POST", ORCH_PATH, body);
     const res2 = await call(routes, "POST", ORCH_PATH, body);
 
@@ -314,7 +355,13 @@ describe("AC-11 — event_id dedup before spawn at POST /api/fleet/orchestrate",
     });
 
     // Before wiring: dedup is a no-op.
-    const body = { mode: "board", event_id: "slack_evt_lazy_001", title: "T", question: "Q", agents: ["a"] };
+    const body = {
+      mode: "board",
+      event_id: "slack_evt_lazy_001",
+      title: "T",
+      question: "Q",
+      agents: ["a"],
+    };
     const res0 = await call(routes, "POST", ORCH_PATH, body);
     assert.strictEqual(res0.statusCode, 202, "request proceeds when store not yet wired");
     assert.strictEqual(calls.board.length, 1);
@@ -329,7 +376,10 @@ describe("AC-11 — event_id dedup before spawn at POST /api/fleet/orchestrate",
     // res1 was the first registered insert after wiring — not a duplicate.
     // res2 is the duplicate.
     assert.strictEqual(res2.body.deduped, true, "dedup active once store is wired");
-    assert.ok(calls.board.length <= 2, "runBoard called at most twice (one per non-deduped request)");
+    assert.ok(
+      calls.board.length <= 2,
+      "runBoard called at most twice (one per non-deduped request)",
+    );
   });
 });
 
@@ -355,7 +405,13 @@ describe("AC-16 — terminal-status guarantee (OFC data+control side)", () => {
         rosterFn: () => ROSTER,
         spawnStore: s,
       });
-      const body = { mode: "board", event_id: "ac16_terminal_001", title: "T", question: "Q", agents: ["a"] };
+      const body = {
+        mode: "board",
+        event_id: "ac16_terminal_001",
+        title: "T",
+        question: "Q",
+        agents: ["a"],
+      };
 
       await call(routes, "POST", ORCH_PATH, body); // first: starts run
       const res = await call(routes, "POST", ORCH_PATH, body); // second: deduped
@@ -441,7 +497,11 @@ describe("AC-22 — fail-closed: every failure class yields a typed terminal res
 
   afterEach(() => {
     if (store) {
-      try { store.close(); } catch (e) { /* best-effort */ }
+      try {
+        store.close();
+      } catch (e) {
+        /* best-effort */
+      }
       store = null;
     }
     fs.rmSync(stateDir, { recursive: true, force: true });
@@ -469,7 +529,13 @@ describe("AC-22 — fail-closed: every failure class yields a typed terminal res
       rosterFn: () => ROSTER,
       spawnStore: store,
     });
-    const body = { mode: "board", event_id: "ac22_dedup_01", title: "T", question: "Q", agents: ["a"] };
+    const body = {
+      mode: "board",
+      event_id: "ac22_dedup_01",
+      title: "T",
+      question: "Q",
+      agents: ["a"],
+    };
     await call(routes, "POST", ORCH_PATH, body);
     const res = await assertTypedTerminal(routes, body, 200);
     assert.strictEqual(res.body.deduped, true);
@@ -513,7 +579,13 @@ describe("AC-22 — fail-closed: every failure class yields a typed terminal res
       orchestrate: module,
       rosterFn: () => ROSTER,
     });
-    const body = { mode: "board", event_id: "ac22_nostore_01", title: "T", question: "Q", agents: ["a"] };
+    const body = {
+      mode: "board",
+      event_id: "ac22_nostore_01",
+      title: "T",
+      question: "Q",
+      agents: ["a"],
+    };
     const res = await assertTypedTerminal(routes, body, 202);
     assert.strictEqual(res.body.deduped, undefined, "no dedup flag when store unavailable");
     assert.strictEqual(calls.board.length, 1, "run dispatched normally");
@@ -561,7 +633,8 @@ describe("AC-19 (extended) — board and chain results use result_text, not note
     const lower = FAILURE_RESULT_COPY.toLowerCase();
     const hasFail =
       lower.includes("fail") || lower.includes("could not") || lower.includes("unable");
-    const hasTryAgain = lower.includes("try") || lower.includes("again") || lower.includes("complete");
+    const hasTryAgain =
+      lower.includes("try") || lower.includes("again") || lower.includes("complete");
     assert.ok(
       hasFail || hasTryAgain,
       `FAILURE_RESULT_COPY should communicate failure or retry: "${FAILURE_RESULT_COPY}"`,

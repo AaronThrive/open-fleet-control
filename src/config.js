@@ -656,9 +656,7 @@ function loadConfig({ secrets = defaultSecrets, localPath } = {}) {
           process.env.AUTH_TAILSCALE_VERIFY_SERVE_ORIGIN === "true" ||
           fileConfig.auth?.tailscale?.verifyServeOrigin === true,
         tailscaledSocket:
-          process.env.AUTH_TAILSCALED_SOCKET ||
-          fileConfig.auth?.tailscale?.tailscaledSocket ||
-          "",
+          process.env.AUTH_TAILSCALED_SOCKET || fileConfig.auth?.tailscale?.tailscaledSocket || "",
       },
     },
 

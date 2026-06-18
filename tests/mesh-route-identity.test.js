@@ -107,10 +107,16 @@ describe("M-5 — mesh route identity hardening", () => {
     const { fleet } = makeFleet();
     const routes = createFleetRoutes({ fleet });
     // Loopback peer BUT x-forwarded-for present => external request behind Serve.
-    const res = await call(routes, "POST", MESH_NODES_PATH, { hostname: "drone-1" }, {
-      remoteAddress: "127.0.0.1",
-      forwarded: true,
-    });
+    const res = await call(
+      routes,
+      "POST",
+      MESH_NODES_PATH,
+      { hostname: "drone-1" },
+      {
+        remoteAddress: "127.0.0.1",
+        forwarded: true,
+      },
+    );
     assert.strictEqual(res.statusCode, 403);
     assert.match(res.body.error, /authenticated identity/i);
   });
@@ -118,9 +124,15 @@ describe("M-5 — mesh route identity hardening", () => {
   it("refuses an anonymous register from a non-loopback peer with 403", async () => {
     const { fleet } = makeFleet();
     const routes = createFleetRoutes({ fleet });
-    const res = await call(routes, "POST", MESH_NODES_PATH, { hostname: "drone-1" }, {
-      remoteAddress: "100.64.0.9",
-    });
+    const res = await call(
+      routes,
+      "POST",
+      MESH_NODES_PATH,
+      { hostname: "drone-1" },
+      {
+        remoteAddress: "100.64.0.9",
+      },
+    );
     assert.strictEqual(res.statusCode, 403);
     assert.match(res.body.error, /authenticated identity/i);
   });
@@ -129,9 +141,15 @@ describe("M-5 — mesh route identity hardening", () => {
     const { fleet } = makeFleet();
     const routes = createFleetRoutes({ fleet });
     // Genuine loopback, no x-forwarded-for => internal call, allowed.
-    const res = await call(routes, "POST", MESH_NODES_PATH, { hostname: "drone-1" }, {
-      remoteAddress: "127.0.0.1",
-    });
+    const res = await call(
+      routes,
+      "POST",
+      MESH_NODES_PATH,
+      { hostname: "drone-1" },
+      {
+        remoteAddress: "127.0.0.1",
+      },
+    );
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(res.body.node.registeredBy, "anonymous");
   });
