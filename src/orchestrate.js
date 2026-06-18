@@ -47,7 +47,9 @@
 
 const crypto = require("crypto");
 
-const DEFAULT_TIMEOUT_SEC = 600;
+// Default per-seat wait budget. Raised 600 -> 1200 to match dispatch.timeoutSec
+// so the runner doesn't give up before the agent process is actually killed.
+const DEFAULT_TIMEOUT_SEC = 1200;
 // Hard ceiling so a caller-supplied timeoutSec can never wedge a request
 // thread forever; mirrors dispatch's own grace philosophy.
 const MAX_TIMEOUT_SEC = 3600;
@@ -139,9 +141,7 @@ function createRunRegistry({ nowFn, emit, setTimerFn = setTimeout }) {
         mode: next.mode,
         status: next.status,
         // counts only — keep the SSE payload light, like dispatch's events
-        collected: Array.isArray(next.results)
-          ? next.results.filter((r) => r && r.ok).length
-          : 0,
+        collected: Array.isArray(next.results) ? next.results.filter((r) => r && r.ok).length : 0,
         missing: Array.isArray(next.missing) ? next.missing.length : 0,
       });
       scheduleReap(runId);
@@ -222,32 +222,44 @@ function withTimeout(promise, ms, setTimer = setTimeout) {
   });
 }
 
+// AC-19 — explicit failure copy surfaced when result_text is null.
+// This is the canonical "couldn't complete" message surfaced to the caller
+// (board results, chain final) when a run's result_text is null (unparseable
+// stdout / no output / failure). NEVER the 300-char note snippet.
+//
+// AC-16 / AC-22 boundary comment:
+//   OFC provides the terminal result/status + reason to the caller (openclaw's
+//   Chief). Updating the Slack "working…" message (chat.update) is openclaw's
+//   job — its Bolt provider already does this. OFC's obligation is to reliably
+//   surface text:FAILURE_RESULT_COPY when result_text is null so openclaw's
+//   Chief always has a terminal result to post, preventing a "working…" hang.
+const FAILURE_RESULT_COPY = "The agent could not complete this request — please try again.";
+
 /**
  * Read the FULL agent answer back off a settled attempt.
  *
- * Preference order:
- *   1. attempt.result_text — the full output (sibling dispatch change; see
- *      header). This is the field board/chain are designed around.
- *   2. attempt.note "… · result: <snippet>" — the legacy 300-char snippet, so
- *      the module works BEFORE result_text lands. Flagged truncated:true.
+ * AC-19 contract:
+ *   1. attempt.result_text (non-empty string) → { text: result_text, truncated: false }
+ *   2. result_text null/absent (unparseable stdout, no output, failure) →
+ *      { text: null, truncated: false, failureCopy: FAILURE_RESULT_COPY }
+ *
+ * INTENTIONALLY NO note fallback. The 300-char note is a human-readable audit
+ * field only; surfacing it as a result would violate AC-19. If result_text is
+ * absent, the caller surfaces FAILURE_RESULT_COPY (AC-16 / AC-22).
  *
  * @param {object|null} attempt - task.attempts[attemptIndex] after settle
- * @returns {{text: string|null, truncated: boolean}}
+ * @returns {{text: string|null, truncated: boolean, failureCopy: string|null}}
  */
 function readAttemptResultText(attempt) {
-  if (!attempt || typeof attempt !== "object") return { text: null, truncated: false };
+  if (!attempt || typeof attempt !== "object") {
+    return { text: null, truncated: false, failureCopy: FAILURE_RESULT_COPY };
+  }
   if (typeof attempt.result_text === "string" && attempt.result_text.length > 0) {
-    return { text: attempt.result_text, truncated: false };
+    return { text: attempt.result_text, truncated: false, failureCopy: null };
   }
-  // Fallback: pull the snippet back out of the note ("… · result: <snippet>").
-  if (typeof attempt.note === "string") {
-    const idx = attempt.note.lastIndexOf(RESULT_TEXT_NOTE_PREFIX);
-    if (idx !== -1) {
-      const snippet = attempt.note.slice(idx + RESULT_TEXT_NOTE_PREFIX.length).trim();
-      if (snippet.length > 0) return { text: snippet, truncated: true };
-    }
-  }
-  return { text: null, truncated: false };
+  // result_text is null/absent: surface the explicit failure copy (AC-19).
+  // NEVER fall back to the note snippet — the note is a 300-char audit field.
+  return { text: null, truncated: false, failureCopy: FAILURE_RESULT_COPY };
 }
 
 /** True when a settled attempt represents a successful run. */
@@ -291,6 +303,13 @@ function buildCardDescription({ question, instruction, context }) {
  *   on dispatch.onEvent (orchestrate.* events; SSE fan-out wired in index.js)
  * @param {object} [options.config] - fleet.orchestrate config section:
  *   {enabled=true, timeoutSec=600}
+ * @param {object} [options.spawn] - OPTIONAL spawn controller (src/agent-spawn.js).
+ *   When supplied AND spawnEnabled, runBoard/runChain lease a worker per seat and
+ *   route each dispatch to that leased worker's remote node (AC-17). Omitting it
+ *   keeps the legacy local-only path (byte-identical to today).
+ * @param {boolean} [options.spawnEnabled=false] - the fleet.spawn.enabled gate.
+ *   ONLY when true does caller-side remote routing + per-seat leasing engage and
+ *   the board default flip to parallel.
  * @param {function} [options.nowFn=Date.now] - clock, injectable for tests
  * @param {function} [options.setTimerFn=setTimeout] - timer, injectable for tests
  * @returns {object} orchestration API
@@ -301,6 +320,8 @@ function createOrchestrate(options = {}) {
     dispatch,
     onEvent,
     config = {},
+    spawn = null,
+    spawnEnabled = false,
     nowFn = Date.now,
     setTimerFn = setTimeout,
   } = options;
@@ -309,6 +330,23 @@ function createOrchestrate(options = {}) {
 
   const enabled = config.enabled !== false;
   const defaultTimeoutSec = normalizeTimeoutSec(config.timeoutSec, DEFAULT_TIMEOUT_SEC);
+
+  // AC-17 — caller-side remote routing engages ONLY when the pool is enabled AND
+  // a controller is wired. With it off, NO worker is ever leased and every
+  // dispatch uses the bare advisor id (the legacy local path) — byte-identical.
+  const routeToPool = spawnEnabled === true && !!spawn && typeof spawn.lease === "function";
+
+  // Server-side default for board sequencing.
+  //   - Spawn DISABLED: `config.sequentialBoard === true` — preserves today's
+  //     single-box sequential default exactly (the config layer resolves the
+  //     default to `true` when spawn is off).
+  //   - Spawn ENABLED: the config layer flips the default to `false` (parallel),
+  //     because each seat now lands on its own isolated remote worker and the
+  //     dispatch cap rose in lockstep (AC-18). An explicit per-run `sequential`
+  //     flag still overrides at call time.
+  // This is a GUARD, not an unconditional flip: it is driven by
+  // `config.sequentialBoard`, whose DEFAULT flips only when spawn is enabled.
+  const defaultSequentialBoard = config.sequentialBoard === true;
 
   // In-memory registry of board/chain runs (for 202 + poll). Shares the
   // module clock + emit; reap timer uses the injected setTimerFn so tests can
@@ -398,8 +436,18 @@ function createOrchestrate(options = {}) {
     }
     const attempt = readSettledAttempt(taskId, dispatched.attemptIndex);
     const ok = attemptSucceeded(attempt);
-    const { text, truncated } = readAttemptResultText(attempt);
-    return { agent: dispatched.agent, text, ok, truncated, timedOut: false };
+    // AC-19: read result_text; null → failureCopy (never the note).
+    // When result_text is null (no output / unparseable / failure), text is null
+    // and failureCopy holds the explicit failure marker. OFC surfaces text:null
+    // to the caller so openclaw's Chief can distinguish "no text" from "has text".
+    // The caller reads failureCopy from the result or uses the well-known constant
+    // FAILURE_RESULT_COPY to construct the user-facing message.
+    const { text, truncated, failureCopy } = readAttemptResultText(attempt);
+    // AC-16 / AC-22 boundary: OFC's obligation ends at providing terminal
+    // result+status to the caller. chat.update is openclaw's job. `text` being
+    // null is itself a terminal signal — the caller uses failureCopy to compose
+    // the UX message.
+    return { agent: dispatched.agent, text, ok, truncated, timedOut: false, failureCopy };
   }
 
   /**
@@ -456,6 +504,75 @@ function createOrchestrate(options = {}) {
     const ms = Math.min(capMs, SYNC_WAIT_CAP_MS);
     await withTimeout(entry._completion, ms, setTimerFn);
     return registry.get(runId); // re-read post-settle (or still running on cap)
+  }
+
+  // -------------------------------------------------------------------------
+  // AC-17 — caller-side remote routing: lease a pool worker per seat and supply
+  // an agent ref that resolveAgentNode returns kind:"remote" for.
+  //
+  // The ENTIRE change is on the CALLER side: we choose WHICH ref to hand to
+  // dispatch.dispatchTask (an `id@<workerNode>` pin → resolveAgentNode →
+  // kind:"remote" → the EXISTING runRemote POST path runs unchanged). The
+  // dispatch core (startRun/runRemote/the POST body) is NOT touched.
+  //
+  // A lease handle bundles the remote ref with a settle() that releases the
+  // worker back to idle on success or drains it on failure — so a worker is
+  // returned to the pool exactly once per seat.
+  // -------------------------------------------------------------------------
+  /**
+   * Acquire a leased worker for an advisor and return its remote ref + a settle
+   * hook. Returns null when pool routing is off OR no worker could be leased —
+   * the caller then falls back to the bare advisor id (local path), so a pool
+   * that is momentarily empty never sinks a seat.
+   *
+   * @param {string} advisorId - bare advisor id (no @node)
+   * @returns {{ ref: string, settle: function(boolean):Promise<void> }|null}
+   */
+  function leaseSeat(advisorId) {
+    if (!routeToPool) return null;
+    // The controller's lease() CAS-claims a ready idle worker and stamps a
+    // fencing token (AC-6/AC-14). It returns {workerId, nodeId, generation,
+    // token} or null when no idle worker is available / the CAS lost. The
+    // controller's own loops (reconcile/acquire/reaper) keep the warm pool
+    // populated; here we only CLAIM a worker for the seat.
+    let leaseHandle = null;
+    try {
+      leaseHandle = spawn.lease(advisorId);
+    } catch (e) {
+      leaseHandle = null;
+    }
+    if (!leaseHandle || !leaseHandle.workerId) return null;
+
+    // The worker node the dispatch must target. The mesh records a pool worker
+    // under its container name (= the mesh hostname); pinning `id@<workerNode>`
+    // makes resolveAgentNode pick that node and return kind:"remote".
+    const workerNode = leaseHandle.workerId;
+    const ref = `${advisorId}@${workerNode}`;
+
+    let settled = false;
+    async function settle(ok) {
+      if (settled) return;
+      settled = true;
+      try {
+        if (ok && typeof spawn.release === "function") {
+          // Lease finished cleanly — return the worker to idle (CAS keyed on the
+          // lease generation; a recycled worker loses the release, which is fine).
+          spawn.release(leaseHandle.workerId, leaseHandle.generation);
+        } else if (typeof spawn.beginDrain === "function") {
+          // Failure/timeout — drain the worker so a half-broken box never serves
+          // again, then finish the drain (graceful stop + unregister).
+          if (
+            spawn.beginDrain(leaseHandle.workerId) &&
+            typeof spawn.settleAndRemove === "function"
+          ) {
+            await spawn.settleAndRemove(leaseHandle.workerId);
+          }
+        }
+      } catch (e) {
+        console.error(`[Orchestrate] lease settle failed for ${leaseHandle.workerId}:`, e.message);
+      }
+    }
+    return { ref, settle };
   }
 
   /**
@@ -519,6 +636,15 @@ function createOrchestrate(options = {}) {
     const agents = params.agents.map((a) => requireString(a, "agents[]"));
     const actor = typeof params.actor === "string" && params.actor ? params.actor : "operator";
     const timeoutSec = normalizeTimeoutSec(params.timeoutSec, defaultTimeoutSec);
+    // SEQUENTIAL board: dispatch advisors one-at-a-time (each owns the box, then
+    // the next) instead of fanning all seats out at once. Keeps board semantics
+    // (same independent question to each, collect-all, no short-circuit) but
+    // never co-saturates the single gateway event loop — the single-instance
+    // reliability fix. Each advisor gets its OWN fresh timeout budget.
+    // Per-run flag overrides the server default: undefined => use the config
+    // default; explicit true/false => force that mode.
+    const sequential =
+      params.sequential === undefined ? defaultSequentialBoard : params.sequential === true;
     const description = buildCardDescription({ question });
     const checkBudget = normalizeBudgetCheck(params.budgetCheck);
 
@@ -536,53 +662,130 @@ function createOrchestrate(options = {}) {
       // budget-missing and never dispatched (the per-task ceiling is the
       // chokepoint).
       let budgetHalt = null;
-      const seats = agents.map((agent, i) => {
-        if (budgetHalt) {
-          return { agent, taskId: null, dispatched: null, error: null, budgetBlocked: true };
-        }
-        // spentUSD here is the count of agents already dispatched — the
-        // runner's accrual hook is per-unit-of-work; the route supplies the
-        // real $ guard.
-        const block = checkBudget({ spentUSD: i });
-        if (block) {
-          budgetHalt = block;
-          return { agent, taskId: null, dispatched: null, error: null, budgetBlocked: true };
-        }
-        const card = kanban.createTask({ title: `${title} · ${agent}`, description }, actor);
-        try {
-          // BOARD flag: every council seat posts to #ceo-boardroom (leading
-          // @Chief), NOT its own #<agent>-command channel. dispatch.resolveSlack
-          // reads isBoard and derives the boardroom channel.
-          const dispatched = dispatch.dispatchTask(card.id, { agent, actor, isBoard: true });
-          return { agent, taskId: card.id, dispatched, error: null, budgetBlocked: false };
-        } catch (e) {
-          return { agent, taskId: card.id, dispatched: null, error: e, budgetBlocked: false };
-        }
-      });
-
-      // Race every live completion against ONE shared deadline. Cards that
-      // failed to dispatch (or were never dispatched due to a budget halt)
-      // resolve immediately as not-settled.
       const budgetMs = timeoutSec * 1000;
-      const outcomes = await Promise.all(
-        seats.map(async (seat) => {
-          if (!seat.dispatched) {
-            return {
-              agent: seat.agent,
-              taskId: seat.taskId,
-              text: null,
-              ok: false,
-              truncated: false,
-              timedOut: false,
-              budgetBlocked: !!seat.budgetBlocked,
-              dispatchError: seat.error ? seat.error.message : null,
-            };
+      const notDispatchedOutcome = (agent, taskId, budgetBlocked, dispatchError) => ({
+        agent,
+        taskId,
+        text: null,
+        ok: false,
+        truncated: false,
+        timedOut: false,
+        budgetBlocked,
+        dispatchError,
+      });
+      let outcomes;
+
+      if (sequential) {
+        // SEQUENTIAL: dispatch one advisor, await it against its OWN fresh
+        // deadline (budgetMs per seat, not a shared clock), collect, THEN the
+        // next. Only one open dispatch ever exists, so it never trips
+        // maxConcurrent and never co-saturates the gateway event loop. A
+        // failed/timed-out seat does NOT skip the rest (board semantics, unlike
+        // chain). The CLOSED ceiling still halts the remainder once it blocks.
+        outcomes = [];
+        for (let i = 0; i < agents.length; i += 1) {
+          const agent = agents[i];
+          if (budgetHalt) {
+            outcomes.push(notDispatchedOutcome(agent, null, true, null));
+            continue;
           }
-          const raced = await withTimeout(seat.dispatched.completion, budgetMs, setTimerFn);
-          const outcome = collectOutcome(seat.taskId, seat.dispatched, raced.settled);
-          return { ...outcome, taskId: seat.taskId, budgetBlocked: false, dispatchError: null };
-        }),
-      );
+          const block = checkBudget({ spentUSD: i });
+          if (block) {
+            budgetHalt = block;
+            outcomes.push(notDispatchedOutcome(agent, null, true, null));
+            continue;
+          }
+          const card = kanban.createTask({ title: `${title} · ${agent}`, description }, actor);
+          // AC-17: lease a pool worker for this seat (no-op when pool routing is
+          // off) and dispatch the remote ref so it runs on the isolated worker.
+          const seatLease = leaseSeat(agent);
+          const dispatchRef = seatLease ? seatLease.ref : agent;
+          let dispatched;
+          try {
+            dispatched = dispatch.dispatchTask(card.id, {
+              agent: dispatchRef,
+              actor,
+              isBoard: true,
+            });
+          } catch (e) {
+            if (seatLease) void seatLease.settle(false);
+            outcomes.push(notDispatchedOutcome(agent, card.id, false, e.message));
+            continue;
+          }
+          // eslint-disable-next-line no-await-in-loop -- sequential by design
+          const raced = await withTimeout(dispatched.completion, budgetMs, setTimerFn);
+          const outcome = collectOutcome(card.id, dispatched, raced.settled);
+          // AC-17: return the worker on success, drain on failure/timeout.
+          // eslint-disable-next-line no-await-in-loop -- sequential by design
+          if (seatLease) await seatLease.settle(raced.settled && outcome.ok);
+          outcomes.push({ ...outcome, taskId: card.id, budgetBlocked: false, dispatchError: null });
+        }
+      } else {
+        const seats = agents.map((agent, i) => {
+          if (budgetHalt) {
+            return { agent, taskId: null, dispatched: null, error: null, budgetBlocked: true };
+          }
+          // spentUSD here is the count of agents already dispatched — the
+          // runner's accrual hook is per-unit-of-work; the route supplies the
+          // real $ guard.
+          const block = checkBudget({ spentUSD: i });
+          if (block) {
+            budgetHalt = block;
+            return { agent, taskId: null, dispatched: null, error: null, budgetBlocked: true };
+          }
+          const card = kanban.createTask({ title: `${title} · ${agent}`, description }, actor);
+          // AC-17: lease a pool worker for this seat (no-op when pool routing is
+          // off). When leased, dispatch the REMOTE ref (id@<workerNode>) so it
+          // resolves kind:"remote" and runs on the isolated worker. The bare id
+          // is used when there is no lease (local path, byte-identical).
+          const seatLease = leaseSeat(agent);
+          const dispatchRef = seatLease ? seatLease.ref : agent;
+          try {
+            // BOARD flag: every council seat posts to #ceo-boardroom (leading
+            // @Chief), NOT its own #<agent>-command channel. dispatch.resolveSlack
+            // reads isBoard and derives the boardroom channel.
+            const dispatched = dispatch.dispatchTask(card.id, {
+              agent: dispatchRef,
+              actor,
+              isBoard: true,
+            });
+            return {
+              agent,
+              taskId: card.id,
+              dispatched,
+              error: null,
+              budgetBlocked: false,
+              seatLease,
+            };
+          } catch (e) {
+            // Dispatch refused before the worker did any work — release the lease
+            // immediately so it is not stranded.
+            if (seatLease) void seatLease.settle(false);
+            return { agent, taskId: card.id, dispatched: null, error: e, budgetBlocked: false };
+          }
+        });
+
+        // Race every live completion against ONE shared deadline. Cards that
+        // failed to dispatch (or were never dispatched due to a budget halt)
+        // resolve immediately as not-settled.
+        outcomes = await Promise.all(
+          seats.map(async (seat) => {
+            if (!seat.dispatched) {
+              return notDispatchedOutcome(
+                seat.agent,
+                seat.taskId,
+                !!seat.budgetBlocked,
+                seat.error ? seat.error.message : null,
+              );
+            }
+            const raced = await withTimeout(seat.dispatched.completion, budgetMs, setTimerFn);
+            const outcome = collectOutcome(seat.taskId, seat.dispatched, raced.settled);
+            // AC-17: return the leased worker on success, drain on failure/timeout.
+            if (seat.seatLease) await seat.seatLease.settle(raced.settled && outcome.ok);
+            return { ...outcome, taskId: seat.taskId, budgetBlocked: false, dispatchError: null };
+          }),
+        );
+      }
 
       const results = outcomes.map(({ agent, text, ok, truncated, taskId }) => ({
         agent,
@@ -611,8 +814,9 @@ function createOrchestrate(options = {}) {
         missing: missing.length,
       });
 
+      const anchor = outcomes.find((o) => o.taskId);
       return {
-        taskId: seats.find((s) => s.taskId) ? seats.find((s) => s.taskId).taskId : null,
+        taskId: anchor ? anchor.taskId : null,
         question,
         results,
         missing,
@@ -733,10 +937,16 @@ function createOrchestrate(options = {}) {
           actor,
         );
 
+        // AC-17: lease a pool worker for this step (no-op when pool routing is
+        // off) and dispatch the remote ref so it runs on the isolated worker.
+        // Chain steps keep their own #<agent>-command channel (NO isBoard).
+        const seatLease = leaseSeat(step.agent);
+        const dispatchRef = seatLease ? seatLease.ref : step.agent;
         let dispatched;
         try {
-          dispatched = dispatch.dispatchTask(card.id, { agent: step.agent, actor });
+          dispatched = dispatch.dispatchTask(card.id, { agent: dispatchRef, actor });
         } catch (e) {
+          if (seatLease) void seatLease.settle(false);
           results.push({
             agent: step.agent,
             taskId: card.id,
@@ -752,6 +962,8 @@ function createOrchestrate(options = {}) {
 
         const raced = await withTimeout(dispatched.completion, budgetMs, setTimerFn);
         const outcome = collectOutcome(card.id, dispatched, raced.settled);
+        // AC-17: return the worker on success, drain on failure/timeout.
+        if (seatLease) await seatLease.settle(raced.settled && outcome.ok);
         results.push({
           agent: step.agent,
           taskId: card.id,
@@ -798,10 +1010,39 @@ function createOrchestrate(options = {}) {
    * @returns {{available: boolean, enabled: boolean, timeoutSec: number}}
    */
   function getStatus() {
-    return { available: enabled, enabled, timeoutSec: defaultTimeoutSec };
+    return {
+      available: enabled,
+      enabled,
+      timeoutSec: defaultTimeoutSec,
+      // M-2 — expose whether parallel pool routing is active and the projected
+      // per-seat cost, so the route's PRE-DISPATCH budget gate can refuse a
+      // wide parallel board BEFORE it fans K seats (the mid-run CLOSED re-check
+      // can only halt later seats once they have already been dispatched).
+      routeToPool,
+      perSeatCostUSD: projectedSeatCostUSD(),
+    };
   }
 
-  return { runSingle, runBoard, runChain, getStatus, getRun, waitForRun };
+  /**
+   * Projected USD cost of a single board seat, for the pre-dispatch gate (M-2).
+   * Sourced from config (`fleet.orchestrate.perSeatCostUSD`); 0/unset disables
+   * the projection (the gate then behaves exactly as before — no false refusals
+   * when no estimate is configured).
+   */
+  function projectedSeatCostUSD() {
+    const v = Number(config && config.perSeatCostUSD);
+    return Number.isFinite(v) && v > 0 ? v : 0;
+  }
+
+  return {
+    runSingle,
+    runBoard,
+    runChain,
+    getStatus,
+    getRun,
+    waitForRun,
+    projectedSeatCostUSD,
+  };
 }
 
 module.exports = {
@@ -814,4 +1055,5 @@ module.exports = {
   buildCardDescription,
   SYNC_WAIT_CAP_MS,
   RUN_TTL_MS,
+  FAILURE_RESULT_COPY,
 };

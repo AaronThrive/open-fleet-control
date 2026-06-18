@@ -7,6 +7,7 @@ const {
   createMesh,
   composeNodeUrl,
   validateNodeInput,
+  validateRegistry,
   extractNodeCosts,
   extractNodeVitals,
   LATENCY_SAMPLE_LIMIT,
@@ -229,6 +230,90 @@ describe("mesh module", () => {
       assert.strictEqual(state.nodes.length, 1);
       assert.strictEqual(state.nodes[0].hostname, "atlas");
       assert.strictEqual(state.nodes[0].url, `https://atlas.${SUFFIX}:8443/health`);
+    });
+  });
+
+  describe("validateRegistry() — AC-20 shape validator", () => {
+    it("accepts a valid registry object with an empty nodes array", () => {
+      const result = validateRegistry({ nodes: [] });
+      assert.strictEqual(result.valid, true);
+    });
+
+    it("accepts a registry with fully-populated node records", () => {
+      const node = {
+        id: "abc",
+        hostname: "atlas",
+        port: 443,
+        protocol: "https",
+        healthPath: "/health",
+        platform: "linux",
+        label: "Atlas",
+        registeredBy: "seed",
+        registeredAt: "2026-01-01T00:00:00.000Z",
+      };
+      const result = validateRegistry({ nodes: [node] });
+      assert.strictEqual(result.valid, true);
+    });
+
+    it("accepts legacy/partial records that have id + hostname (backward compat)", () => {
+      // Legacy registries may be missing port, registeredAt, etc.
+      const legacy = { id: "legacy-1", hostname: "atlas", protocol: "https" };
+      const result = validateRegistry({ nodes: [legacy] });
+      assert.strictEqual(result.valid, true, "legacy record with only id+hostname should be valid");
+    });
+
+    it("rejects non-object inputs", () => {
+      assert.strictEqual(validateRegistry(null).valid, false);
+      assert.strictEqual(validateRegistry([]).valid, false);
+      assert.strictEqual(validateRegistry("bad").valid, false);
+    });
+
+    it("rejects a registry with a non-array nodes field", () => {
+      assert.strictEqual(validateRegistry({ nodes: "nope" }).valid, false);
+    });
+
+    it("rejects a node record missing both id and hostname", () => {
+      const noIdentity = { port: 443, protocol: "https" }; // no id, no hostname
+      const result = validateRegistry({ nodes: [noIdentity] });
+      assert.strictEqual(result.valid, false);
+      assert.ok(result.errors.length > 0);
+    });
+
+    it("rejects a node record that is not an object", () => {
+      const result = validateRegistry({ nodes: ["not-an-object"] });
+      assert.strictEqual(result.valid, false);
+    });
+  });
+
+  describe("corrupt registry auto-restore — AC-20", () => {
+    it("auto-restores from backup when the registry file is corrupt", () => {
+      // 1. Register a node — this writes the registry file (first write, no backup yet)
+      const mesh1 = makeMesh();
+      mesh1.registerNode({ hostname: "atlas" });
+
+      // 2. A second write (unregister + re-register) causes createSafeStore to
+      //    backup the first valid content before writing the new content.
+      //    Alternatively, we can register a second node and then unregister it
+      //    to produce a second write, which backs up the first.
+      mesh1.registerNode({ hostname: "watchtower" });
+      // Now there should be a backup of the single-node registry.
+
+      // 3. Corrupt the registry file so the next load can't parse it.
+      const registryFile = path.join(stateDir, "mesh-nodes.json");
+      fs.writeFileSync(registryFile, "NOT VALID JSON !!!!", "utf8");
+
+      // 4. A new mesh instance should recover from the backup instead of returning []
+      const mesh2 = makeMesh();
+      return mesh2.getState().then((state) => {
+        // The backup is from after the first registerNode (1 node), or after
+        // the second (2 nodes) — either way, at least one node must be recovered.
+        assert.ok(state.nodes.length >= 1, "at least one node recovered from backup");
+        const hostnames = state.nodes.map((n) => n.hostname);
+        assert.ok(
+          hostnames.includes("atlas") || hostnames.includes("watchtower"),
+          `expected atlas or watchtower in ${hostnames.join(", ")}`,
+        );
+      });
     });
   });
 

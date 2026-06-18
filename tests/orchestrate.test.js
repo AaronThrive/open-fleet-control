@@ -145,18 +145,34 @@ describe("normalizeTimeoutSec", () => {
 describe("readAttemptResultText", () => {
   it("prefers result_text (not truncated)", () => {
     const r = readAttemptResultText({ result_text: "full answer", note: "x · result: snip" });
-    assert.deepStrictEqual(r, { text: "full answer", truncated: false });
+    assert.strictEqual(r.text, "full answer");
+    assert.strictEqual(r.truncated, false);
+    assert.strictEqual(r.failureCopy, null);
   });
-  it("falls back to the note snippet and flags truncated", () => {
+  // AC-19: the note fallback is intentionally REMOVED. When result_text is
+  // absent/null, OFC surfaces the explicit failure copy (FAILURE_RESULT_COPY),
+  // NEVER the 300-char note snippet. The old "falls back to note" test is
+  // replaced with the new AC-19 contract.
+  it("AC-19: null result_text → null text + FAILURE_RESULT_COPY (never the note snippet)", () => {
     const r = readAttemptResultText({ note: "dispatched · session abc · result: a snippet" });
-    assert.deepStrictEqual(r, { text: "a snippet", truncated: true });
+    assert.strictEqual(r.text, null, "text must be null when result_text is absent");
+    assert.strictEqual(r.truncated, false);
+    assert.ok(
+      typeof r.failureCopy === "string" && r.failureCopy.length > 0,
+      "failureCopy must be a non-empty string (explicit failure copy)",
+    );
+    // Critical: the note snippet must NOT be surfaced.
+    assert.notStrictEqual(r.text, "a snippet", "note snippet must never be surfaced");
   });
-  it("returns null text for a bare/dispatched attempt", () => {
-    assert.deepStrictEqual(readAttemptResultText({ note: "dispatched" }), {
-      text: null,
-      truncated: false,
-    });
-    assert.deepStrictEqual(readAttemptResultText(null), { text: null, truncated: false });
+  it("returns null text + failureCopy for a bare/dispatched attempt", () => {
+    const r1 = readAttemptResultText({ note: "dispatched" });
+    assert.strictEqual(r1.text, null);
+    assert.strictEqual(r1.truncated, false);
+    assert.ok(typeof r1.failureCopy === "string" && r1.failureCopy.length > 0);
+    const r2 = readAttemptResultText(null);
+    assert.strictEqual(r2.text, null);
+    assert.strictEqual(r2.truncated, false);
+    assert.ok(typeof r2.failureCopy === "string" && r2.failureCopy.length > 0);
   });
 });
 
@@ -207,7 +223,10 @@ describe("runSingle", () => {
     const kanban = makeKanban();
     const dispatch = makeDispatch(kanban, []);
     const orch = makeOrchestrate(kanban, dispatch, { enabled: false });
-    assert.throws(() => orch.runSingle("tsk_1", { agent: "dev" }), (e) => e.statusCode === 503);
+    assert.throws(
+      () => orch.runSingle("tsk_1", { agent: "dev" }),
+      (e) => e.statusCode === 503,
+    );
   });
 });
 
@@ -276,16 +295,26 @@ describe("runBoard", () => {
     assert.strictEqual(out.missing.length, 0); // it answered, just failed
   });
 
-  it("flags truncated when only the note snippet is present", async () => {
+  // AC-19: when result_text is null (only note present), the board result
+  // surfaces FAILURE_RESULT_COPY — never the note snippet. The old
+  // "flags truncated" test is updated to match the AC-19 contract.
+  it("AC-19: null result_text (only note) → null text, truncated:false (never note snippet)", async () => {
     const kanban = makeKanban();
     const dispatch = makeDispatch(kanban, [
       { result: "success", note: "dispatched · session s · result: snippet only" },
     ]);
     const orch = makeOrchestrate(kanban, dispatch);
     const out = await settleBoard(orch, { title: "C", question: "Q", agents: ["a"] });
-    assert.strictEqual(out.results[0].text, "snippet only");
-    assert.strictEqual(out.results[0].truncated, true);
-    assert.strictEqual(out.truncatedAny, true);
+    // The note snippet must NOT be surfaced.
+    assert.notStrictEqual(out.results[0].text, "snippet only", "note must never be surfaced");
+    // ok reflects what the dispatcher reported (result:"success" → ok:true).
+    // text is null because result_text is absent (dispatcher produced no canonical output).
+    // Per AC-19, text is null (not the note snippet), and truncated:false.
+    assert.strictEqual(out.results[0].ok, true, "ok reflects the dispatcher result field");
+    assert.strictEqual(out.results[0].text, null, "text is null when result_text is absent");
+    assert.strictEqual(out.results[0].truncated, false, "truncated:false per AC-19");
+    // truncatedAny must also be false (no more truncation flag from note fallback).
+    assert.strictEqual(out.truncatedAny, false, "truncatedAny:false per AC-19");
   });
 
   it("surfaces a dispatch 429 per-seat (reason 'dispatch refused'), collects the rest", async () => {
@@ -341,6 +370,137 @@ describe("runBoard", () => {
       () => orch.runBoard({ title: "T", question: "Q", agents: [] }),
       (e) => e.statusCode === 400,
     );
+  });
+
+  it("sequential: keeps exactly one dispatch open at a time, still collects all", async () => {
+    const kanban = makeKanban();
+    let open = 0;
+    let maxOpen = 0;
+    const dispatch = {
+      calls: [],
+      dispatchTask(taskId, opts) {
+        open += 1;
+        maxOpen = Math.max(maxOpen, open);
+        this.calls.push({ taskId, agent: opts.agent });
+        const completion = Promise.resolve().then(() => {
+          kanban._settle(taskId, { result: "success", result_text: opts.agent });
+          open -= 1;
+        });
+        return {
+          task: { id: taskId },
+          sessionKey: "k",
+          agent: opts.agent,
+          attemptIndex: 0,
+          completion,
+        };
+      },
+    };
+    const orch = makeOrchestrate(kanban, dispatch);
+    const out = await settleBoard(orch, {
+      title: "C",
+      question: "Q",
+      agents: ["a", "b", "c"],
+      sequential: true,
+    });
+    // The whole point: parallel would open all 3 dispatches up front; sequential
+    // never overlaps, so the single gateway event loop is never co-saturated.
+    assert.strictEqual(maxOpen, 1);
+    assert.strictEqual(out.results.length, 3);
+    assert.ok(out.results.every((r) => r.ok === true));
+    assert.deepStrictEqual(out.missing, []);
+    assert.strictEqual(kanban.created.length, 3);
+  });
+
+  it("sequential: a timed-out seat is flagged missing but the rest still run (board, not chain)", async () => {
+    const kanban = makeKanban();
+    const dispatch = makeDispatch(kanban, [
+      { result: "success", resultText: "A1" },
+      { never: true }, // b never settles -> timeout, must NOT short-circuit c
+      { result: "success", resultText: "A3" },
+    ]);
+    const orch = createOrchestrate({ kanban, dispatch, setTimerFn: immediateTimer });
+    const out = await settleBoard(orch, {
+      title: "C",
+      question: "Q",
+      agents: ["a", "b", "c"],
+      sequential: true,
+      timeoutSec: 1,
+    });
+    assert.deepStrictEqual(
+      out.results.map((r) => [r.agent, r.ok]),
+      [
+        ["a", true],
+        ["b", false],
+        ["c", true],
+      ],
+    );
+    assert.strictEqual(out.missing.length, 1);
+    assert.strictEqual(out.missing[0].agent, "b");
+    assert.strictEqual(out.missing[0].reason, "timeout");
+  });
+
+  it("server default sequentialBoard:true makes an omitted-flag board sequential", async () => {
+    const kanban = makeKanban();
+    let open = 0;
+    let maxOpen = 0;
+    const dispatch = {
+      calls: [],
+      dispatchTask(taskId, opts) {
+        open += 1;
+        maxOpen = Math.max(maxOpen, open);
+        const completion = Promise.resolve().then(() => {
+          kanban._settle(taskId, { result: "success", result_text: opts.agent });
+          open -= 1;
+        });
+        return {
+          task: { id: taskId },
+          sessionKey: "k",
+          agent: opts.agent,
+          attemptIndex: 0,
+          completion,
+        };
+      },
+    };
+    const orch = makeOrchestrate(kanban, dispatch, { sequentialBoard: true });
+    // NOTE: no `sequential` field in params — the server default must apply.
+    const out = await settleBoard(orch, { title: "C", question: "Q", agents: ["a", "b", "c"] });
+    assert.strictEqual(maxOpen, 1);
+    assert.strictEqual(out.results.length, 3);
+    assert.ok(out.results.every((r) => r.ok === true));
+  });
+
+  it("per-run sequential:false overrides the server default (forces parallel)", async () => {
+    const kanban = makeKanban();
+    let open = 0;
+    let maxOpen = 0;
+    const dispatch = {
+      calls: [],
+      dispatchTask(taskId, opts) {
+        open += 1;
+        maxOpen = Math.max(maxOpen, open);
+        const completion = Promise.resolve().then(() => {
+          kanban._settle(taskId, { result: "success", result_text: opts.agent });
+          open -= 1;
+        });
+        return {
+          task: { id: taskId },
+          sessionKey: "k",
+          agent: opts.agent,
+          attemptIndex: 0,
+          completion,
+        };
+      },
+    };
+    const orch = makeOrchestrate(kanban, dispatch, { sequentialBoard: true });
+    const out = await settleBoard(orch, {
+      title: "C",
+      question: "Q",
+      agents: ["a", "b", "c"],
+      sequential: false,
+    });
+    // Override wins: all three dispatched up front (parallel fan-out).
+    assert.strictEqual(maxOpen, 3);
+    assert.strictEqual(out.results.length, 3);
   });
 });
 
@@ -461,6 +621,10 @@ describe("getStatus", () => {
       available: true,
       enabled: true,
       timeoutSec: 300,
+      // M-2 — pre-dispatch fan-out gate inputs. Spawn disabled here, so pool
+      // routing is off and no per-seat projection is configured.
+      routeToPool: false,
+      perSeatCostUSD: 0,
     });
   });
 });
