@@ -321,6 +321,51 @@ const FLEET_DEFAULTS = {
     agentsDir: "",
     hermesDir: "~/.hermes",
   },
+  // On-demand isolated-worker pool (src/agent-spawn.js — AC-21).
+  // Defaults to disabled (enabled:false) so no dispatch/orchestrate behaviour
+  // changes until an operator explicitly opts in. All tunables have sane
+  // defaults that match the KVM8 single-box capacity model (32 GiB RAM,
+  // target 4–6 workers, hard ceiling ~8).
+  //
+  // env > FLEET_CONFIG_JSON > dashboard(.local).json > defaults (same
+  // resolution chain as every other fleet.* block).
+  spawn: {
+    // Feature gate — must be explicitly set to true to activate the pool.
+    enabled: false,
+    // Hard ceiling on the number of concurrent worker containers.
+    poolCeiling: 8,
+    // Desired steady-state pool size (target peak).
+    targetPeak: 6,
+    // Per-worker memory cap (bytes): 2.5 GiB, matches the container's
+    // HostConfig.Memory verified at acquire time (AC-3).
+    workerMemBytes: 2684354560,
+    // Number of consecutive /health OKs required before a worker is
+    // registered in the mesh and considered ready for leasing (AC-5).
+    readinessOks: 3,
+    // Maximum time (ms) to wait for a worker to pass the readiness gate.
+    readinessTimeoutMs: 10000,
+    // Time (ms) a worker may be idle before the reaper stops it (AC-4).
+    idleReapMs: 60000,
+    // Reconcile-loop interval (ms): rebuilds pool from docker ps (AC-8).
+    reconcileMs: 5000,
+    // Max worker lifetime before a drain-and-recycle is triggered (AC-9).
+    maxLifetimeMs: 3600000,
+    // Per-worker recycle jitter window (ms) to spread pool recycling (AC-9).
+    recycleJitterMs: 5000,
+    // Maximum in-flight requests per advisor that can wait in the queue (AC-10).
+    queueMax: 100,
+    // Maximum time (ms) a queued request may wait before timing out (AC-10).
+    queueDeadlineMs: 30000,
+    // Maximum time (ms) to wait for a Slack result before the fallback
+    // "couldn't complete" message is posted (AC-16, must be >= dispatch.timeoutSec).
+    slackDeadlineMs: 3000,
+    // RAM budget (bytes): 80% of 32 GiB; admission refuses spawns that
+    // would exceed this (AC-15).
+    ramBudgetBytes: Math.floor(0.8 * 32 * 1024 * 1024 * 1024),
+    // TTL (ms) for a worker's mesh registration; the controller refreshes
+    // it while the worker is alive; a lapsed TTL triggers unregistration (AC-7).
+    registrationTtlMs: 300000,
+  },
 };
 
 /**
