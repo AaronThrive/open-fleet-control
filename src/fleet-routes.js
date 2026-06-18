@@ -657,6 +657,12 @@ function createFleetRoutes({
         agents: body.agents,
         actor: user,
         timeoutSec: body.timeoutSec,
+        // Sequential council: advisors run one-at-a-time (single-box reliability)
+        // instead of fanning out in parallel. Pass the boolean through verbatim;
+        // OMITTED (undefined) lets the server default (fleet.orchestrate
+        // .sequentialBoard) decide. Do NOT coerce absent->false, or the default
+        // never fires for the normal case where the caller omits the field.
+        sequential: typeof body.sequential === "boolean" ? body.sequential : undefined,
         budgetCheck,
       });
       recordAudit(user, "task.create", run.runId, {

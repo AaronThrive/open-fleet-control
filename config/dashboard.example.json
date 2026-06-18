@@ -140,9 +140,10 @@
       "closedCeilingUSD": 0
     },
     "orchestrate": {
-      "_comment": "Multi-agent orchestration (src/orchestrate.js): fan-in councils + sequential chains composed over the dispatch primitive. timeoutSec is the per-step / overall board wait budget.",
+      "_comment": "Multi-agent orchestration (src/orchestrate.js): fan-in councils + sequential chains composed over the dispatch primitive. timeoutSec is the per-seat board wait budget (kept >= dispatch.timeoutSec). sequentialBoard:true dispatches board advisors one-at-a-time (single-box reliability); a per-run 'sequential' flag overrides it.",
       "enabled": true,
-      "timeoutSec": 600
+      "sequentialBoard": true,
+      "timeoutSec": 1200
     },
     "usage": {
       "_comment": "LLM usage source paths (supports ~ and $HOME). headroomStats empty = reuse fleet.cortex.headroomStats. openrouterKey: OPENROUTER_API_KEY env var takes precedence.",

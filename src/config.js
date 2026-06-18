@@ -275,10 +275,26 @@ const FLEET_DEFAULTS = {
     enabled: true,
     baseUrl: "",
     maxConcurrent: 3,
-    timeoutSec: 600,
+    // Per-agent run timeout (sets the agent CLI --timeout + open-attempt TTL).
+    // Raised 600 -> 1200: real Codex analytical turns ran >11 min and still
+    // weren't done at 600s. This is the load-bearing timeout — orchestrate's
+    // own wait budget never reaches the agent process.
+    timeoutSec: 1200,
     node: "",
     token: "",
     identity: "",
+  },
+  // Multi-agent orchestration (src/orchestrate.js).
+  // sequentialBoard: when true, board councils dispatch advisors ONE-AT-A-TIME
+  // (each with its own fresh timeout) instead of in parallel — the single-box
+  // reliability default, because a parallel council co-saturates the one gateway
+  // event loop. A per-run `sequential` flag on POST /api/fleet/orchestrate
+  // overrides this (true=force-sequential, false=force-parallel).
+  // timeoutSec: the runner's per-seat WAIT budget; kept >= dispatch.timeoutSec so
+  // the runner never gives up before the agent process is actually killed.
+  orchestrate: {
+    sequentialBoard: true,
+    timeoutSec: 1200,
   },
   rateLimit: { windowMs: 60000, max: 120 },
   // Cost budgets (USD) over LLM API spend — see src/budgets.js. 0 = no limit.

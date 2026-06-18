@@ -47,7 +47,9 @@
 
 const crypto = require("crypto");
 
-const DEFAULT_TIMEOUT_SEC = 600;
+// Default per-seat wait budget. Raised 600 -> 1200 to match dispatch.timeoutSec
+// so the runner doesn't give up before the agent process is actually killed.
+const DEFAULT_TIMEOUT_SEC = 1200;
 // Hard ceiling so a caller-supplied timeoutSec can never wedge a request
 // thread forever; mirrors dispatch's own grace philosophy.
 const MAX_TIMEOUT_SEC = 3600;
@@ -309,6 +311,12 @@ function createOrchestrate(options = {}) {
 
   const enabled = config.enabled !== false;
   const defaultTimeoutSec = normalizeTimeoutSec(config.timeoutSec, DEFAULT_TIMEOUT_SEC);
+  // Server-side default for board sequencing. true => boards run advisors
+  // one-at-a-time unless a run explicitly overrides with `sequential:false`.
+  // This is the durable single-box reliability guarantee — it does not rely on
+  // the (LLM) caller remembering to pass the flag, and clients inherit it from
+  // this baked-in default since the installer ships no orchestrate config knob.
+  const defaultSequentialBoard = config.sequentialBoard === true;
 
   // In-memory registry of board/chain runs (for 202 + poll). Shares the
   // module clock + emit; reap timer uses the injected setTimerFn so tests can
@@ -519,6 +527,15 @@ function createOrchestrate(options = {}) {
     const agents = params.agents.map((a) => requireString(a, "agents[]"));
     const actor = typeof params.actor === "string" && params.actor ? params.actor : "operator";
     const timeoutSec = normalizeTimeoutSec(params.timeoutSec, defaultTimeoutSec);
+    // SEQUENTIAL board: dispatch advisors one-at-a-time (each owns the box, then
+    // the next) instead of fanning all seats out at once. Keeps board semantics
+    // (same independent question to each, collect-all, no short-circuit) but
+    // never co-saturates the single gateway event loop — the single-instance
+    // reliability fix. Each advisor gets its OWN fresh timeout budget.
+    // Per-run flag overrides the server default: undefined => use the config
+    // default; explicit true/false => force that mode.
+    const sequential =
+      params.sequential === undefined ? defaultSequentialBoard : params.sequential === true;
     const description = buildCardDescription({ question });
     const checkBudget = normalizeBudgetCheck(params.budgetCheck);
 
@@ -536,53 +553,96 @@ function createOrchestrate(options = {}) {
       // budget-missing and never dispatched (the per-task ceiling is the
       // chokepoint).
       let budgetHalt = null;
-      const seats = agents.map((agent, i) => {
-        if (budgetHalt) {
-          return { agent, taskId: null, dispatched: null, error: null, budgetBlocked: true };
-        }
-        // spentUSD here is the count of agents already dispatched — the
-        // runner's accrual hook is per-unit-of-work; the route supplies the
-        // real $ guard.
-        const block = checkBudget({ spentUSD: i });
-        if (block) {
-          budgetHalt = block;
-          return { agent, taskId: null, dispatched: null, error: null, budgetBlocked: true };
-        }
-        const card = kanban.createTask({ title: `${title} · ${agent}`, description }, actor);
-        try {
-          // BOARD flag: every council seat posts to #ceo-boardroom (leading
-          // @Chief), NOT its own #<agent>-command channel. dispatch.resolveSlack
-          // reads isBoard and derives the boardroom channel.
-          const dispatched = dispatch.dispatchTask(card.id, { agent, actor, isBoard: true });
-          return { agent, taskId: card.id, dispatched, error: null, budgetBlocked: false };
-        } catch (e) {
-          return { agent, taskId: card.id, dispatched: null, error: e, budgetBlocked: false };
-        }
-      });
-
-      // Race every live completion against ONE shared deadline. Cards that
-      // failed to dispatch (or were never dispatched due to a budget halt)
-      // resolve immediately as not-settled.
       const budgetMs = timeoutSec * 1000;
-      const outcomes = await Promise.all(
-        seats.map(async (seat) => {
-          if (!seat.dispatched) {
-            return {
-              agent: seat.agent,
-              taskId: seat.taskId,
-              text: null,
-              ok: false,
-              truncated: false,
-              timedOut: false,
-              budgetBlocked: !!seat.budgetBlocked,
-              dispatchError: seat.error ? seat.error.message : null,
-            };
+      const notDispatchedOutcome = (agent, taskId, budgetBlocked, dispatchError) => ({
+        agent,
+        taskId,
+        text: null,
+        ok: false,
+        truncated: false,
+        timedOut: false,
+        budgetBlocked,
+        dispatchError,
+      });
+      let outcomes;
+
+      if (sequential) {
+        // SEQUENTIAL: dispatch one advisor, await it against its OWN fresh
+        // deadline (budgetMs per seat, not a shared clock), collect, THEN the
+        // next. Only one open dispatch ever exists, so it never trips
+        // maxConcurrent and never co-saturates the gateway event loop. A
+        // failed/timed-out seat does NOT skip the rest (board semantics, unlike
+        // chain). The CLOSED ceiling still halts the remainder once it blocks.
+        outcomes = [];
+        for (let i = 0; i < agents.length; i += 1) {
+          const agent = agents[i];
+          if (budgetHalt) {
+            outcomes.push(notDispatchedOutcome(agent, null, true, null));
+            continue;
           }
-          const raced = await withTimeout(seat.dispatched.completion, budgetMs, setTimerFn);
-          const outcome = collectOutcome(seat.taskId, seat.dispatched, raced.settled);
-          return { ...outcome, taskId: seat.taskId, budgetBlocked: false, dispatchError: null };
-        }),
-      );
+          const block = checkBudget({ spentUSD: i });
+          if (block) {
+            budgetHalt = block;
+            outcomes.push(notDispatchedOutcome(agent, null, true, null));
+            continue;
+          }
+          const card = kanban.createTask({ title: `${title} · ${agent}`, description }, actor);
+          let dispatched;
+          try {
+            dispatched = dispatch.dispatchTask(card.id, { agent, actor, isBoard: true });
+          } catch (e) {
+            outcomes.push(notDispatchedOutcome(agent, card.id, false, e.message));
+            continue;
+          }
+          // eslint-disable-next-line no-await-in-loop -- sequential by design
+          const raced = await withTimeout(dispatched.completion, budgetMs, setTimerFn);
+          const outcome = collectOutcome(card.id, dispatched, raced.settled);
+          outcomes.push({ ...outcome, taskId: card.id, budgetBlocked: false, dispatchError: null });
+        }
+      } else {
+        const seats = agents.map((agent, i) => {
+          if (budgetHalt) {
+            return { agent, taskId: null, dispatched: null, error: null, budgetBlocked: true };
+          }
+          // spentUSD here is the count of agents already dispatched — the
+          // runner's accrual hook is per-unit-of-work; the route supplies the
+          // real $ guard.
+          const block = checkBudget({ spentUSD: i });
+          if (block) {
+            budgetHalt = block;
+            return { agent, taskId: null, dispatched: null, error: null, budgetBlocked: true };
+          }
+          const card = kanban.createTask({ title: `${title} · ${agent}`, description }, actor);
+          try {
+            // BOARD flag: every council seat posts to #ceo-boardroom (leading
+            // @Chief), NOT its own #<agent>-command channel. dispatch.resolveSlack
+            // reads isBoard and derives the boardroom channel.
+            const dispatched = dispatch.dispatchTask(card.id, { agent, actor, isBoard: true });
+            return { agent, taskId: card.id, dispatched, error: null, budgetBlocked: false };
+          } catch (e) {
+            return { agent, taskId: card.id, dispatched: null, error: e, budgetBlocked: false };
+          }
+        });
+
+        // Race every live completion against ONE shared deadline. Cards that
+        // failed to dispatch (or were never dispatched due to a budget halt)
+        // resolve immediately as not-settled.
+        outcomes = await Promise.all(
+          seats.map(async (seat) => {
+            if (!seat.dispatched) {
+              return notDispatchedOutcome(
+                seat.agent,
+                seat.taskId,
+                !!seat.budgetBlocked,
+                seat.error ? seat.error.message : null,
+              );
+            }
+            const raced = await withTimeout(seat.dispatched.completion, budgetMs, setTimerFn);
+            const outcome = collectOutcome(seat.taskId, seat.dispatched, raced.settled);
+            return { ...outcome, taskId: seat.taskId, budgetBlocked: false, dispatchError: null };
+          }),
+        );
+      }
 
       const results = outcomes.map(({ agent, text, ok, truncated, taskId }) => ({
         agent,
@@ -611,8 +671,9 @@ function createOrchestrate(options = {}) {
         missing: missing.length,
       });
 
+      const anchor = outcomes.find((o) => o.taskId);
       return {
-        taskId: seats.find((s) => s.taskId) ? seats.find((s) => s.taskId).taskId : null,
+        taskId: anchor ? anchor.taskId : null,
         question,
         results,
         missing,

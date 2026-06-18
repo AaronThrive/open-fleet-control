@@ -342,6 +342,119 @@ describe("runBoard", () => {
       (e) => e.statusCode === 400,
     );
   });
+
+  it("sequential: keeps exactly one dispatch open at a time, still collects all", async () => {
+    const kanban = makeKanban();
+    let open = 0;
+    let maxOpen = 0;
+    const dispatch = {
+      calls: [],
+      dispatchTask(taskId, opts) {
+        open += 1;
+        maxOpen = Math.max(maxOpen, open);
+        this.calls.push({ taskId, agent: opts.agent });
+        const completion = Promise.resolve().then(() => {
+          kanban._settle(taskId, { result: "success", result_text: opts.agent });
+          open -= 1;
+        });
+        return { task: { id: taskId }, sessionKey: "k", agent: opts.agent, attemptIndex: 0, completion };
+      },
+    };
+    const orch = makeOrchestrate(kanban, dispatch);
+    const out = await settleBoard(orch, {
+      title: "C",
+      question: "Q",
+      agents: ["a", "b", "c"],
+      sequential: true,
+    });
+    // The whole point: parallel would open all 3 dispatches up front; sequential
+    // never overlaps, so the single gateway event loop is never co-saturated.
+    assert.strictEqual(maxOpen, 1);
+    assert.strictEqual(out.results.length, 3);
+    assert.ok(out.results.every((r) => r.ok === true));
+    assert.deepStrictEqual(out.missing, []);
+    assert.strictEqual(kanban.created.length, 3);
+  });
+
+  it("sequential: a timed-out seat is flagged missing but the rest still run (board, not chain)", async () => {
+    const kanban = makeKanban();
+    const dispatch = makeDispatch(kanban, [
+      { result: "success", resultText: "A1" },
+      { never: true }, // b never settles -> timeout, must NOT short-circuit c
+      { result: "success", resultText: "A3" },
+    ]);
+    const orch = createOrchestrate({ kanban, dispatch, setTimerFn: immediateTimer });
+    const out = await settleBoard(orch, {
+      title: "C",
+      question: "Q",
+      agents: ["a", "b", "c"],
+      sequential: true,
+      timeoutSec: 1,
+    });
+    assert.deepStrictEqual(
+      out.results.map((r) => [r.agent, r.ok]),
+      [
+        ["a", true],
+        ["b", false],
+        ["c", true],
+      ],
+    );
+    assert.strictEqual(out.missing.length, 1);
+    assert.strictEqual(out.missing[0].agent, "b");
+    assert.strictEqual(out.missing[0].reason, "timeout");
+  });
+
+  it("server default sequentialBoard:true makes an omitted-flag board sequential", async () => {
+    const kanban = makeKanban();
+    let open = 0;
+    let maxOpen = 0;
+    const dispatch = {
+      calls: [],
+      dispatchTask(taskId, opts) {
+        open += 1;
+        maxOpen = Math.max(maxOpen, open);
+        const completion = Promise.resolve().then(() => {
+          kanban._settle(taskId, { result: "success", result_text: opts.agent });
+          open -= 1;
+        });
+        return { task: { id: taskId }, sessionKey: "k", agent: opts.agent, attemptIndex: 0, completion };
+      },
+    };
+    const orch = makeOrchestrate(kanban, dispatch, { sequentialBoard: true });
+    // NOTE: no `sequential` field in params — the server default must apply.
+    const out = await settleBoard(orch, { title: "C", question: "Q", agents: ["a", "b", "c"] });
+    assert.strictEqual(maxOpen, 1);
+    assert.strictEqual(out.results.length, 3);
+    assert.ok(out.results.every((r) => r.ok === true));
+  });
+
+  it("per-run sequential:false overrides the server default (forces parallel)", async () => {
+    const kanban = makeKanban();
+    let open = 0;
+    let maxOpen = 0;
+    const dispatch = {
+      calls: [],
+      dispatchTask(taskId, opts) {
+        open += 1;
+        maxOpen = Math.max(maxOpen, open);
+        const completion = Promise.resolve().then(() => {
+          kanban._settle(taskId, { result: "success", result_text: opts.agent });
+          open -= 1;
+        });
+        return { task: { id: taskId }, sessionKey: "k", agent: opts.agent, attemptIndex: 0, completion };
+      },
+    };
+    const orch = makeOrchestrate(kanban, dispatch, { sequentialBoard: true });
+    const out = await settleBoard(orch, {
+      title: "C",
+      question: "Q",
+      agents: ["a", "b", "c"],
+      sequential: false,
+    });
+    // Override wins: all three dispatched up front (parallel fan-out).
+    assert.strictEqual(maxOpen, 3);
+    assert.strictEqual(out.results.length, 3);
+  });
 });
 
 // ---------------------------------------------------------------------------
