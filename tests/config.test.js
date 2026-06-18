@@ -296,6 +296,127 @@ describe("config module", () => {
     });
   });
 
+  describe("fleet.spawn config — AC-21", () => {
+    function freshLoadConfig() {
+      for (const key of Object.keys(require.cache)) {
+        if (key.includes("config.js")) {
+          delete require.cache[key];
+        }
+      }
+      const { loadConfig } = require("../src/config");
+      return loadConfig({ localPath: "/nonexistent/ofc-test-no-local.json" });
+    }
+
+    it("spawn block exists in fleet config", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.ok(config.fleet.spawn, "fleet.spawn block must exist");
+      assert.strictEqual(typeof config.fleet.spawn, "object");
+    });
+
+    it("defaults: enabled is false (feature dark)", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.spawn.enabled, false);
+    });
+
+    it("defaults: poolCeiling is 8", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.spawn.poolCeiling, 8);
+    });
+
+    it("defaults: targetPeak is 6", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.spawn.targetPeak, 6);
+    });
+
+    it("defaults: workerMemBytes is 2684354560 (2.5 GiB)", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.spawn.workerMemBytes, 2684354560);
+    });
+
+    it("defaults: readinessOks is 3", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.spawn.readinessOks, 3);
+    });
+
+    it("defaults: readinessTimeoutMs is 10000", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.spawn.readinessTimeoutMs, 10000);
+    });
+
+    it("defaults: idleReapMs is 60000", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.spawn.idleReapMs, 60000);
+    });
+
+    it("defaults: reconcileMs is 5000", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.spawn.reconcileMs, 5000);
+    });
+
+    it("defaults: maxLifetimeMs is 3600000 (1 hour)", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.spawn.maxLifetimeMs, 3600000);
+    });
+
+    it("defaults: recycleJitterMs is 5000", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.spawn.recycleJitterMs, 5000);
+    });
+
+    it("defaults: queueMax is 100", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.spawn.queueMax, 100);
+    });
+
+    it("defaults: queueDeadlineMs is 30000", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.spawn.queueDeadlineMs, 30000);
+    });
+
+    it("defaults: slackDeadlineMs is 3000", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.spawn.slackDeadlineMs, 3000);
+    });
+
+    it("defaults: ramBudgetBytes is 80% of 32 GiB", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      const expected = Math.floor(0.8 * 32 * 1024 * 1024 * 1024);
+      assert.strictEqual(config.fleet.spawn.ramBudgetBytes, expected);
+    });
+
+    it("defaults: registrationTtlMs is 300000 (5 minutes)", () => {
+      delete process.env.FLEET_CONFIG_JSON;
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.spawn.registrationTtlMs, 300000);
+    });
+
+    it("FLEET_CONFIG_JSON can override spawn.enabled and a tunable", () => {
+      process.env.FLEET_CONFIG_JSON = JSON.stringify({
+        spawn: { enabled: true, poolCeiling: 4 },
+      });
+      const config = freshLoadConfig();
+      assert.strictEqual(config.fleet.spawn.enabled, true);
+      assert.strictEqual(config.fleet.spawn.poolCeiling, 4);
+      // Untouched defaults survive the partial merge
+      assert.strictEqual(config.fleet.spawn.targetPeak, 6);
+    });
+  });
+
   describe("fleet.agents source config", () => {
     function freshLoadConfig() {
       for (const key of Object.keys(require.cache)) {
