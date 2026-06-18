@@ -509,6 +509,59 @@ if (CONFIG.fleet.spawn && CONFIG.fleet.spawn.enabled === true) {
   const dockerIface = createDockerPool({
     socketPath: CONFIG.fleet.docker?.socketPath,
   });
+
+  // W-1 — Real readiness probe (AC-5). GETs http://127.0.0.1:<port><healthPath>
+  // over loopback (workers expose their mapped port on the host) and resolves
+  // true on HTTP 200. Timeout is short (3 s) so the readiness loop stays
+  // responsive. Injectable at call-site (unit tests pass their own probeFn via
+  // opts.probeFn); this function is the constructor-injected default used when
+  // spawn.enabled === true and no per-call override is supplied.
+  const spawnCfgLive = CONFIG.fleet.spawn;
+  const probePort = Number(spawnCfgLive.workerPort) || 443;
+  const probeHealthPath = "/api/health";
+  const probeTimeoutMs = 3000;
+  const probeHealthFn = (worker) =>
+    new Promise((resolve) => {
+      let settled = false;
+      const settle = (ok) => {
+        if (!settled) {
+          settled = true;
+          resolve(ok);
+        }
+      };
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: probePort,
+          path: probeHealthPath,
+          method: "GET",
+        },
+        (res) => {
+          res.resume(); // drain to free socket
+          settle(res.statusCode === 200);
+        },
+      );
+      req.setTimeout(probeTimeoutMs, () => {
+        req.destroy();
+        settle(false);
+      });
+      req.on("error", () => settle(false));
+      req.end();
+    });
+
+  // W-2 — Real MemAvailable reader (AC-15). Reads /proc/meminfo and parses the
+  // MemAvailable line (KiB → bytes). Synchronous: /proc/meminfo is an in-kernel
+  // virtual file — no disk I/O — and the capacity governor calls it inline
+  // before any docker operation, so sync is the right idiom here (mirrors the
+  // os.totalmem() pattern). Injectable at call-site for unit tests; this is the
+  // constructor-injected default used when spawn.enabled === true.
+  const readMemAvailableFn = () => {
+    const raw = fs.readFileSync("/proc/meminfo", "utf8");
+    const m = raw.match(/^MemAvailable:\s+(\d+)\s+kB/m);
+    if (!m) throw new Error("[AgentSpawn] MemAvailable not found in /proc/meminfo");
+    return Number(m[1]) * 1024; // KiB → bytes
+  };
+
   agentSpawn = createAgentSpawn({
     config: CONFIG,
     mesh: fleet.mesh,
@@ -516,6 +569,8 @@ if (CONFIG.fleet.spawn && CONFIG.fleet.spawn.enabled === true) {
     store: spawnStore,
     docker: dockerIface,
     logger: console,
+    probeHealthFn,
+    readMemAvailableFn,
   });
   // AC-17 — publish the live controller to the late-binding ref so orchestrate's
   // spawn proxy (wired above, before this block) routes seats to leased workers.
