@@ -466,19 +466,30 @@ function createAgentsRoster(options = {}) {
 
   /**
    * Flat sorted assignee suggestions for the kanban dropdown: plain agent ids
-   * (deduped across nodes), plus "agent-id@node" qualified forms ONLY when the
-   * fleet spans more than one node. The "@node" form exists to disambiguate
-   * remote-dispatch routing in a multi-node fleet; on a single-node install it
-   * just duplicates every agent in the picker, so omit it there.
+   * (deduped across nodes), plus "agent-id@node" qualified forms ONLY for ids
+   * that exist on MORE THAN ONE node. The "@node" form exists to disambiguate
+   * remote-dispatch routing for a genuinely ambiguous id; an id unique to a
+   * single node needs no qualifier and gets the bare id only — qualifying every
+   * agent in a multi-node fleet would just duplicate the picker.
    * @returns {Promise<string[]>}
    */
   async function getAssignees() {
     const roster = await getRoster();
-    const nodeCount = new Set(roster.agents.map((a) => a.node).filter(Boolean)).size;
+
+    // id -> set of nodes that host it. An id on >1 node is ambiguous.
+    const nodesById = new Map();
+    for (const agent of roster.agents) {
+      if (!agent.node) continue;
+      const nodes = nodesById.get(agent.id) || new Set();
+      nodes.add(agent.node);
+      nodesById.set(agent.id, nodes);
+    }
+
     const values = new Set();
     for (const agent of roster.agents) {
       values.add(agent.id);
-      if (nodeCount > 1) values.add(`${agent.id}@${agent.node}`);
+      const nodes = nodesById.get(agent.id);
+      if (agent.node && nodes && nodes.size > 1) values.add(`${agent.id}@${agent.node}`);
     }
     return [...values].sort((a, b) => a.localeCompare(b));
   }

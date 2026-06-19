@@ -605,14 +605,28 @@ describe("agents source config", () => {
 // ---------------------------------------------------------------------------
 
 describe("getAssignees", () => {
-  it("returns sorted plain ids plus id@node forms", async () => {
+  it("qualifies only ids that exist on more than one node", async () => {
+    // Fleet: self-host has {main, dev}; hermes has {main}. Only "main" is
+    // ambiguous (2 nodes) → it gets both @node forms; "dev" is unique to a
+    // single node → bare id only, no qualifier.
     const t = tree(configFixture());
     const roster = makeRoster(t, {
       mesh: meshFixture([onlineNode("hermes", "https://hermes/health")]),
       fetchFn: async () => okResponse({ agents: [{ id: "main" }] }),
     });
     const assignees = await roster.getAssignees();
-    assert.deepEqual(assignees, ["dev", "dev@self-host", "main", "main@hermes", "main@self-host"]);
+    assert.deepEqual(assignees, ["dev", "main", "main@hermes", "main@self-host"]);
+  });
+
+  it("emits bare ids only when every id is unique to a single node", async () => {
+    // Two nodes, but no id is shared → no @node qualifiers at all.
+    const t = tree(configFixture());
+    const roster = makeRoster(t, {
+      mesh: meshFixture([onlineNode("hermes", "https://hermes/health")]),
+      fetchFn: async () => okResponse({ agents: [{ id: "ops" }] }),
+    });
+    const assignees = await roster.getAssignees();
+    assert.deepEqual(assignees, ["dev", "main", "ops"]);
   });
 });
 
@@ -653,7 +667,8 @@ describe("routes", () => {
     const t = tree(configFixture());
     const roster = makeRoster(t, {
       mesh: meshFixture([onlineNode("hermes", "https://hermes/health")]),
-      fetchFn: async () => okResponse({ agents: [{ id: "ops", active: true }] }),
+      // "main" collides with the local node → ambiguous, so it gets @node forms.
+      fetchFn: async () => okResponse({ agents: [{ id: "main", active: true }] }),
     });
     const res = mockRes();
     await roster.routes["GET /api/agents/fleet"]({ method: "GET" }, res);
@@ -663,7 +678,7 @@ describe("routes", () => {
     assert.equal(payload.counts.total, 3);
     assert.equal(payload.counts.nodes, 2);
     assert.ok(Array.isArray(payload.assignees));
-    assert.ok(payload.assignees.includes("ops@hermes"));
+    assert.ok(payload.assignees.includes("main@hermes"));
     assert.ok(payload.assignees.includes("dev"));
   });
 });
