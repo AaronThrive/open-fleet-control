@@ -81,10 +81,9 @@ let sseRetries = 0;
 // SortableJS loader singleton (UMD file → script tag → window.Sortable).
 let sortableLoadPromise = null;
 
-// Assignee suggestions for the drawer combo — fetched lazily from the fleet
+// Assignee roster for the drawer <select> — fetched lazily from the fleet
 // agents roster on first drawer open, cached for the lifetime of one init().
 let assigneeFetchPromise = null;
-const ASSIGNEE_DATALIST_ID = "kb-assignee-datalist";
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -196,15 +195,6 @@ function announce(message) {
   window.setTimeout(() => {
     if (isActive()) el.textContent = message;
   }, 30);
-}
-
-function isOverdue(task) {
-  if (!task.due || task.status === "done" || task.status === "failed") return false;
-  const due = new Date(task.due);
-  if (Number.isNaN(due.getTime())) return false;
-  // Date-only strings parse as UTC midnight; treat the whole due day as on-time
-  const endOfDueDay = new Date(due.getTime() + 24 * 60 * 60 * 1000);
-  return endOfDueDay.getTime() < Date.now();
 }
 
 function formatTs(ts) {
@@ -585,13 +575,7 @@ function buildCard(task) {
   const badges = document.createElement("div");
   badges.className = "kb-card-badges";
 
-  const prio = document.createElement("span");
-  prio.className = `kb-prio kb-prio-${task.priority}`;
-  prio.textContent = `P${task.priority}`;
-  badges.appendChild(prio);
-
   if (task.assignee) badges.appendChild(buildBadge("kb-badge-assignee", task.assignee));
-  if (task.node) badges.appendChild(buildBadge("kb-badge-node", task.node));
   if (task.stale) {
     badges.appendChild(buildBadge("kb-badge-stale", t("views.kanban.staleBadge", {}, "STALE")));
   }
@@ -618,23 +602,7 @@ function buildCard(task) {
     badges.appendChild(dispatchBtn);
   }
 
-  if (task.due) {
-    const due = document.createElement("span");
-    due.className = isOverdue(task) ? "kb-due kb-overdue" : "kb-due";
-    due.textContent = t("views.kanban.due", { date: task.due.slice(0, 10) }, "Due {date}");
-    badges.appendChild(due);
-  }
   card.appendChild(badges);
-
-  if (task.progress > 0) {
-    const bar = document.createElement("div");
-    bar.className = "kb-progress";
-    const fill = document.createElement("div");
-    fill.className = "kb-progress-fill";
-    fill.style.width = `${Math.min(100, Math.max(0, task.progress))}%`;
-    bar.appendChild(fill);
-    card.appendChild(bar);
-  }
 
   const commentCount = Array.isArray(task.comments) ? task.comments.length : 0;
   const attemptCount = Array.isArray(task.attempts) ? task.attempts.length : 0;
@@ -1223,29 +1191,59 @@ function openDrawer(taskId) {
   state.drawerReturnTaskId = taskId;
   state.refs.drawer.hidden = false;
   state.refs.backdrop.hidden = false;
-  setupAssigneeCombo();
+  populateAssigneeSelect();
   renderDrawer(task, { preserveEdits: false });
   state.refs.drawer.querySelector("#kb-drawer-close")?.focus();
 }
 
 /**
- * Upgrade the plain assignee text input into a combo: an attached <datalist>
- * offers every fleet agent ("id" and "id@node" forms) while free text still
- * works. Suggestions come from GET /api/agents/fleet, fetched lazily on the
- * first drawer open and cached per init(); any failure simply leaves the
- * input as plain text (XSS-safe: option values set via the value property).
+ * Populate the assignee <select> from the fleet roster: a blank "unassigned"
+ * option plus one <option> per assignee (deduped "id" / "id@node" forms the
+ * server returns). The roster comes from GET /api/agents/fleet, fetched lazily
+ * on the first drawer open and cached per init(); any failure simply leaves
+ * the select with only the blank option. XSS-safe: option text and value are
+ * set via the value/textContent properties, never innerHTML. The current task
+ * value is re-applied after population so an existing assignment is preserved
+ * even when it is not (yet) in the roster.
  */
-function setupAssigneeCombo() {
-  const input = state.refs.drawer?.querySelector("#kb-f-assignee");
-  if (!input) return;
+function populateAssigneeSelect() {
+  const select = state.refs.drawer?.querySelector("#kb-f-assignee");
+  if (!select) return;
 
-  let datalist = state.refs.drawer.querySelector(`#${ASSIGNEE_DATALIST_ID}`);
-  if (!datalist) {
-    datalist = document.createElement("datalist");
-    datalist.id = ASSIGNEE_DATALIST_ID;
-    state.refs.drawer.appendChild(datalist);
-  }
-  input.setAttribute("list", ASSIGNEE_DATALIST_ID);
+  const renderOptions = (assignees) => {
+    if (!isActive() || !select.isConnected) return;
+    const current = select.value;
+    select.textContent = "";
+
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = t("views.kanban.unassigned", {}, "— Unassigned —");
+    select.appendChild(blank);
+
+    const seen = new Set();
+    for (const assignee of assignees) {
+      const value = String(assignee);
+      if (seen.has(value)) continue;
+      seen.add(value);
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value;
+      select.appendChild(option);
+    }
+
+    // Preserve the open card's value even if the roster doesn't list it.
+    if (current && !seen.has(current)) {
+      const option = document.createElement("option");
+      option.value = current;
+      option.textContent = current;
+      select.appendChild(option);
+    }
+    select.value = current;
+  };
+
+  // Render immediately with whatever is cached (at minimum the blank option),
+  // then re-render once the roster lands.
+  renderOptions([]);
 
   if (!assigneeFetchPromise) {
     assigneeFetchPromise = fetch("/api/agents/fleet")
@@ -1253,14 +1251,7 @@ function setupAssigneeCombo() {
       .catch(() => null);
   }
   assigneeFetchPromise.then((data) => {
-    if (!isActive() || !datalist.isConnected) return;
-    const assignees = Array.isArray(data?.assignees) ? data.assignees : [];
-    datalist.textContent = "";
-    for (const assignee of assignees) {
-      const option = document.createElement("option");
-      option.value = String(assignee);
-      datalist.appendChild(option);
-    }
+    renderOptions(Array.isArray(data?.assignees) ? data.assignees : []);
   });
 }
 
@@ -1375,7 +1366,6 @@ function renderDrawer(task, { preserveEdits }) {
     if (preserveEdits && input === focused) return;
     const field = input.dataset.field;
     let value = task[field];
-    if (field === "due" && value) value = String(value).slice(0, 10);
     if (value === null || value === undefined) value = "";
     input.value = String(value);
   });
@@ -1483,16 +1473,7 @@ async function patchOpenTask(field, rawValue) {
   if (!taskId) return;
 
   let value = rawValue;
-  if (field === "priority" || field === "progress") {
-    value = parseInt(rawValue, 10);
-    if (Number.isNaN(value)) {
-      toast(t("views.kanban.mustBeNumber", { field }, "{field} must be a number"));
-      const task = getTask(taskId);
-      if (task) renderDrawer(task, { preserveEdits: false });
-      return;
-    }
-  }
-  if (field === "due" || field === "assignee" || field === "node") {
+  if (field === "assignee") {
     if (typeof value === "string" && value.trim() === "") value = null;
   }
 

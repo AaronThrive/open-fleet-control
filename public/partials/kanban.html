@@ -293,11 +293,6 @@
       background: rgba(var(--accent-rgb), 0.12);
       border: 1px solid rgba(var(--accent-rgb), 0.35);
     }
-    .kb-badge-node {
-      color: var(--accent-2);
-      background: rgba(var(--accent-2-rgb), 0.1);
-      border: 1px solid rgba(var(--accent-2-rgb), 0.35);
-    }
     .kb-badge-stale {
       color: var(--yellow);
       background: rgba(255, 178, 36, 0.12);
@@ -312,47 +307,6 @@
       50% {
         opacity: 0.45;
       }
-    }
-    .kb-prio {
-      font-size: 0.66rem;
-      font-weight: 700;
-      border-radius: 4px;
-      padding: 1px 5px;
-    }
-    .kb-prio-1 {
-      color: var(--red);
-      border: 1px solid rgba(248, 81, 73, 0.55);
-      background: rgba(248, 81, 73, 0.12);
-    }
-    .kb-prio-2 {
-      color: var(--yellow);
-      border: 1px solid rgba(255, 178, 36, 0.5);
-      background: rgba(255, 178, 36, 0.1);
-    }
-    .kb-prio-3 {
-      color: var(--text-muted);
-      border: 1px solid var(--border);
-      background: transparent;
-    }
-    .kb-due {
-      font-size: 0.68rem;
-      color: var(--text-muted);
-    }
-    .kb-due.kb-overdue {
-      color: var(--red);
-      font-weight: 600;
-    }
-    .kb-progress {
-      height: 4px;
-      border-radius: 2px;
-      background: var(--border);
-      overflow: hidden;
-    }
-    .kb-progress-fill {
-      height: 100%;
-      background: var(--accent);
-      box-shadow: 0 0 6px rgba(var(--accent-rgb), 0.7);
-      border-radius: 2px;
     }
     .kb-card-meta {
       display: flex;
@@ -541,6 +495,19 @@
       min-height: 84px;
       resize: vertical;
     }
+    /* Prominent task title — the headline of the drawer */
+    .kb-field input.kb-f-title {
+      font-size: 1.05rem;
+      font-weight: 600;
+      padding: 9px 10px;
+      line-height: 1.3;
+    }
+    /* Roomy multi-line description — agents need the full brief at a glance */
+    .kb-field textarea.kb-f-description {
+      min-height: 200px;
+      line-height: 1.5;
+      resize: vertical;
+    }
     .kb-field-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -572,6 +539,13 @@
       display: flex;
       flex-direction: column;
       gap: 3px;
+    }
+    /* Dispatch attempt log: a touch more room + a left accent so each attempt
+       reads as a distinct, scannable entry in the history. */
+    .kb-attempt {
+      padding: 10px;
+      gap: 6px;
+      border-left: 2px solid var(--accent-2);
     }
     .kb-attempt-head,
     .kb-comment-head {
@@ -856,11 +830,11 @@
 
     <div class="kb-field">
       <label for="kb-f-title" data-i18n="views.kanban.fieldTitle">Title</label>
-      <input id="kb-f-title" data-field="title" type="text" maxlength="200" />
+      <input id="kb-f-title" class="kb-f-title" data-field="title" type="text" maxlength="200" />
     </div>
     <div class="kb-field">
       <label for="kb-f-description" data-i18n="views.kanban.fieldDescription">Description</label>
-      <textarea id="kb-f-description" data-field="description"></textarea>
+      <textarea id="kb-f-description" class="kb-f-description" data-field="description"></textarea>
     </div>
     <div class="kb-field">
       <label id="kb-move-row-label" data-i18n="views.kanban.moveToColumn">Move to column</label>
@@ -886,32 +860,14 @@
         </select>
       </div>
       <div class="kb-field">
-        <label for="kb-f-priority" data-i18n="views.kanban.fieldPriority">Priority</label>
-        <select id="kb-f-priority" data-field="priority">
-          <option value="1" data-i18n="views.kanban.prio1">P1 — Critical</option>
-          <option value="2" data-i18n="views.kanban.prio2">P2 — Normal</option>
-          <option value="3" data-i18n="views.kanban.prio3">P3 — Low</option>
-        </select>
-      </div>
-      <div class="kb-field">
         <label for="kb-f-assignee" data-i18n="views.kanban.fieldAssignee">Assignee</label>
-        <input id="kb-f-assignee" data-field="assignee" type="text" maxlength="128" />
-      </div>
-      <div class="kb-field">
-        <label for="kb-f-node" data-i18n="views.kanban.fieldNode">Node</label>
-        <input id="kb-f-node" data-field="node" type="text" maxlength="128" />
-      </div>
-      <div class="kb-field">
-        <label for="kb-f-due" data-i18n="views.kanban.fieldDue">Due</label>
-        <input id="kb-f-due" data-field="due" type="date" />
-      </div>
-      <div class="kb-field">
-        <label for="kb-f-progress" data-i18n="views.kanban.fieldProgress">Progress %</label>
-        <input id="kb-f-progress" data-field="progress" type="number" min="0" max="100" step="1" />
+        <select id="kb-f-assignee" data-field="assignee">
+          <option value="" data-i18n="views.kanban.unassigned">— Unassigned —</option>
+        </select>
       </div>
     </div>
 
-    <div class="kb-section-title" data-i18n="views.kanban.attempts">Attempts</div>
+    <div class="kb-section-title" data-i18n="views.kanban.attempts">Dispatch attempts</div>
     <div class="kb-attempts" id="kb-attempts"></div>
 
     <div class="kb-section-title" data-i18n="views.kanban.comments">Comments</div>

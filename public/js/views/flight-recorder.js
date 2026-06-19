@@ -29,6 +29,7 @@ let requestSeq = 0;
 let activeEls = null;
 let selectedRunId = null;
 let nextBefore = null; // archive cursor for "load older"
+let agentRosterPromise = null; // GET /api/agents/fleet, fetched once, cached
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -92,6 +93,59 @@ function showError(els, message) {
 function clearError(els) {
   els.error.hidden = true;
   els.error.textContent = "";
+}
+
+/**
+ * Populate the agent filter <select> from the fleet roster (deduped "id" /
+ * "id@node" forms the server returns). First option is always "All agents"
+ * (empty value = no filter). The roster is fetched once and cached for the
+ * module's lifetime; any failure simply leaves the lone "All agents" option.
+ * XSS-safe: option text and value are set via value/textContent, never
+ * innerHTML. A current selection is preserved across re-population.
+ */
+function populateAgentSelect(els) {
+  const select = els.agent;
+  if (!select || select.tagName !== "SELECT") return;
+
+  const renderOptions = (assignees) => {
+    if (els !== activeEls || !select.isConnected) return;
+    const current = select.value;
+    select.textContent = "";
+
+    const all = document.createElement("option");
+    all.value = "";
+    all.textContent = t("views.flightRecorder.allAgents", {}, "All agents");
+    select.appendChild(all);
+
+    const seen = new Set();
+    for (const assignee of assignees) {
+      const value = String(assignee);
+      if (seen.has(value)) continue;
+      seen.add(value);
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value;
+      select.appendChild(option);
+    }
+
+    // Keep the active filter even if the roster doesn't list that id.
+    if (current && !seen.has(current)) {
+      const option = document.createElement("option");
+      option.value = current;
+      option.textContent = current;
+      select.appendChild(option);
+    }
+    select.value = current;
+  };
+
+  if (!agentRosterPromise) {
+    agentRosterPromise = fetch("/api/agents/fleet")
+      .then((response) => (response.ok ? response.json() : null))
+      .catch(() => null);
+  }
+  agentRosterPromise.then((data) => {
+    renderOptions(Array.isArray(data?.assignees) ? data.assignees : []);
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -453,14 +507,13 @@ export function init(container) {
       });
     }
   });
-  els.agent.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      nextBefore = null;
-      loadRuns(els);
-    }
+  els.agent.addEventListener("change", () => {
+    nextBefore = null;
+    loadRuns(els);
   });
   els.loadMore.addEventListener("click", () => loadRuns(els, { append: true }));
 
+  populateAgentSelect(els);
   loadRuns(els);
   connectSSE(els);
   setLiveBadge(els, eventSource && eventSource.readyState === 1);
