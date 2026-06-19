@@ -1052,7 +1052,7 @@ function createFleetRoutes({
 
   /**
    * Map a cortex adapter { error } message to an HTTP status: unknown ids
-   * are 404, validation messages are 400, everything else (CLI/dataset
+   * are 404, validation messages are 400, everything else (CLI/store
    * unavailable or failing) is 503.
    */
   function memoryErrorStatus(message) {
@@ -1061,102 +1061,33 @@ function createFleetRoutes({
     return 503;
   }
 
+  // The Cortex memory browser is READ-ONLY: it reflects gbrain (the system of
+  // record), which is written out-of-band by a nightly sync. No store/update/
+  // delete endpoints and no knowledge-graph viz are exposed here.
   async function handleCortex(req, res, method, segments, query) {
     if (segments.length === 1 && method === "GET") {
       json(res, 200, await fleet.cortex.getState());
       return true;
     }
-    if (segments[1] === "memory" && segments.length === 2) {
-      if (method === "GET") {
-        const searchQuery = query.get("query");
-        const limit = parseIntParam(query, "limit", null);
-        const opts = limit !== null ? { limit } : {};
-        const result = searchQuery
-          ? await fleet.cortex.searchMemory(searchQuery, opts)
-          : await fleet.cortex.listMemory(opts);
-        if (result && result.error) {
-          json(res, 503, { error: result.error });
-          return true;
-        }
-        json(res, 200, result);
-        return true;
-      }
-      if (method === "POST") {
-        const user = guardMutation(req, res);
-        if (!user) return true;
-        const body = await readJsonBody(req);
-        if (typeof body.text !== "string" || body.text.trim().length === 0) {
-          throw httpError(400, "Body must include a non-empty 'text' field");
-        }
-        const result = await fleet.cortex.storeMemory(body.text, body.options || {});
-        if (result && result.error) {
-          json(res, 503, { error: result.error });
-          return true;
-        }
-        recordAudit(user, "memory.write", result.id || null, {
-          op: "store",
-          bytes: Buffer.byteLength(body.text, "utf8"),
-        });
-        json(res, 200, { success: true, result });
-        return true;
-      }
-      return false;
-    }
-    if (segments[1] === "memory" && segments.length === 3) {
-      const memoryId = segments[2];
-      if (method === "GET") {
-        const result = await fleet.cortex.getMemory(memoryId);
-        if (result && result.error) {
-          json(res, memoryErrorStatus(result.error), { error: result.error });
-          return true;
-        }
-        json(res, 200, result);
-        return true;
-      }
-      if (method === "PATCH") {
-        const user = guardMutation(req, res);
-        if (!user) return true;
-        const body = await readJsonBody(req);
-        const changes = {};
-        for (const field of ["text", "category", "scope", "importance"]) {
-          if (body[field] !== undefined) changes[field] = body[field];
-        }
-        if (Object.keys(changes).length === 0) {
-          throw httpError(
-            400,
-            "Body must include at least one of: text, category, scope, importance",
-          );
-        }
-        const result = await fleet.cortex.updateMemory(memoryId, changes);
-        if (result && result.error) {
-          json(res, memoryErrorStatus(result.error), { error: result.error });
-          return true;
-        }
-        recordAudit(user, "memory.write", memoryId, {
-          op: "update",
-          fields: Object.keys(changes),
-        });
-        json(res, 200, { success: true, result });
-        return true;
-      }
-      if (method === "DELETE") {
-        const user = guardMutation(req, res);
-        if (!user) return true;
-        const result = await fleet.cortex.deleteMemory(memoryId);
-        if (result && result.error) {
-          json(res, memoryErrorStatus(result.error), { error: result.error });
-          return true;
-        }
-        recordAudit(user, "memory.write", memoryId, { op: "delete" });
-        json(res, 200, { success: true, result });
-        return true;
-      }
-      return false;
-    }
-    if (segments[1] === "graph" && segments.length === 2 && method === "GET") {
-      const result = await fleet.cortex.getGraph({});
+    if (segments[1] === "memory" && segments.length === 2 && method === "GET") {
+      const searchQuery = query.get("query");
+      const limit = parseIntParam(query, "limit", null);
+      const opts = limit !== null ? { limit } : {};
+      const result = searchQuery
+        ? await fleet.cortex.searchMemory(searchQuery, opts)
+        : await fleet.cortex.listMemory(opts);
       if (result && result.error) {
         json(res, 503, { error: result.error });
+        return true;
+      }
+      json(res, 200, result);
+      return true;
+    }
+    if (segments[1] === "memory" && segments.length === 3 && method === "GET") {
+      const memoryId = segments[2];
+      const result = await fleet.cortex.getMemory(memoryId);
+      if (result && result.error) {
+        json(res, memoryErrorStatus(result.error), { error: result.error });
         return true;
       }
       json(res, 200, result);

@@ -281,11 +281,9 @@ function createFleetRuntime({ config, broadcast }) {
   });
 
   const cortex = createCortex({
-    lancedb: { dbPath: cortexPathOrDisabled(config.cortex.lancedbPath, stateDir, "lancedb") },
     gbrain: { cliPath: cortexPathOrDisabled(config.cortex.gbrainCli, stateDir, "gbrain") },
     gauges: {
       paths: {
-        headroom: config.cortex.headroomStats || "",
         leanCtx: config.cortex.leanCtxStats || "",
         lcmDb: config.cortex.lcmDb || "",
       },

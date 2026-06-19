@@ -249,7 +249,6 @@ const FLEET_DEFAULTS = {
   validationGate: { default: true },
   cortex: {
     enabled: true,
-    lancedbPath: "",
     gbrainCli: "",
     headroomStats: "",
     leanCtxStats: "",

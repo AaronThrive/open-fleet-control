@@ -1,8 +1,6 @@
 /**
- * Cortex compression gauges — token savings telemetry from three sources:
+ * Cortex compression gauges — token savings telemetry from two sources:
  *
- *  - headroom:  ~/.headroom/subscription_state.json (window token totals,
- *               raw vs weighted equivalent + cache metrics)
  *  - lean-ctx:  ~/.lean-ctx/stats.json (command output compression totals)
  *  - lcm:       ~/.openclaw/lcm.db (lossless-claw SQLite; historical
  *               summary compaction, read-only via node:sqlite)
@@ -68,7 +66,7 @@ function parseSqliteUtc(value) {
  *
  * @param {object} [options]
  * @param {string} [options.home] - home directory override (tests only)
- * @param {object} [options.paths] - overrides: { headroom, leanCtx, lcmDb }.
+ * @param {object} [options.paths] - overrides: { leanCtx, lcmDb }.
  *   Empty/blank strings are ignored — CONFIG flows "" through fleet.js to
  *   mean "use the default location", and a blank override must never clobber
  *   a real default path.
@@ -77,7 +75,6 @@ function parseSqliteUtc(value) {
 function createGauges(options = {}) {
   const home = options.home || os.homedir();
   const defaults = {
-    headroom: path.join(home, ".headroom", "subscription_state.json"),
     leanCtx: path.join(home, ".lean-ctx", "stats.json"),
     lcmDb: path.join(home, ".openclaw", "lcm.db"),
     openclawConfig: path.join(home, ".openclaw", "openclaw.json"),
@@ -89,70 +86,6 @@ function createGauges(options = {}) {
   const paths = { ...defaults, ...overrides };
   const sqliteLoader = options.sqliteLoader || defaultSqliteLoader;
   const now = options.now || Date.now;
-
-  function headroomGauge() {
-    const label = "Headroom (subscription window)";
-    try {
-      if (!fs.existsSync(paths.headroom)) {
-        return unavailableGauge("headroom", label, `file not found: ${paths.headroom}`);
-      }
-      const data = readJsonFile(paths.headroom);
-      // After a restart or failed poll, headroom writes the state file with
-      // `latest: null` and `window_tokens: null`. Reporting that as an
-      // available gauge full of zeros is misleading — mark it stale with
-      // enough context for the UI to say "daemon hasn't polled since <ts>".
-      const window = data.window_tokens || null;
-      const latest = data.latest || null;
-      if (!window && !latest) {
-        const gauge = unavailableGauge(
-          "headroom",
-          label,
-          `headroom state has no poll data yet (latest/window_tokens are null in ${paths.headroom})`,
-        );
-        gauge.detail.stale = true;
-        gauge.detail.lastError = data.last_error ?? null;
-        try {
-          gauge.detail.fileModifiedAt = fs.statSync(paths.headroom).mtime.toISOString();
-        } catch (e) {
-          gauge.detail.fileModifiedAt = null;
-        }
-        return gauge;
-      }
-      const w = window || {};
-      const rawTokens =
-        Number(w.total_raw) ||
-        Number(w.input || 0) +
-          Number(w.output || 0) +
-          Number(w.cache_reads || 0) +
-          Number(w.cache_writes_total || 0);
-      const effectiveTokens = Number(w.weighted_token_equivalent ?? rawTokens) || 0;
-      const extra = latest?.extra_usage;
-      const extraEnabled = !!(extra && extra.is_enabled);
-      return {
-        source: "headroom",
-        label,
-        rawTokens,
-        effectiveTokens,
-        savingsPct: computeSavingsPct(rawTokens, effectiveTokens),
-        detail: {
-          input: w.input ?? 0,
-          output: w.output ?? 0,
-          cacheReads: w.cache_reads ?? 0,
-          cacheWritesTotal: w.cache_writes_total ?? 0,
-          fiveHourUtilizationPct: latest?.five_hour?.utilization_pct ?? null,
-          fiveHourResetsAt: latest?.five_hour?.resets_at ?? null,
-          sevenDayUtilizationPct: latest?.seven_day?.utilization_pct ?? null,
-          sevenDayResetsAt: latest?.seven_day?.resets_at ?? null,
-          extraUsageUsd: extraEnabled ? (extra.used_credits_usd ?? null) : null,
-          extraUsageLimitUsd: extraEnabled ? (extra.monthly_limit_usd ?? null) : null,
-          polledAt: latest?.polled_at ?? null,
-        },
-        available: true,
-      };
-    } catch (e) {
-      return unavailableGauge("headroom", label, e.message);
-    }
-  }
 
   /** Top per-command token consumers from the stats.json commands map. */
   function topLeanCtxCommands(commands) {
@@ -336,7 +269,7 @@ function createGauges(options = {}) {
 
   /** All gauges; each source is isolated so one failure never hides another. */
   function getGauges() {
-    return [headroomGauge(), leanCtxGauge(), lcmGauge()];
+    return [leanCtxGauge(), lcmGauge()];
   }
 
   /**

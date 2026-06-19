@@ -4,8 +4,8 @@ const {
   createGbrain,
   parseJsonOutput,
   parseTsvPages,
-  parseExtractLinks,
   parseStatsText,
+  toMemoryItem,
 } = require("../src/cortex-gbrain");
 
 /** Verbatim `gbrain stats` text output from gbrain 0.12.3 on a live host. */
@@ -33,15 +33,9 @@ function mockExecFn(responder) {
 }
 
 const PAGES = [
-  { slug: "projects/alpha", title: "Project Alpha", type: "project" },
-  { slug: "people/bob", title: "Bob", type: "person" },
+  { slug: "projects/alpha", title: "Project Alpha", type: "project", updated_at: "Thu Jun 11" },
+  { slug: "people/bob", title: "Bob", type: "person", updated_at: "Mon Jun 08" },
   { id: "fallback-id", name: "No slug page" },
-];
-
-const LINKS = [
-  { from: "projects/alpha", to: "people/bob", type: "mentions" },
-  { source: "people/bob", target: "projects/alpha" },
-  { from: "orphan-without-target" },
 ];
 
 describe("cortex-gbrain module", () => {
@@ -92,33 +86,26 @@ describe("cortex-gbrain module", () => {
     });
   });
 
-  describe("parseExtractLinks()", () => {
-    it("parses NDJSON add_link lines followed by a pretty summary (real CLI shape)", () => {
-      const out =
-        '{"action":"add_link","from":"projects/alpha","to":"people/bob","type":"mentions","context":"..."}\n' +
-        '{"action":"add_link","from":"people/bob","to":"projects/alpha","type":"link"}\n' +
-        '{\n  "links_created": 2,\n  "timeline_entries_created": 0,\n  "pages_processed": 10\n}\n';
-      const links = parseExtractLinks(out);
-      assert.strictEqual(links.length, 2);
-      assert.strictEqual(links[0].from, "projects/alpha");
-      assert.strictEqual(links[1].to, "projects/alpha");
+  describe("toMemoryItem()", () => {
+    it("normalizes a page record into a memory-browser item", () => {
+      assert.deepStrictEqual(
+        toMemoryItem({ slug: "a/b", title: "B", type: "concept", updated_at: "Tue Jun 09" }),
+        { id: "a/b", title: "B", type: "concept", updatedAt: "Tue Jun 09" },
+      );
     });
 
-    it("returns [] for a bare summary object with zero candidates", () => {
-      const out =
-        '{\n  "links_created": 0,\n  "timeline_entries_created": 0,\n  "pages_processed": 383\n}\n';
-      assert.deepStrictEqual(parseExtractLinks(out), []);
+    it("falls back through id/name and defaults type to page", () => {
+      assert.deepStrictEqual(toMemoryItem({ id: "x", name: "X" }), {
+        id: "x",
+        title: "X",
+        type: "page",
+        updatedAt: null,
+      });
     });
 
-    it("accepts a plain JSON array or { links: [...] } envelope", () => {
-      assert.strictEqual(parseExtractLinks(JSON.stringify(LINKS)).length, 3);
-      assert.strictEqual(parseExtractLinks(JSON.stringify({ links: LINKS })).length, 3);
-    });
-
-    it("returns null for unusable output", () => {
-      assert.strictEqual(parseExtractLinks("not json at all"), null);
-      assert.strictEqual(parseExtractLinks(""), null);
-      assert.strictEqual(parseExtractLinks(null), null);
+    it("returns null for records with no id/slug", () => {
+      assert.strictEqual(toMemoryItem({ title: "no id" }), null);
+      assert.strictEqual(toMemoryItem(null), null);
     });
   });
 
@@ -182,113 +169,123 @@ describe("cortex-gbrain module", () => {
     });
   });
 
-  describe("getGraph()", () => {
-    it("builds nodes from list and edges from extract links", async () => {
+  describe("list()", () => {
+    it("lists ALL pages with no --limit cap and shapes { items, total }", async () => {
       const execFn = mockExecFn(({ args }) => {
         if (args[0] === "list") return { error: null, stdout: JSON.stringify(PAGES), stderr: "" };
-        if (args[0] === "extract")
-          return { error: null, stdout: JSON.stringify(LINKS), stderr: "" };
         return { error: new Error(`unexpected: ${args.join(" ")}`), stdout: "", stderr: "" };
       });
       const gbrain = createGbrain({ execFn });
-      const graph = await gbrain.getGraph({ limit: 50 });
+      const result = await gbrain.list();
 
-      assert.ok(!graph.error, graph.error);
-      assert.deepStrictEqual(execFn.calls[0].args, ["list", "--limit", "50", "--json"]);
-      assert.deepStrictEqual(execFn.calls[1].args, [
-        "extract",
-        "links",
-        "--source",
-        "db",
-        "--dry-run",
-        "--json",
-      ]);
-
-      assert.deepStrictEqual(graph.nodes, [
-        { id: "projects/alpha", title: "Project Alpha", type: "project" },
-        { id: "people/bob", title: "Bob", type: "person" },
-        { id: "fallback-id", title: "No slug page", type: "page" },
-      ]);
-      // The link without a target is dropped; alt field names are normalized
-      assert.deepStrictEqual(graph.edges, [
-        { from: "projects/alpha", to: "people/bob", kind: "mentions" },
-        { from: "people/bob", to: "projects/alpha", kind: "link" },
+      // No --limit flag: the memory browser shows the whole brain.
+      assert.deepStrictEqual(execFn.calls[0].args, ["list", "--json"]);
+      assert.strictEqual(result.total, 3);
+      assert.deepStrictEqual(result.items, [
+        { id: "projects/alpha", title: "Project Alpha", type: "project", updatedAt: "Thu Jun 11" },
+        { id: "people/bob", title: "Bob", type: "person", updatedAt: "Mon Jun 08" },
+        { id: "fallback-id", title: "No slug page", type: "page", updatedAt: null },
       ]);
     });
 
-    it("builds nodes from TSV list and edges from NDJSON extract (real gbrain 0.12.x output)", async () => {
-      const execFn = mockExecFn(({ args }) => {
-        if (args[0] === "list") {
-          return {
-            error: null,
-            stdout:
-              "projects/alpha\tproject\tTue Jun 09\tProject Alpha\n" +
-              "people/bob\tperson\tMon Jun 08\tBob\n",
-            stderr: "",
-          };
-        }
-        if (args[0] === "extract") {
-          return {
-            error: null,
-            stdout:
-              '{"action":"add_link","from":"projects/alpha","to":"people/bob","type":"mentions","context":"x"}\n' +
-              '{\n  "links_created": 1,\n  "timeline_entries_created": 0,\n  "pages_processed": 2\n}\n',
-            stderr: "",
-          };
-        }
-        return { error: new Error(`unexpected: ${args.join(" ")}`), stdout: "", stderr: "" };
-      });
+    it("parses TSV list output (gbrain <= 0.12.x)", async () => {
+      const execFn = mockExecFn(() => ({
+        error: null,
+        stdout:
+          "projects/alpha\tproject\tTue Jun 09\tProject Alpha\n" +
+          "people/bob\tperson\tMon Jun 08\tBob\n",
+        stderr: "",
+      }));
       const gbrain = createGbrain({ execFn });
-      const graph = await gbrain.getGraph({ limit: 10 });
-
-      assert.ok(!graph.error, graph.error);
-      assert.deepStrictEqual(graph.nodes, [
-        { id: "projects/alpha", title: "Project Alpha", type: "project" },
-        { id: "people/bob", title: "Bob", type: "person" },
-      ]);
-      assert.deepStrictEqual(graph.edges, [
-        { from: "projects/alpha", to: "people/bob", kind: "mentions" },
-      ]);
-      assert.strictEqual(graph.note, undefined);
+      const result = await gbrain.list();
+      assert.strictEqual(result.total, 2);
+      assert.strictEqual(result.items[0].id, "projects/alpha");
+      assert.strictEqual(result.items[0].updatedAt, "Tue Jun 09");
     });
 
-    it("returns empty edges without a note when extract reports zero candidates", async () => {
-      const execFn = mockExecFn(({ args }) => {
-        if (args[0] === "list") {
-          return { error: null, stdout: "a/b\tconcept\tTue Jun 09\tB\n", stderr: "" };
-        }
-        return {
-          error: null,
-          stdout:
-            '{\n  "links_created": 0,\n  "timeline_entries_created": 0,\n  "pages_processed": 1\n}\n',
-          stderr: "",
-        };
-      });
+    it("paginates with limit and offset over the full set", async () => {
+      const execFn = mockExecFn(() => ({ error: null, stdout: JSON.stringify(PAGES), stderr: "" }));
       const gbrain = createGbrain({ execFn });
-      const graph = await gbrain.getGraph();
-      assert.strictEqual(graph.nodes.length, 1);
-      assert.deepStrictEqual(graph.edges, []);
-      assert.strictEqual(graph.note, undefined);
+      const result = await gbrain.list({ limit: 1, offset: 1 });
+      assert.strictEqual(result.total, 3);
+      assert.strictEqual(result.items.length, 1);
+      assert.strictEqual(result.items[0].id, "people/bob");
     });
 
-    it("degrades to empty edges with a note when link extraction fails", async () => {
-      const execFn = mockExecFn(({ args }) => {
-        if (args[0] === "list") return { error: null, stdout: JSON.stringify(PAGES), stderr: "" };
-        return { error: new Error("extract not supported"), stdout: "", stderr: "" };
-      });
+    it("filters by case-insensitive substring on title/slug via query", async () => {
+      const execFn = mockExecFn(() => ({ error: null, stdout: JSON.stringify(PAGES), stderr: "" }));
       const gbrain = createGbrain({ execFn });
-      const graph = await gbrain.getGraph();
+      const byTitle = await gbrain.list({ query: "bob" });
+      assert.strictEqual(byTitle.total, 1);
+      assert.strictEqual(byTitle.items[0].id, "people/bob");
 
-      assert.strictEqual(graph.nodes.length, 3);
-      assert.deepStrictEqual(graph.edges, []);
-      assert.ok(graph.note.includes("link extraction unavailable"));
+      const bySlug = await gbrain.list({ query: "projects/" });
+      assert.strictEqual(bySlug.total, 1);
+      assert.strictEqual(bySlug.items[0].id, "projects/alpha");
     });
 
     it("returns { error } when listing pages fails", async () => {
       const execFn = mockExecFn(() => ({ error: new Error("boom"), stdout: "", stderr: "" }));
       const gbrain = createGbrain({ execFn });
-      const graph = await gbrain.getGraph();
-      assert.ok(graph.error.includes("gbrain list failed"));
+      const result = await gbrain.list();
+      assert.ok(result.error.includes("gbrain list failed"));
+    });
+  });
+
+  describe("search()", () => {
+    it("is a thin filter over list()", async () => {
+      const execFn = mockExecFn(() => ({ error: null, stdout: JSON.stringify(PAGES), stderr: "" }));
+      const gbrain = createGbrain({ execFn });
+      const result = await gbrain.search("alpha");
+      assert.strictEqual(result.total, 1);
+      assert.strictEqual(result.items[0].id, "projects/alpha");
+    });
+
+    it("rejects an empty query without calling the CLI", async () => {
+      const execFn = mockExecFn(() => ({ error: null, stdout: "[]", stderr: "" }));
+      const gbrain = createGbrain({ execFn });
+      assert.ok((await gbrain.search("")).error);
+      assert.ok((await gbrain.search("   ")).error);
+      assert.strictEqual(execFn.calls.length, 0);
+    });
+  });
+
+  describe("stats()", () => {
+    it("returns the TRUE page count from gbrain stats plus newest lastUpdated", async () => {
+      const execFn = mockExecFn(({ args }) => {
+        if (args[0] === "list") {
+          return {
+            error: null,
+            stdout:
+              "projects/alpha\tproject\tThu Jun 11\tProject Alpha\n" +
+              "people/bob\tperson\tMon Jun 08\tBob\n",
+            stderr: "",
+          };
+        }
+        if (args[0] === "stats") return { error: null, stdout: STATS_TEXT_OUTPUT, stderr: "" };
+        return { error: new Error(`unexpected: ${args.join(" ")}`), stdout: "", stderr: "" };
+      });
+      const gbrain = createGbrain({ execFn });
+      const result = await gbrain.stats();
+      // list cap < true count: page count must come from stats (383), not 2.
+      assert.deepStrictEqual(result, { pageCount: 383, lastUpdated: "Thu Jun 11" });
+    });
+
+    it("falls back to the listed page count when stats is unusable", async () => {
+      const execFn = mockExecFn(({ args }) => {
+        if (args[0] === "list") return { error: null, stdout: JSON.stringify(PAGES), stderr: "" };
+        return { error: new Error("stats not supported"), stdout: "", stderr: "" };
+      });
+      const gbrain = createGbrain({ execFn });
+      const result = await gbrain.stats();
+      assert.strictEqual(result.pageCount, 3);
+      assert.strictEqual(result.lastUpdated, "Thu Jun 11");
+    });
+
+    it("returns { error } when listing pages fails", async () => {
+      const execFn = mockExecFn(() => ({ error: new Error("boom"), stdout: "", stderr: "" }));
+      const gbrain = createGbrain({ execFn });
+      assert.ok((await gbrain.stats()).error.includes("gbrain list failed"));
     });
   });
 
@@ -310,62 +307,12 @@ describe("cortex-gbrain module", () => {
     });
   });
 
-  describe("getGraph() provenance", () => {
-    it("attaches total pages, db link count, and last-updated from stats + list", async () => {
-      const execFn = mockExecFn(({ args }) => {
-        if (args[0] === "list") {
-          // gbrain list is sorted most-recently-updated first
-          return {
-            error: null,
-            stdout:
-              "projects/alpha\tproject\tThu Jun 11\tProject Alpha\n" +
-              "people/bob\tperson\tMon Jun 08\tBob\n",
-            stderr: "",
-          };
-        }
-        if (args[0] === "extract") {
-          return { error: null, stdout: '{\n  "links_created": 0\n}\n', stderr: "" };
-        }
-        if (args[0] === "stats") {
-          return { error: null, stdout: STATS_TEXT_OUTPUT, stderr: "" };
-        }
-        return { error: new Error(`unexpected: ${args.join(" ")}`), stdout: "", stderr: "" };
-      });
-      const gbrain = createGbrain({ execFn });
-      const graph = await gbrain.getGraph({ limit: 10 });
-
-      assert.ok(!graph.error, graph.error);
-      // The graph may render fewer nodes (list caps at 100) than the brain
-      // holds — provenance must carry the TRUE page count from stats.
-      assert.deepStrictEqual(graph.provenance, {
-        totalPages: 383,
-        dbLinks: 0,
-        lastUpdated: "Thu Jun 11",
-      });
-    });
-
-    it("falls back to the listed page count when stats is unusable", async () => {
-      const execFn = mockExecFn(({ args }) => {
-        if (args[0] === "list") return { error: null, stdout: JSON.stringify(PAGES), stderr: "" };
-        if (args[0] === "extract")
-          return { error: null, stdout: JSON.stringify(LINKS), stderr: "" };
-        return { error: new Error("stats not supported"), stdout: "", stderr: "" };
-      });
-      const gbrain = createGbrain({ execFn });
-      const graph = await gbrain.getGraph();
-
-      assert.ok(!graph.error, graph.error);
-      assert.strictEqual(graph.provenance.totalPages, 3);
-      assert.strictEqual(graph.provenance.dbLinks, null);
-    });
-  });
-
-  describe("getPage()", () => {
+  describe("get() / getPage()", () => {
     it("passes hostile ids as a single argv element (no shell injection)", async () => {
       const execFn = mockExecFn(() => ({ error: null, stdout: "# Page\ncontent", stderr: "" }));
       const gbrain = createGbrain({ execFn });
       const hostileId = "page; rm -rf / $(reboot)";
-      const result = await gbrain.getPage(hostileId);
+      const result = await gbrain.get(hostileId);
 
       assert.deepStrictEqual(execFn.calls[0].args, ["get", hostileId]);
       assert.strictEqual(result.id, hostileId);
@@ -375,18 +322,18 @@ describe("cortex-gbrain module", () => {
     it("returns { error } for empty content or CLI failure", async () => {
       const emptyFn = mockExecFn(() => ({ error: null, stdout: "   ", stderr: "" }));
       const gbrainEmpty = createGbrain({ execFn: emptyFn });
-      assert.ok((await gbrainEmpty.getPage("slug")).error.includes("no content"));
+      assert.ok((await gbrainEmpty.get("slug")).error.includes("no content"));
 
       const failFn = mockExecFn(() => ({ error: new Error("nope"), stdout: "", stderr: "" }));
       const gbrainFail = createGbrain({ execFn: failFn });
-      assert.ok((await gbrainFail.getPage("slug")).error.includes("gbrain get failed"));
+      assert.ok((await gbrainFail.get("slug")).error.includes("gbrain get failed"));
     });
 
     it("rejects invalid ids without calling the CLI", async () => {
       const execFn = mockExecFn(() => ({ error: null, stdout: "x", stderr: "" }));
       const gbrain = createGbrain({ execFn });
-      assert.ok((await gbrain.getPage("")).error);
-      assert.ok((await gbrain.getPage(null)).error);
+      assert.ok((await gbrain.get("")).error);
+      assert.ok((await gbrain.get(null)).error);
       assert.strictEqual(execFn.calls.length, 0);
     });
   });
