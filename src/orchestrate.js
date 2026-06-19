@@ -50,10 +50,28 @@ const crypto = require("crypto");
 // Default per-seat wait budget. Raised 600 -> 1200 to match dispatch.timeoutSec
 // so the runner doesn't give up before the agent process is actually killed.
 const DEFAULT_TIMEOUT_SEC = 1200;
+// Extra wait the runner gives dispatch.completion ON TOP OF the per-seat budget.
+//
+// THE BUG THIS FIXES (root cause of "board runs forever, no answers"):
+//   The runner waits `timeoutSec*1000` for dispatch.completion. dispatch kills
+//   the agent CLI at `dispatch.timeoutSec*1000 + 5000`, and completion only
+//   resolves AFTER that kill PLUS the watcher's attempt-write. Config keeps
+//   orchestrate.timeoutSec == dispatch.timeoutSec, so the runner's bare
+//   `timeoutSec*1000` budget always expires a few seconds BEFORE completion can
+//   resolve for a seat that uses its full budget — exactly the slow analytical
+//   seats the 1200s timeout was raised for. Those seats are wrongly recorded
+//   `timeout`/`missing`, the CLI is then killed (attempt → failure), and the
+//   board "completes" with the slow advisors' answers permanently lost.
+//
+// The grace must exceed dispatch's own +5000ms kill buffer plus the safe-store
+// attempt write, so the completion promise reliably wins the race whenever the
+// agent actually produced an answer at (or near) the wire. The withTimeout
+// fallback still bounds the wait, so a genuinely stuck dispatch can never wedge
+// the runner forever.
+const COMPLETION_GRACE_MS = 30 * 1000;
 // Hard ceiling so a caller-supplied timeoutSec can never wedge a request
 // thread forever; mirrors dispatch's own grace philosophy.
 const MAX_TIMEOUT_SEC = 3600;
-const RESULT_TEXT_NOTE_PREFIX = "result: ";
 
 const RUN_ID_PREFIX = "orx_";
 // Hard server-side cap for ?wait=true so a sync caller can never block longer
@@ -713,7 +731,11 @@ function createOrchestrate(options = {}) {
             continue;
           }
           // eslint-disable-next-line no-await-in-loop -- sequential by design
-          const raced = await withTimeout(dispatched.completion, budgetMs, setTimerFn);
+          const raced = await withTimeout(
+            dispatched.completion,
+            budgetMs + COMPLETION_GRACE_MS,
+            setTimerFn,
+          );
           const outcome = collectOutcome(card.id, dispatched, raced.settled);
           // AC-17: return the worker on success, drain on failure/timeout.
           // eslint-disable-next-line no-await-in-loop -- sequential by design
@@ -778,7 +800,11 @@ function createOrchestrate(options = {}) {
                 seat.error ? seat.error.message : null,
               );
             }
-            const raced = await withTimeout(seat.dispatched.completion, budgetMs, setTimerFn);
+            const raced = await withTimeout(
+              seat.dispatched.completion,
+              budgetMs + COMPLETION_GRACE_MS,
+              setTimerFn,
+            );
             const outcome = collectOutcome(seat.taskId, seat.dispatched, raced.settled);
             // AC-17: return the leased worker on success, drain on failure/timeout.
             if (seat.seatLease) await seat.seatLease.settle(raced.settled && outcome.ok);
@@ -960,7 +986,11 @@ function createOrchestrate(options = {}) {
           continue;
         }
 
-        const raced = await withTimeout(dispatched.completion, budgetMs, setTimerFn);
+        const raced = await withTimeout(
+          dispatched.completion,
+          budgetMs + COMPLETION_GRACE_MS,
+          setTimerFn,
+        );
         const outcome = collectOutcome(card.id, dispatched, raced.settled);
         // AC-17: return the worker on success, drain on failure/timeout.
         if (seatLease) await seatLease.settle(raced.settled && outcome.ok);
