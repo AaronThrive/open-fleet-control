@@ -301,7 +301,7 @@
       word-break: break-word;
     }
 
-    /* Stacked body: memory browser first, knowledge graph below ---------- */
+    /* Stacked body: read-only gbrain memory browser ---------------------- */
     #cortex-view-section .cx-grid {
       display: flex;
       flex-direction: column;
@@ -471,288 +471,13 @@
       margin-top: 4px;
     }
 
-    /* Memory row actions + inline editor ------------------------------- */
-    #cortex-view-section .cx-mem-actions {
-      display: flex;
-      gap: 8px;
-      margin-top: 8px;
-    }
-    #cortex-view-section .cx-mem-act {
-      background: none;
-      border: 1px solid var(--cx-border);
-      color: var(--cx-accent-2);
-      border-radius: 6px;
-      font-size: 0.68rem;
-      padding: 3px 10px;
-      cursor: pointer;
-    }
-    #cortex-view-section .cx-mem-act:hover:not(:disabled) {
-      border-color: var(--cx-accent-2);
-    }
-    #cortex-view-section .cx-mem-act.danger {
-      color: #f8a3a0;
-    }
-    #cortex-view-section .cx-mem-act.danger:hover:not(:disabled) {
-      border-color: #f85149;
-    }
-    #cortex-view-section .cx-mem-act:disabled {
-      opacity: 0.5;
-      cursor: wait;
-    }
-    #cortex-view-section .cx-mem-removing {
-      opacity: 0.45;
-    }
-    #cortex-view-section .cx-mem-editor {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      margin-top: 10px;
-      border-top: 1px dashed var(--cx-border);
-      padding-top: 10px;
-    }
-
-    /* Store memory form ---------------------------------------------------- */
-    #cortex-view-section .cx-store {
-      margin-top: 14px;
-      border-top: 1px solid var(--cx-border);
-      padding-top: 12px;
-    }
-    #cortex-view-section .cx-store summary {
-      cursor: pointer;
-      font-size: 0.8rem;
-      font-weight: 600;
-      color: var(--cx-accent);
-      list-style: none;
-      user-select: none;
-    }
-    #cortex-view-section .cx-store summary::before {
-      content: "+ ";
-    }
-    #cortex-view-section .cx-store[open] summary::before {
-      content: "− ";
-    }
-    #cortex-view-section .cx-store-form {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      margin-top: 12px;
-    }
-    #cortex-view-section .cx-store-form textarea,
-    #cortex-view-section .cx-mem-editor textarea {
-      width: 100%;
-      box-sizing: border-box;
-      min-height: 72px;
-      resize: vertical;
-      background: rgba(0, 0, 0, 0.3);
-      border: 1px solid var(--cx-border);
-      border-radius: 8px;
-      color: var(--text, #fff);
-      font-size: 0.8rem;
-      font-family: inherit;
-      padding: 9px 12px;
-      outline: none;
-    }
-    #cortex-view-section .cx-store-form textarea:focus,
-    #cortex-view-section .cx-mem-editor textarea:focus {
-      border-color: var(--cx-accent);
-    }
-    #cortex-view-section .cx-store-row {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-    #cortex-view-section .cx-store-row label {
-      font-size: 0.7rem;
-      color: var(--cx-muted);
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      flex: 1 1 120px;
-      min-width: 110px;
-    }
-    #cortex-view-section .cx-store-row select,
-    #cortex-view-section .cx-store-row input[type="text"] {
-      background: rgba(0, 0, 0, 0.3);
-      border: 1px solid var(--cx-border);
-      border-radius: 7px;
-      color: var(--text, #fff);
-      font-size: 0.78rem;
-      padding: 7px 9px;
-      outline: none;
-      width: 100%;
-      box-sizing: border-box;
-    }
-    #cortex-view-section .cx-store-row input[type="range"] {
-      accent-color: var(--cx-accent);
-      width: 100%;
-    }
-    #cortex-view-section .cx-imp-value {
-      color: var(--cx-accent);
-      font-variant-numeric: tabular-nums;
-    }
-    #cortex-view-section .cx-store-actions {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    #cortex-view-section .cx-btn {
-      background: rgba(0, 255, 102, 0.12);
-      border: 1px solid rgba(0, 255, 102, 0.45);
-      color: var(--cx-accent);
-      border-radius: 8px;
-      font-size: 0.78rem;
-      font-weight: 600;
-      padding: 8px 16px;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-    }
-    #cortex-view-section .cx-btn:hover:not(:disabled) {
-      background: rgba(0, 255, 102, 0.22);
-    }
-    #cortex-view-section .cx-btn:disabled {
-      opacity: 0.55;
-      cursor: wait;
-    }
-    #cortex-view-section .cx-spinner {
-      width: 13px;
-      height: 13px;
-      border: 2px solid rgba(0, 255, 102, 0.25);
-      border-top-color: var(--cx-accent);
-      border-radius: 50%;
-      animation: cx-spin 0.7s linear infinite;
-      flex: none;
-    }
-    @keyframes cx-spin {
-      to {
-        transform: rotate(360deg);
-      }
-    }
-    #cortex-view-section .cx-store-note {
-      font-size: 0.68rem;
-      color: var(--cx-muted);
-    }
-
-    /* Knowledge graph -------------------------------------------------------- */
-    #cortex-view-section .cx-graph-provenance {
-      font-size: 0.72rem;
-      color: var(--cx-muted);
-      margin-bottom: 9px;
-      display: flex;
-      gap: 14px;
-      flex-wrap: wrap;
-      word-break: break-word;
-    }
-    #cortex-view-section .cx-graph-provenance code {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.68rem;
-      color: var(--cx-accent-2);
-      background: rgba(0, 0, 0, 0.3);
-      border: 1px solid var(--cx-border);
-      border-radius: 5px;
-      padding: 1px 6px;
-    }
-    #cortex-view-section .cx-prov-hint {
-      color: #e3b341;
-    }
-    #cortex-view-section .cx-graph-wrap {
-      position: relative;
-    }
-    #cortex-view-section .cx-graph-svg {
-      width: 100%;
-      height: 440px;
-      display: block;
-      border: 1px solid var(--cx-border);
-      border-radius: 10px;
-      background:
-        radial-gradient(ellipse at center, rgba(13, 245, 227, 0.04), transparent 70%),
-        rgba(0, 0, 0, 0.25);
-      cursor: grab;
-      touch-action: none;
-    }
-    #cortex-view-section .cx-graph-svg.panning {
-      cursor: grabbing;
-    }
-    #cortex-view-section .cx-graph-controls {
-      position: absolute;
-      top: 10px;
-      right: 10px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-    #cortex-view-section .cx-zoom-btn {
-      width: 28px;
-      height: 28px;
-      border-radius: 7px;
-      border: 1px solid var(--cx-border);
-      background: rgba(0, 0, 0, 0.55);
-      color: var(--cx-accent-2);
-      font-size: 0.9rem;
-      font-weight: 700;
-      cursor: pointer;
-      line-height: 1;
-    }
-    #cortex-view-section .cx-zoom-btn:hover {
-      border-color: var(--cx-accent-2);
-    }
-    #cortex-view-section .cx-graph-foot {
-      display: flex;
-      justify-content: space-between;
-      gap: 10px;
-      flex-wrap: wrap;
-      margin-top: 8px;
-      font-size: 0.7rem;
-      color: var(--cx-muted);
-    }
-    #cortex-view-section .cx-node-card {
-      position: absolute;
-      left: 10px;
-      bottom: 10px;
-      max-width: 280px;
-      background: rgba(8, 10, 14, 0.92);
-      border: 1px solid rgba(13, 245, 227, 0.4);
-      border-radius: 10px;
-      padding: 12px 14px;
-      font-size: 0.76rem;
-      display: none;
-    }
-    #cortex-view-section .cx-node-card.visible {
-      display: block;
-    }
-    #cortex-view-section .cx-node-card-title {
+    /* Expanded read-only page panel ------------------------------------ */
+    #cortex-view-section .cx-mem-detail-title {
+      font-size: 0.84rem;
       font-weight: 700;
       color: var(--text, #fff);
-      margin-bottom: 4px;
-      word-break: break-word;
-      padding-right: 18px;
-    }
-    #cortex-view-section .cx-node-card-close {
-      position: absolute;
-      top: 6px;
-      right: 8px;
-      background: none;
-      border: none;
-      color: var(--cx-muted);
-      cursor: pointer;
-      font-size: 0.9rem;
-      padding: 2px;
-    }
-    #cortex-view-section .cx-node-card-meta {
-      color: var(--cx-muted);
       margin-bottom: 6px;
-      word-break: break-all;
-    }
-    #cortex-view-section .cx-node-card-links {
-      color: var(--cx-muted);
-      max-height: 110px;
-      overflow-y: auto;
-      line-height: 1.5;
-    }
-    #cortex-view-section .cx-node-card-links span {
-      color: var(--cx-accent-2);
+      word-break: break-word;
     }
   </style>
 
@@ -777,13 +502,6 @@
         >
       </span>
       <span class="cx-avail-item">
-        <span class="cx-avail-dot" data-avail="gbrain"></span>
-        <span class="cx-avail-label" data-i18n="views.cortex.availGraph">Graph (gbrain)</span>
-        <span class="cx-avail-state" data-avail-state="gbrain" data-i18n="views.cortex.checking"
-          >checking…</span
-        >
-      </span>
-      <span class="cx-avail-item">
         <span class="cx-avail-dot" data-avail="gauges"></span>
         <span class="cx-avail-label" data-i18n="views.cortex.availGauges">Gauges</span>
         <span class="cx-avail-state" data-avail-state="gauges" data-i18n="views.cortex.checking"
@@ -803,10 +521,10 @@
     </div>
 
     <div class="cx-grid">
-      <!-- Memory browser -->
+      <!-- Memory browser (read-only gbrain page browser) -->
       <div class="cx-card" id="cx-memory-card">
         <div class="cx-card-title">
-          <span data-i18n="views.cortex.memoryCardTitle">Memory</span>
+          <span data-i18n="views.cortex.memoryCardTitle">gbrain pages</span>
           <span class="hint" id="cx-memory-stats"></span>
         </div>
         <div id="cx-memory-body">
@@ -814,123 +532,16 @@
             type="search"
             class="cx-mem-search"
             id="cx-memory-search"
-            placeholder="Search memories… (empty shows recent)"
+            placeholder="Search gbrain pages… (empty lists all)"
             data-i18n-placeholder="views.cortex.searchPlaceholder"
             autocomplete="off"
           />
           <div class="cx-mem-status" id="cx-memory-status" data-i18n="views.cortex.loadingMemories">
-            Loading memories…
+            Loading pages…
           </div>
           <div class="cx-mem-list" id="cx-memory-list"></div>
-          <details class="cx-store" id="cx-store-details">
-            <summary data-i18n="views.cortex.storeSummary">Store memory</summary>
-            <form class="cx-store-form" id="cx-store-form">
-              <textarea
-                id="cx-store-text"
-                placeholder="What should the fleet remember?"
-                data-i18n-placeholder="views.cortex.storeTextPlaceholder"
-                required
-              ></textarea>
-              <div class="cx-store-row">
-                <label>
-                  <span data-i18n="views.cortex.category">Category</span>
-                  <select id="cx-store-category">
-                    <option value="fact" selected>fact</option>
-                    <option value="preference">preference</option>
-                    <option value="decision">decision</option>
-                    <option value="entity">entity</option>
-                    <option value="reflection">reflection</option>
-                    <option value="other">other</option>
-                  </select>
-                </label>
-                <label>
-                  <span data-i18n="views.cortex.scope">Scope</span>
-                  <input type="text" id="cx-store-scope" placeholder="global" />
-                </label>
-                <label>
-                  <span data-i18n="views.cortex.importance">Importance</span>
-                  <span class="cx-imp-value" id="cx-store-imp-value">0.7</span>
-                  <input
-                    type="range"
-                    id="cx-store-importance"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value="0.7"
-                  />
-                </label>
-              </div>
-              <div class="cx-store-actions">
-                <button
-                  type="submit"
-                  class="cx-btn"
-                  id="cx-store-submit"
-                  data-i18n="views.cortex.storeBtn"
-                >
-                  Store
-                </button>
-                <span class="cx-store-note" data-i18n="views.cortex.storeNote">
-                  Stored via the OpenClaw CLI — may take a few seconds. Writes are audited.
-                </span>
-              </div>
-            </form>
-          </details>
         </div>
         <div id="cx-memory-offline" style="display: none"></div>
-      </div>
-
-      <!-- Knowledge graph -->
-      <div class="cx-card" id="cx-graph-card">
-        <div class="cx-card-title">
-          <span data-i18n="views.cortex.graphCardTitle">Knowledge graph</span>
-          <span class="hint" id="cx-graph-count"></span>
-        </div>
-        <div class="cx-graph-provenance" id="cx-graph-provenance"></div>
-        <div class="cx-graph-wrap" id="cx-graph-wrap">
-          <svg class="cx-graph-svg" id="cx-graph-svg" xmlns="http://www.w3.org/2000/svg"></svg>
-          <div class="cx-graph-controls">
-            <button
-              class="cx-zoom-btn"
-              id="cx-zoom-in"
-              title="Zoom in"
-              data-i18n-title="views.cortex.zoomIn"
-              type="button"
-            >
-              +
-            </button>
-            <button
-              class="cx-zoom-btn"
-              id="cx-zoom-out"
-              title="Zoom out"
-              data-i18n-title="views.cortex.zoomOut"
-              type="button"
-            >
-              −
-            </button>
-            <button
-              class="cx-zoom-btn"
-              id="cx-zoom-reset"
-              title="Reset view"
-              data-i18n-title="views.cortex.zoomReset"
-              type="button"
-            >
-              ⤾
-            </button>
-          </div>
-          <div class="cx-node-card" id="cx-node-card">
-            <button class="cx-node-card-close" id="cx-node-card-close" type="button">✕</button>
-            <div class="cx-node-card-title" id="cx-node-card-title"></div>
-            <div class="cx-node-card-meta" id="cx-node-card-meta"></div>
-            <div class="cx-node-card-links" id="cx-node-card-links"></div>
-          </div>
-        </div>
-        <div class="cx-graph-foot">
-          <span id="cx-graph-note"></span>
-          <span data-i18n="views.cortex.graphFootHint"
-            >Drag to pan · buttons to zoom · click a node for details</span
-          >
-        </div>
-        <div id="cx-graph-offline" style="display: none"></div>
       </div>
     </div>
   </section>
