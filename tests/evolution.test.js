@@ -195,6 +195,88 @@ describe("evolution module", () => {
     });
   });
 
+  describe("lessonsVaultDir (gbrain vault mirror)", () => {
+    function vaultDir() {
+      return path.join(tmpDir, "vault", "lessons");
+    }
+    function vaultFile(id) {
+      return path.join(vaultDir(), `${id}.md`);
+    }
+
+    it("writes a frontmatter markdown file when a lesson is approved via approve()", () => {
+      const evolution = makeEvolution({ lessonsVaultDir: vaultDir() });
+      const lesson = evolution.addLesson({
+        title: "Mirror me",
+        body: "Body line one.\nBody line two.",
+        author: "agent-9",
+      });
+
+      // Pending: nothing written to the vault yet.
+      assert.strictEqual(fs.existsSync(vaultFile(lesson.id)), false);
+
+      evolution.approve(lesson.id, "reviewer");
+
+      const file = vaultFile(lesson.id);
+      assert.ok(fs.existsSync(file), "expected the vault markdown file to exist");
+      const content = fs.readFileSync(file, "utf8");
+      const expected =
+        "---\n" +
+        "type: lesson\n" +
+        `id: ${lesson.id}\n` +
+        "title: Mirror me\n" +
+        "author: agent-9\n" +
+        `ts: ${lesson.ts}\n` +
+        "status: approved\n" +
+        "---\n\n" +
+        "Body line one.\nBody line two.\n";
+      assert.strictEqual(content, expected);
+    });
+
+    it("writes the vault file on the gate-OFF auto-approve path too", () => {
+      const evolution = makeEvolution({ lessonsVaultDir: vaultDir() });
+      evolution.setGate(false, "admin");
+      const lesson = evolution.addLesson({ title: "Fast", body: "Ship it.", author: "bot" });
+
+      assert.strictEqual(lesson.status, "approved");
+      const content = fs.readFileSync(vaultFile(lesson.id), "utf8");
+      assert.ok(content.startsWith("---\ntype: lesson\n"));
+      assert.ok(content.includes(`id: ${lesson.id}\n`));
+      assert.ok(content.includes("title: Fast\n"));
+      assert.ok(content.includes("status: approved\n"));
+      assert.ok(content.endsWith("Ship it.\n"));
+    });
+
+    it("is a no-op when lessonsVaultDir is empty or unset", () => {
+      // Unset.
+      const a = makeEvolution();
+      const l1 = a.addLesson({ title: "No vault", body: "x" });
+      a.approve(l1.id, "r");
+      assert.strictEqual(fs.existsSync(path.join(tmpDir, "vault")), false);
+
+      // Explicit empty string.
+      const b = makeEvolution({ lessonsVaultDir: "" });
+      b.setGate(false, "admin");
+      const l2 = b.addLesson({ title: "Still no vault", body: "y" });
+      assert.strictEqual(l2.status, "approved");
+      assert.strictEqual(fs.existsSync(path.join(tmpDir, "vault")), false);
+    });
+
+    it("never throws into the lesson path when the vault write fails", () => {
+      // Point the vault at a path whose parent is a FILE — mkdirSync will throw,
+      // and the mirror must swallow it without breaking lesson recording.
+      const blocker = path.join(tmpDir, "blocker");
+      fs.writeFileSync(blocker, "not a dir");
+      const evolution = makeEvolution({ lessonsVaultDir: path.join(blocker, "nested") });
+      evolution.setGate(false, "admin");
+
+      const lesson = evolution.addLesson({ title: "Resilient", body: "Recorded anyway." });
+      // Ledger (source of truth) still got the lesson.
+      assert.strictEqual(lesson.status, "approved");
+      assert.strictEqual(evolution.listLessons("approved").length, 1);
+      assert.ok(approvedContent().includes("Recorded anyway."));
+    });
+  });
+
   describe("gate state", () => {
     it("setGate persists and fires onChange", () => {
       const evolution = makeEvolution();

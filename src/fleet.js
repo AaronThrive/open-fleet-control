@@ -268,6 +268,7 @@ function createFleetRuntime({ config, broadcast }) {
     workspaceDir,
     stateDir,
     getGateDefault: () => config.validationGate.default,
+    lessonsVaultDir: config.evolution?.lessonsVaultDir || "",
     onChange: (event) => {
       emit("fleet.evolution", { type: event.type, id: event.id || event.lesson?.id || null });
       if (event.type === "lesson.add" && event.lesson?.status === "pending") {
