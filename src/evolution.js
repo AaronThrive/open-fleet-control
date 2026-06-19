@@ -142,9 +142,12 @@ function appendBlock(filePath, block) {
  * @param {string} options.stateDir - directory holding evolution.json
  * @param {function} [options.onChange] - fired with an event object on every state change
  * @param {function} [options.getGateDefault] - returns the default gate value when no state persisted
+ * @param {string} [options.lessonsVaultDir] - directory inside the gbrain-synced Obsidian
+ *   vault where approved lessons are mirrored as markdown files (one per lesson). When
+ *   unset/empty, no vault mirror is written — behavior is byte-identical to before.
  * @returns {{addLesson: function, listLessons: function, approve: function, reject: function, getGate: function, setGate: function, getState: function}}
  */
-function createEvolution({ workspaceDir, stateDir, onChange, getGateDefault } = {}) {
+function createEvolution({ workspaceDir, stateDir, onChange, getGateDefault, lessonsVaultDir } = {}) {
   if (typeof workspaceDir !== "string" || workspaceDir.length === 0) {
     throw new Error("createEvolution requires a workspaceDir option");
   }
@@ -155,6 +158,45 @@ function createEvolution({ workspaceDir, stateDir, onChange, getGateDefault } = 
   const ledgerPath = path.join(workspaceDir, LEDGER_FILE);
   const approvedPath = path.join(workspaceDir, APPROVED_FILE);
   const statePath = path.join(stateDir, STATE_FILE);
+  const vaultDir =
+    typeof lessonsVaultDir === "string" && lessonsVaultDir.trim().length > 0
+      ? lessonsVaultDir.trim()
+      : "";
+
+  /**
+   * Mirror an approved lesson into the gbrain-synced Obsidian vault as a single
+   * markdown file (`<vaultDir>/<id>.md`) with YAML frontmatter. The nightly
+   * `gbrain import "<vault>"` then ingests it — this is how approved lessons
+   * reach the knowledge store.
+   *
+   * Best-effort and isolated: a vault-write failure NEVER propagates into the
+   * lesson-recording path. The ledger remains the source of truth.
+   *
+   * @param {{id: string, title: string, author: string, ts: string, body: string}} lesson
+   */
+  function mirrorToVault(lesson) {
+    if (!vaultDir) return; // No vault configured — no-op (byte-identical to before).
+    try {
+      // Titles are already validated to contain no newlines (addLesson). Trim
+      // any stray surrounding whitespace so the YAML scalar stays single-line.
+      const safeTitle = String(lesson.title).replace(/[\n\r]/g, " ").trim();
+      const safeAuthor = String(lesson.author).replace(/[\n\r]/g, " ").trim();
+      const frontmatter =
+        "---\n" +
+        "type: lesson\n" +
+        `id: ${lesson.id}\n` +
+        `title: ${safeTitle}\n` +
+        `author: ${safeAuthor}\n` +
+        `ts: ${lesson.ts}\n` +
+        "status: approved\n" +
+        "---\n\n";
+      const filePath = path.join(vaultDir, `${lesson.id}.md`);
+      fs.mkdirSync(vaultDir, { recursive: true });
+      atomicWriteFileSync(filePath, frontmatter + lesson.body + "\n");
+    } catch (e) {
+      console.error("[Evolution] vault mirror failed:", e && e.message);
+    }
+  }
 
   function fire(event) {
     if (typeof onChange === "function") {
@@ -259,6 +301,7 @@ function createEvolution({ workspaceDir, stateDir, onChange, getGateDefault } = 
     if (lesson.status === "approved") {
       // Gate OFF: auto-approve — merge into the active approved file too.
       appendBlock(approvedPath, `## [LESSON] ${lesson.title}\n\n${lesson.body}\n`);
+      mirrorToVault(lesson);
       saveState(state);
     } else {
       saveState({
@@ -321,6 +364,13 @@ function createEvolution({ workspaceDir, stateDir, onChange, getGateDefault } = 
 
     if (toStatus === "approved") {
       appendBlock(approvedPath, `## [LESSON] ${section.title}\n\n${section.body}\n`);
+      mirrorToVault({
+        id,
+        title: section.title,
+        author: section.author,
+        ts: section.ts,
+        body: section.body,
+      });
     }
 
     const state = loadState();

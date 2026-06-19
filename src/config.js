@@ -247,6 +247,14 @@ const FLEET_DEFAULTS = {
     },
   },
   validationGate: { default: true },
+  evolution: {
+    // Directory inside the gbrain-synced Obsidian vault where APPROVED lessons
+    // are mirrored as one markdown file per lesson (<id>.md with YAML
+    // frontmatter). The existing nightly `gbrain import "<vault>"` then ingests
+    // them into the knowledge store. Empty = no vault mirror (default; the
+    // lessons_learned ledger remains the sole record).
+    lessonsVaultDir: "",
+  },
   cortex: {
     enabled: true,
     gbrainCli: "",
