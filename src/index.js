@@ -63,7 +63,7 @@ if (cliPort) {
 const { getVersion } = require("./utils");
 const { CONFIG, getOpenClawDir } = require("./config");
 const { handleJobsRequest, isJobsRoute, setCronFallback, setAuditRecorder } = require("./jobs");
-const { runOpenClaw, runOpenClawAsync, extractJSON, getSafeEnv } = require("./openclaw");
+const { runOpenClaw, runOpenClawAsync, runOpenClawArgv, extractJSON, getSafeEnv } = require("./openclaw");
 const {
   getSystemVitals,
   forceRefreshVitals,
@@ -418,10 +418,44 @@ function recordOrchestrationRun(runId) {
   }
 }
 
+// Post a single thread-parent to the board channel so council advisors reply
+// IN-THREAD (#ceo-boardroom shows one collapsible item, not N top-level posts).
+// Returns the Slack ts (messageId) or null. Null on any failure (no board channel
+// configured, post error, unparseable output) → advisors fall back to top-level
+// posts (prior behavior); the board itself is never blocked by this.
+async function postBoardThreadParent({ title, question }) {
+  const slack = (CONFIG.fleet.dispatch && CONFIG.fleet.dispatch.slack) || {};
+  const target = slack.boardChannel;
+  if (!target) return null;
+  const chiefMention = slack.chiefUserId ? `<@${slack.chiefUserId}> ` : "";
+  const text = `🧑‍⚖️ ${chiefMention}*Board:* ${title}\n> ${question}\n_Advisors are replying in this thread…_`;
+  const out = await runOpenClawArgv(
+    ["message", "send", "--channel", "slack", "--account", "default", "--target", target, "--message", text, "--json"],
+    { timeout: 15000 },
+  );
+  if (!out) return null;
+  try {
+    const parsed = JSON.parse(extractJSON(out) || "null");
+    return (
+      (parsed && parsed.messageId) ||
+      (parsed &&
+        parsed.payload &&
+        parsed.payload.result &&
+        parsed.payload.result.receipt &&
+        parsed.payload.result.receipt.primaryPlatformMessageId) ||
+      null
+    );
+  } catch (e) {
+    console.error("[Orchestrate] thread-parent ts parse failed:", e.message);
+    return null;
+  }
+}
+
 const orchestrate = createOrchestrate({
   kanban: fleet.kanban,
   dispatch,
   config: CONFIG.fleet.orchestrate || {},
+  postBoardParent: postBoardThreadParent,
   // AC-17: pool routing + parallel flip engage ONLY when spawn is enabled.
   spawn: orchestrateSpawnProxy,
   spawnEnabled,

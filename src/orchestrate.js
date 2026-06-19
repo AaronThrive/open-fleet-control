@@ -351,6 +351,10 @@ function createOrchestrate(options = {}) {
     spawnEnabled = false,
     nowFn = Date.now,
     setTimerFn = setTimeout,
+    // Optional: post a board thread-parent to #ceo-boardroom and return its Slack
+    // ts so advisors reply IN-THREAD. async ({title, question}) => ts|null. When
+    // absent or it returns null, advisors post top-level (prior behavior).
+    postBoardParent = null,
   } = options;
   if (!kanban) throw new Error("createOrchestrate: kanban is required");
   if (!dispatch) throw new Error("createOrchestrate: dispatch is required");
@@ -709,6 +713,20 @@ function createOrchestrate(options = {}) {
         budgetBlocked,
         dispatchError,
       });
+
+      // Post a single thread-parent to #ceo-boardroom up front; advisors reply
+      // IN that thread (one collapsible item, not N top-level posts). Best-effort
+      // and fully isolated: a failure (or no poster injected) yields a null ts,
+      // and dispatch omits --reply-to so advisors post top-level exactly as before.
+      let slackThreadTs = null;
+      if (typeof postBoardParent === "function") {
+        try {
+          slackThreadTs = await postBoardParent({ title, question, agents });
+        } catch (e) {
+          console.error("[Orchestrate] board thread-parent post failed:", e.message);
+        }
+      }
+
       let outcomes;
 
       if (sequential) {
@@ -742,6 +760,7 @@ function createOrchestrate(options = {}) {
               agent: dispatchRef,
               actor,
               isBoard: true,
+              slackThreadTs,
             });
           } catch (e) {
             if (seatLease) void seatLease.settle(false);
@@ -788,6 +807,7 @@ function createOrchestrate(options = {}) {
               agent: dispatchRef,
               actor,
               isBoard: true,
+              slackThreadTs,
             });
             return {
               agent,

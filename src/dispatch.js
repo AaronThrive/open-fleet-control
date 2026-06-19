@@ -169,12 +169,20 @@ function chiefMentionFor(slack = {}) {
  * @param {object} options - {agent, baseUrl, briefsDir, slackChannel?, isBoard?, slack?}
  * @returns {string}
  */
-function composeKickoffMessage(task, { agent, baseUrl, briefsDir, slackChannel, isBoard, slack = {} }) {
+function composeKickoffMessage(
+  task,
+  { agent, baseUrl, briefsDir, slackChannel, isBoard, slack = {}, slackThreadTs = null },
+) {
   const protocolPath = briefsDir ? path.join(briefsDir, `${PROTOCOL_BRIEF}.md`) : null;
   const channelHint = slackChannel || (isBoard ? "#ceo-boardroom" : `#${agent}-command`);
   // Human-readable name for prose; resolved channel:<id> for the actual command.
   const slackTarget = resolveSlackTarget({ agent, isBoard, channelHint, slack });
   const chiefMention = chiefMentionFor(slack);
+  // When the board posted a thread parent, advisors reply IN that thread
+  // (--reply-to <ts>) so #ceo-boardroom shows one collapsible item instead of N
+  // top-level posts. Absent a ts, the flag is omitted = top-level (prior behavior).
+  const replyToArg =
+    isBoard && typeof slackThreadTs === "string" && slackThreadTs ? ` --reply-to ${slackThreadTs}` : "";
 
   // BOARD MODE: a lean, single-purpose brief. A board advisor only needs to
   // research and answer — the dispatch watcher already captures the agent's
@@ -198,7 +206,7 @@ function composeKickoffMessage(task, { agent, baseUrl, briefsDir, slackChannel, 
       `2. Post your COMPLETE answer to Slack ${channelHint} from your own OpenClaw bot account,`,
       `   leading with "${chiefMention}" (light emojis welcome). This Slack post is the canonical answer.`,
       `   Run this command EXACTLY as written (the target is a channel id, not a #name):`,
-      `   openclaw message send --channel slack --account ${agent} --target ${slackTarget} --message "<your full answer>" --json`,
+      `   openclaw message send --channel slack --account ${agent} --target ${slackTarget}${replyToArg} --message "<your full answer>" --json`,
       `3. Then reply here with the SAME full answer text as your final message — the board records`,
       `   it as your result automatically.`,
       ``,
@@ -743,7 +751,7 @@ function createDispatch(options = {}) {
       agent,
       node: selfNode,
       slackChannel,
-      message: composeKickoffMessage(task, { agent, baseUrl, briefsDir, slackChannel, isBoard, slack: config.slack || {} }),
+      message: composeKickoffMessage(task, { agent, baseUrl, briefsDir, slackChannel, isBoard, slack: config.slack || {}, slackThreadTs: opts.slackThreadTs || null }),
     };
   }
 
@@ -786,7 +794,7 @@ function createDispatch(options = {}) {
     const startedMs = nowFn();
     const sessionKey = `agent:${agent}:kanban-${taskId}-${startedMs}`;
     const { isBoard, slackChannel } = resolveSlack(agent, opts);
-    const message = composeKickoffMessage(task, { agent, baseUrl, briefsDir, slackChannel, isBoard, slack: config.slack || {} });
+    const message = composeKickoffMessage(task, { agent, baseUrl, briefsDir, slackChannel, isBoard, slack: config.slack || {}, slackThreadTs: opts.slackThreadTs || null });
     const args = [
       "agent",
       "--agent",

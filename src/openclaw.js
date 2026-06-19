@@ -82,6 +82,30 @@ async function runOpenClawAsync(args) {
 }
 
 /**
+ * Run openclaw with an explicit argv array (NO whitespace splitting), for
+ * commands whose arguments contain spaces (e.g. `message send --message "..."`).
+ * Uses execFile (no shell) to eliminate injection surface.
+ * @param {string[]} argv - Argument vector (each element is one argv token)
+ * @param {{timeout?: number}} [opts]
+ * @returns {Promise<string|null>} - stdout or null on error
+ */
+async function runOpenClawArgv(argv, { timeout = 20000 } = {}) {
+  const profile = process.env.OPENCLAW_PROFILE || "";
+  const full = profile ? ["--profile", profile, ...argv] : argv;
+  try {
+    const { stdout } = await execFileAsync("openclaw", full, {
+      encoding: "utf8",
+      timeout,
+      env: getSafeEnv(),
+    });
+    return stdout;
+  } catch (e) {
+    console.error("[OpenClaw Argv] Error:", e.message);
+    return null;
+  }
+}
+
+/**
  * Extract JSON from openclaw output (may have non-JSON prefix)
  * @param {string} output - Raw CLI output
  * @returns {string|null} - JSON string or null
@@ -96,6 +120,7 @@ function extractJSON(output) {
 module.exports = {
   runOpenClaw,
   runOpenClawAsync,
+  runOpenClawArgv,
   extractJSON,
   getSafeEnv,
 };
