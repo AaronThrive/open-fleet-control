@@ -451,7 +451,7 @@ describe("cortex-gauges module", () => {
     it("reads the active engine from plugins.slots.contextEngine", () => {
       const dir = fs.mkdtempSync(path.join(tmpDir, "engine-"));
       const openclawConfig = writeOpenclawConfig(dir, {
-        plugins: { slots: { memory: "memory-lancedb-pro", contextEngine: "lean-ctx" } },
+        plugins: { slots: { memory: "memory-core", contextEngine: "lean-ctx" } },
       });
 
       const engine = createGauges({ paths: { openclawConfig } }).getContextEngine();
