@@ -113,6 +113,11 @@ const { createSpawnStore } = require("./spawn-store");
 const { createAgentSpawn } = require("./agent-spawn");
 const { createFlightRecorder, createStoreSessionsSource } = require("./flight-recorder");
 const { createTimelineRoutes, isTimelineRoute } = require("./timeline-routes");
+const { createRunArchive, runEntryToRecord, recordIsFailure } = require("./run-archive");
+const {
+  createFlightRecorderRoutes,
+  isFlightRecorderRoute,
+} = require("./run-archive-routes");
 const { createSessionControl } = require("./session-control");
 const { createRateLimiter } = require("./rate-limit");
 const { resolveBindHost } = require("./bind-host");
@@ -312,6 +317,107 @@ const orchestrateSpawnProxy = spawnEnabled
     }
   : null;
 
+// Flight Recorder — durable archive of board/chain runs (src/run-archive.js),
+// surfaced by the dashboard's "Flight Recorder" tab. Additive: built only when
+// fleet.flightRecorder.enabled (default true). The `node` column is stamped from
+// flightRecorder.nodeId, falling back to dispatch identity / dispatch node /
+// hostname — present from day one so a Phase 3 multi-instance roll-up needs no
+// schema change. A late-binding ref lets the orchestrate onEvent handler reach
+// the (already-constructed) orchestrate module at event time to pull the full
+// settled registry entry — the SSE payload itself is counts-only.
+const flightRecorderCfg = CONFIG.fleet.flightRecorder || {};
+const flightRecorderEnabled = flightRecorderCfg.enabled !== false;
+const flightRecorderNodeId =
+  (typeof flightRecorderCfg.nodeId === "string" && flightRecorderCfg.nodeId) ||
+  CONFIG.fleet.dispatch?.identity ||
+  CONFIG.fleet.dispatch?.node ||
+  os.hostname();
+const orchestrateRef = { mod: null };
+let runArchive = null;
+if (flightRecorderEnabled) {
+  try {
+    runArchive = createRunArchive({
+      stateDir: CONFIG.fleet.stateDir,
+      node: flightRecorderNodeId,
+      retentionDays: flightRecorderCfg.retentionDays,
+      maxRows: flightRecorderCfg.maxRows,
+    });
+  } catch (e) {
+    console.error("[FlightRecorder] archive init failed (continuing without it):", e.message);
+    runArchive = null;
+  }
+}
+
+// Throttle: at most one failure alert per run, and a short global cool-down so a
+// burst of failed runs does not spam the ntfy sink (the alert engine also dedupes
+// type+task within 5 min, but we add a cheap run-level guard here too).
+const FLIGHT_REC_ALERT_COOLDOWN_MS = 60 * 1000;
+const flightRecAlertedRuns = new Set();
+let flightRecLastAlertMs = 0;
+
+/**
+ * Archive a settled run and, when it failed, fire a throttled ntfy/alert. Pulls
+ * the FULL registry entry (results/steps/missing) from orchestrate.getRun — the
+ * SSE event payload is intentionally light. Never throws: a recorder failure
+ * must never break orchestration.
+ *
+ * @param {string} runId
+ */
+function recordOrchestrationRun(runId) {
+  if (!runArchive || !runId) return;
+  const entry =
+    orchestrateRef.mod && typeof orchestrateRef.mod.getRun === "function"
+      ? orchestrateRef.mod.getRun(runId)
+      : null;
+  if (!entry || entry.status === "running") return; // not terminal yet
+  let record;
+  try {
+    record = runArchive.archiveRun(entry, { node: flightRecorderNodeId });
+  } catch (e) {
+    console.error("[FlightRecorder] archiveRun threw:", e.message);
+    return;
+  }
+  if (!record) return;
+
+  if (flightRecorderCfg.alertOnFailure !== false && recordIsFailure(record)) {
+    if (flightRecAlertedRuns.has(runId)) return; // already alerted this run
+    const now = Date.now();
+    if (now - flightRecLastAlertMs < FLIGHT_REC_ALERT_COOLDOWN_MS) {
+      // Within the cool-down: skip the push but still mark it so a later retry
+      // of the same event does not fire once the window reopens.
+      flightRecAlertedRuns.add(runId);
+      return;
+    }
+    flightRecLastAlertMs = now;
+    flightRecAlertedRuns.add(runId);
+    if (flightRecAlertedRuns.size > 500) {
+      // Bound the dedupe set — drop the oldest half (insertion order).
+      const keep = Array.from(flightRecAlertedRuns).slice(-250);
+      flightRecAlertedRuns.clear();
+      for (const k of keep) flightRecAlertedRuns.add(k);
+    }
+    const r = record.run;
+    const failedSeats = (record.seats || [])
+      .filter((s) => s.status === "timeout" || s.status === "failed" || s.status === "refused")
+      .map((s) => `${s.agent}:${s.status}`);
+    try {
+      fleet.fireAlert({
+        type: "orchestrationFailed",
+        severity: "warn",
+        node: r.node,
+        task: r.runId,
+        message:
+          `Flight Recorder: ${r.mode} run "${r.title}" ${r.status} ` +
+          `(${r.okCount}/${r.seatCount} ok` +
+          (failedSeats.length ? `; failed: ${failedSeats.join(", ")}` : "") +
+          ")",
+      });
+    } catch (e) {
+      console.error("[FlightRecorder] failure alert failed:", e.message);
+    }
+  }
+}
+
 const orchestrate = createOrchestrate({
   kanban: fleet.kanban,
   dispatch,
@@ -334,9 +440,15 @@ const orchestrate = createOrchestrate({
         collected: event.collected,
         missing: event.missing,
       });
+      // Persist the settled run to the Flight Recorder archive + fire a
+      // throttled failure alert. Pulls the full entry from the registry below.
+      recordOrchestrationRun(event.runId);
     }
   },
 });
+// Publish the constructed module to the late-binding ref so the onEvent handler
+// (which fires strictly after this assignment) can read the full registry entry.
+orchestrateRef.mod = orchestrate;
 
 // Quick-action runner deps (src/actions.js): async CLI runner + the cached
 // sessions backend for stale counting. Shared by /api/action and bulk ops.
@@ -589,6 +701,19 @@ const flightRecorder = createFlightRecorder({
   getCronJobs: getCronJobsSafe,
 });
 const timelineRoutes = createTimelineRoutes({ recorder: flightRecorder });
+
+// Flight Recorder read routes (src/run-archive-routes.js): the durable run
+// archive + live in-progress runs from the orchestrate registry. Built only
+// when the archive was constructed; index.js dispatches it BEFORE the generic
+// fleet routes (which 404 unknown paths). Read-only — no rate-limit / audit.
+const flightRecorderRoutes = runArchive
+  ? createFlightRecorderRoutes({
+      archive: runArchive,
+      orchestrate,
+      runEntryToRecord,
+      listLiveRuns: () => orchestrate.listRuns(),
+    })
+  : null;
 
 // ============================================================================
 // STARTUP: Data migration + background tasks
@@ -1384,6 +1509,16 @@ function routeRequest(req, res, pathname, query) {
     // Must dispatch before the generic fleet routes, which 404 unknown paths.
     timelineRoutes.handle(req, res, pathname, query).catch((e) => {
       console.error("[Timeline] Route failed:", e.message);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Internal error" }));
+    });
+    return;
+  } else if (flightRecorderRoutes && isFlightRecorderRoute(pathname)) {
+    // GET /api/fleet/flight-recorder/{runs,runs/:id,live,stats} — durable run
+    // archive + live in-progress runs (read-only). Must dispatch before the
+    // generic fleet routes, which 404 unknown paths.
+    flightRecorderRoutes.handle(req, res, pathname, query).catch((e) => {
+      console.error("[FlightRecorder] Route failed:", e.message);
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Internal error" }));
     });
