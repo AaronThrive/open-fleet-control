@@ -171,9 +171,8 @@
       "default": true
     },
     "cortex": {
-      "_comment": "Paths are user-specific; empty string = adapter unavailable. Typical values: lancedbPath ~/.openclaw/memory/lancedb-pro, gbrainCli ~/gbrain/bin/gbrain, headroomStats ~/.headroom/stats.json, leanCtxStats ~/.lean-ctx/stats.json, lcmDb ~/.lcm/lcm.db. Set enabled=false to disable all cortex CLI probing (availability reports unavailable).",
+      "_comment": "Paths are user-specific; empty string = adapter unavailable. Typical values: gbrainCli ~/gbrain/bin/gbrain, headroomStats ~/.headroom/stats.json, leanCtxStats ~/.lean-ctx/stats.json, lcmDb ~/.lcm/lcm.db. Set enabled=false to disable all cortex CLI probing (availability reports unavailable).",
       "enabled": true,
-      "lancedbPath": "",
       "gbrainCli": "",
       "headroomStats": "",
       "leanCtxStats": "",

@@ -313,7 +313,7 @@
       "memoriesCount": "{count} memories",
       "memoryOfflineTitle": "Memory store offline",
       "memoryOfflineReason": "memory adapter unavailable",
-      "memoryOfflineHelp": "The memory browser comes back automatically once the OpenClaw CLI or the LanceDB dataset is reachable on this host.",
+      "memoryOfflineHelp": "The memory browser comes back automatically once the gbrain store is reachable on this host.",
       "storeSummary": "Store memory",
       "storeTextPlaceholder": "What should the fleet remember?",
       "category": "Category",
