@@ -205,7 +205,10 @@ function createGbrain(options = {}) {
    * returns every page. Returns { pages } on success or { error }.
    */
   async function listPages() {
-    const listRes = await runCli(["list", "--json"]);
+    // gbrain `list` defaults to --limit 50; the Cortex browser must show EVERY
+    // page (hundreds), so request an effectively-unbounded set. The adapter's own
+    // list({limit,offset}) then paginates the full result.
+    const listRes = await runCli(["list", "--json", "--limit", "100000"]);
     if (listRes.error) {
       return { error: `gbrain list failed: ${listRes.error.message || listRes.error}` };
     }
