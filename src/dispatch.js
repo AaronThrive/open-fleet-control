@@ -133,6 +133,27 @@ function isOpenDispatchAttempt(attempt, nowMs, openTtlMs) {
   return nowMs - startedMs <= openTtlMs;
 }
 
+// `openclaw message send` for Slack requires a channel-ID target (`channel:<id>`),
+// NOT a `#name`. Passing a name fails with "Slack channels require a channel id",
+// after which the advisor burns several turns rediscovering the ID (and pokes at
+// config in the process). Map known channels to their ID target so the brief hands
+// the agent a command that works on the first try.
+const SLACK_CHANNEL_TARGETS = {
+  "#ceo-boardroom": "channel:C0ANFEW6RU4",
+};
+
+/**
+ * Resolve a human channel hint to the `--target` value `openclaw message send`
+ * expects. An already-resolved `channel:<id>` target (or any value a caller
+ * supplied via opts.slackChannel) passes through unchanged.
+ * @param {string} channelHint
+ * @returns {string}
+ */
+function slackTargetFor(channelHint) {
+  if (/^channel:/i.test(channelHint)) return channelHint;
+  return SLACK_CHANNEL_TARGETS[channelHint] || channelHint;
+}
+
 /**
  * Compose the kick-off message for an agent from a kanban card plus the
  * standing fleet-control instructions.
@@ -143,6 +164,8 @@ function isOpenDispatchAttempt(attempt, nowMs, openTtlMs) {
 function composeKickoffMessage(task, { agent, baseUrl, briefsDir, slackChannel, isBoard }) {
   const protocolPath = briefsDir ? path.join(briefsDir, `${PROTOCOL_BRIEF}.md`) : null;
   const channelHint = slackChannel || (isBoard ? "#ceo-boardroom" : `#${agent}-command`);
+  // Human-readable name for prose; ID target for the actual command.
+  const slackTarget = slackTargetFor(channelHint);
 
   // BOARD MODE: a lean, single-purpose brief. A board advisor only needs to
   // research and answer — the dispatch watcher already captures the agent's
@@ -164,8 +187,9 @@ function composeKickoffMessage(task, { agent, baseUrl, briefsDir, slackChannel, 
       `Do this and nothing else — be fast and concise:`,
       `1. Research only as much as the question needs, then form your answer.`,
       `2. Post your COMPLETE answer to Slack ${channelHint} from your own OpenClaw bot account,`,
-      `   leading with "@Chief" (light emojis welcome). This Slack post is the canonical answer:`,
-      `   openclaw message send --channel slack --account ${agent} --target ${channelHint} --message "<your full answer>" --json`,
+      `   leading with "@Chief" (light emojis welcome). This Slack post is the canonical answer.`,
+      `   Run this command EXACTLY as written (the target is a channel id, not a #name):`,
+      `   openclaw message send --channel slack --account ${agent} --target ${slackTarget} --message "<your full answer>" --json`,
       `3. Then reply here with the SAME full answer text as your final message — the board records`,
       `   it as your result automatically.`,
       ``,
@@ -201,8 +225,8 @@ function composeKickoffMessage(task, { agent, baseUrl, briefsDir, slackChannel, 
     `6. WHEN FINISHED, post your FINAL human-readable answer to Slack ${channelHint} from your own`,
     `   OpenClaw bot account. This Slack post IS the canonical answer — post the SAME complete text`,
     `   you want recorded as the result (do not summarize it down; the dashboard stores exactly what`,
-    `   you post). Run:`,
-    `   openclaw message send --channel slack --account ${agent} --target ${channelHint} --message "<your full answer>" --json`,
+    `   you post). Run this EXACTLY as written (the target is a channel id, not a #name):`,
+    `   openclaw message send --channel slack --account ${agent} --target ${slackTarget} --message "<your full answer>" --json`,
     ...(isBoard
       ? [`   Because this is a BOARD task, lead the post with "@Chief" and light emojis are welcome.`]
       : [`   Keep it factual and self-contained — a teammate reading only the Slack post should understand the outcome.`]),
