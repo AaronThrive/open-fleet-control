@@ -308,6 +308,17 @@ function buildListUrl(els) {
   if (els.status.value) params.set("status", els.status.value);
   const agent = els.agent.value.trim();
   if (agent) params.set("agent", agent);
+  // Date filter: convert the local-date inputs to epoch ms in the user's own
+  // timezone (what they see), so the server filters archived_at without any
+  // timezone guesswork. `until` is end-of-day so the picked day is inclusive.
+  if (els.since && els.since.value) {
+    const ms = new Date(`${els.since.value}T00:00:00`).getTime();
+    if (Number.isFinite(ms)) params.set("since", String(ms));
+  }
+  if (els.until && els.until.value) {
+    const ms = new Date(`${els.until.value}T23:59:59.999`).getTime();
+    if (Number.isFinite(ms)) params.set("until", String(ms));
+  }
   params.set("limit", els.limit.value || "50");
   return `/api/fleet/flight-recorder/runs?${params.toString()}`;
 }
@@ -407,6 +418,8 @@ export function init(container) {
   const els = {
     status: container.querySelector("#fr-filter-status"),
     agent: container.querySelector("#fr-filter-agent"),
+    since: container.querySelector("#fr-filter-since"),
+    until: container.querySelector("#fr-filter-until"),
     limit: container.querySelector("#fr-filter-limit"),
     refresh: container.querySelector("#fr-refresh-btn"),
     list: container.querySelector("#fr-list"),
@@ -431,6 +444,14 @@ export function init(container) {
   els.limit.addEventListener("change", () => {
     nextBefore = null;
     loadRuns(els);
+  });
+  [els.since, els.until].forEach((input) => {
+    if (input) {
+      input.addEventListener("change", () => {
+        nextBefore = null;
+        loadRuns(els);
+      });
+    }
   });
   els.agent.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {

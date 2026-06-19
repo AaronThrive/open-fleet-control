@@ -185,6 +185,22 @@ function createFlightRecorderRoutes({
         if (query.get("agent")) opts.agent = query.get("agent");
         if (query.get("node")) opts.node = query.get("node");
         if (query.get("before")) opts.before = query.get("before");
+        // Date-range filter: accept epoch ms or any Date-parseable string (e.g.
+        // "2026-06-18" or a full ISO timestamp). `until` is exclusive.
+        const toMs = (v) => {
+          if (v === null || v === "") return null;
+          const ms = /^-?\d+$/.test(v.trim()) ? Number(v.trim()) : Date.parse(v);
+          if (!Number.isFinite(ms)) {
+            const e = new Error(`Invalid date parameter: ${v}`);
+            e.statusCode = 400;
+            throw e;
+          }
+          return ms;
+        };
+        const sinceMs = toMs(query.get("since"));
+        if (sinceMs !== null) opts.since = sinceMs;
+        const untilMs = toMs(query.get("until"));
+        if (untilMs !== null) opts.until = untilMs;
         const limitRaw = query.get("limit");
         if (limitRaw !== null && limitRaw !== "") {
           const limit = Number(limitRaw);
