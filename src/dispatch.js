@@ -679,7 +679,7 @@ function createDispatch(options = {}) {
     notifyCompletion({ taskId, agent, ok: false, detail: reason });
   }
 
-  function handleRunSettled(taskId, attemptIndex, agent, settled, startedMs) {
+  function handleRunSettled(taskId, attemptIndex, agent, settled, startedMs, successStatus = "review") {
     if (settled.ok) {
       const run = parseRunResult(settled.stdout);
       if (run.error) {
@@ -700,7 +700,11 @@ function createDispatch(options = {}) {
         note: noteParts.join(" · "),
         result_text: fullText,
       });
-      autoMoveOnSettle(taskId, "review");
+      // Board seats are ephemeral, self-contained council answers — promote a
+      // successful one straight to `done` (successStatus) so the boardroom never
+      // leaves a growing pile in `review`. Regular task dispatch keeps `review`
+      // (default) so a human still gives the work a final look.
+      autoMoveOnSettle(taskId, successStatus);
       emit({ type: "task.dispatch_completed", taskId, agent, sessionId: run.sessionId });
       notifyCompletion({ taskId, agent, ok: true, detail: null });
       return;
@@ -833,7 +837,7 @@ function createDispatch(options = {}) {
     emit({ type: "task.dispatched", taskId, agent, actor, sessionKey });
 
     const completion = settledPromise.then((settled) =>
-      handleRunSettled(taskId, attemptIndex, agent, settled, startedMs),
+      handleRunSettled(taskId, attemptIndex, agent, settled, startedMs, isBoard ? "done" : "review"),
     );
 
     const { task: latest } = requireTask(taskId);
