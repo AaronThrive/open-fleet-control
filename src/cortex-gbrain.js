@@ -121,6 +121,23 @@ function parseStatsText(text) {
 }
 
 /** Normalize a gbrain page record into a memory-browser list item. */
+/**
+ * gbrain `list` TSV dates omit the year (e.g. "Fri Jun 19"), which Date.parse
+ * resolves to year 2001 → the UI showed "25 years ago". Normalize to a full
+ * date: prefer a YYYY-MM-DD embedded in the slug (most gbrain pages carry one),
+ * else assume the current year. Returns an ISO-ish string Date.parse handles, or
+ * the original value when it already has a 4-digit year, or null.
+ */
+function normalizeGbrainDate(raw, slug) {
+  const slugDate = typeof slug === "string" ? slug.match(/\b\d{4}-\d{2}-\d{2}\b/) : null;
+  if (slugDate) return slugDate[0];
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const r = raw.trim();
+  if (/\b\d{4}\b/.test(r)) return r; // already year-qualified
+  const ms = Date.parse(`${r} ${new Date().getFullYear()}`);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
 function toMemoryItem(page) {
   if (!page || typeof page !== "object") return null;
   const id = page.slug ?? page.id ?? null;
@@ -129,7 +146,7 @@ function toMemoryItem(page) {
     id,
     title: page.title ?? page.name ?? id,
     type: page.type ?? page.page_type ?? "page",
-    updatedAt: page.updated_at ?? page.updatedAt ?? null,
+    updatedAt: normalizeGbrainDate(page.updated_at ?? page.updatedAt ?? null, id),
   };
 }
 
