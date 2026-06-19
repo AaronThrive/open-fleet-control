@@ -143,6 +143,37 @@ function isOpenDispatchAttempt(attempt, nowMs, openTtlMs) {
 function composeKickoffMessage(task, { agent, baseUrl, briefsDir, slackChannel, isBoard }) {
   const protocolPath = briefsDir ? path.join(briefsDir, `${PROTOCOL_BRIEF}.md`) : null;
   const channelHint = slackChannel || (isBoard ? "#ceo-boardroom" : `#${agent}-command`);
+
+  // BOARD MODE: a lean, single-purpose brief. A board advisor only needs to
+  // research and answer — the dispatch watcher already captures the agent's
+  // final output as result_text and auto-moves the card to review on success,
+  // and the Flight Recorder archives the run. The full fleet-control protocol
+  // (read brief, lifecycle comments, card moves, fleet-chat publish, lesson
+  // submit) adds ~5-6 extra Codex turns per advisor — pure latency and failure
+  // surface for a council answer. Strip it to: research → post to Slack (the
+  // canonical answer) → reply with the same text. Regular (non-board) task
+  // dispatch keeps the full protocol below.
+  if (isBoard) {
+    return [
+      `You are advisor "${agent}" on the OpenClaw board, answering a question for @Chief.`,
+      ``,
+      `Task ${task.id}: ${task.title}`,
+      `Question:`,
+      task.description && task.description.trim().length > 0 ? task.description : "(none)",
+      ``,
+      `Do this and nothing else — be fast and concise:`,
+      `1. Research only as much as the question needs, then form your answer.`,
+      `2. Post your COMPLETE answer to Slack ${channelHint} from your own OpenClaw bot account,`,
+      `   leading with "@Chief" (light emojis welcome). This Slack post is the canonical answer:`,
+      `   openclaw message send --channel slack --account ${agent} --target ${channelHint} --message "<your full answer>" --json`,
+      `3. Then reply here with the SAME full answer text as your final message — the board records`,
+      `   it as your result automatically.`,
+      ``,
+      `Do NOT move kanban cards, post task comments, publish to fleet chat, or submit lessons —`,
+      `the board captures your result and archives the run for you. Keep it tight and self-contained.`,
+    ].join("\n");
+  }
+
   const lines = [
     `You have been dispatched a task from the Open Fleet Control kanban board.`,
     ``,

@@ -114,7 +114,7 @@ describe("composeKickoffMessage", () => {
     assert.match(message, /This Slack post IS the canonical answer/);
   });
 
-  it("uses the board channel + @Chief framing for a board task", () => {
+  it("uses a LEAN board brief: board channel + @Chief + Slack post, no heavy protocol", () => {
     const task = { id: "tsk_000001", title: "T", description: "", priority: 2, due: null };
     const message = composeKickoffMessage(task, {
       agent: "chief",
@@ -122,8 +122,15 @@ describe("composeKickoffMessage", () => {
       briefsDir: null,
       isBoard: true,
     });
+    // Load-bearing: posts the canonical answer to the boardroom from the bot, @Chief framing.
     assert.match(message, /--target #ceo-boardroom/);
-    assert.match(message, /lead the post with "@Chief"/);
+    assert.match(message, /@Chief/);
+    assert.match(message, /openclaw message send --channel slack --account chief/);
+    // Lean: the heavy fleet-control protocol steps are NOT in the board brief
+    // (the watcher captures result_text + auto-moves; the Flight Recorder archives).
+    assert.doesNotMatch(message, /fleet\/chat\/publish/);
+    assert.doesNotMatch(message, /evolution\/lessons/);
+    assert.doesNotMatch(message, /agent task protocol/);
   });
 
   it("lets an explicit slackChannel override the derived default", () => {
