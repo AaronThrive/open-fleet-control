@@ -75,15 +75,15 @@ The fleet layer lives in `src/` (bundled to `lib/server.js` via `npm run build`)
 | Kanban + safe state store | `src/kanban.js`, `src/kanban-schema.js`, `src/state-safety.js` |
 | Briefs / evolution / audit | `src/briefs.js`, `src/evolution.js`, `src/audit.js` |
 | Federation (read-only, v1) | `src/federation.js` |
-| Cortex adapters | `src/cortex.js`, `src/cortex-lancedb.js`, `src/cortex-gbrain.js`, `src/cortex-gauges.js` |
+| Cortex adapters | `src/cortex.js`, `src/cortex-gbrain.js`, `src/cortex-gauges.js` |
 | Fleet panels (frontend) | `public/partials/*.html`, `public/js/views.js`, `public/js/views/*.js` |
 | Config defaults | `src/config.js` (`FLEET_DEFAULTS`), `config/dashboard.example.json` |
 
 **Do-not-relitigate constraints** (settled decisions — do not reopen them in PRs):
 
 1. **No hardcoded tailnets.** The MagicDNS suffix is always derived at runtime from Tailscale status. Never bake a tailnet name, node FQDN, or `*.ts.net` literal into code, config defaults, or tests.
-2. **LanceDB writes go through the CLI only.** Direct reads of the memory-pro dataset are fine (MVCC-safe); search and ALL writes must shell out to `openclaw memory-pro`. We have no embedding pipeline — direct table writes corrupt the dataset.
-3. **gbrain is read-only via its CLI.** Never open the PGLite database directly (single-writer lock). `execFile` semantics only — args arrays, no shell.
+2. **gbrain is read-only from the app.** Cortex only lists gbrain pages — it never writes. Never open the gbrain PGLite DB directly; all reads go through the gbrain CLI, and all writes happen via the nightly gbrain sync, not the app.
+3. **gbrain CLI access only.** Never open the PGLite database directly (single-writer lock). `execFile` semantics only — args arrays, no shell.
 4. **`node:sqlite` over npm sqlite packages.** Chat history and the lcm gauge use the built-in `DatabaseSync`. Do not add `better-sqlite3`/`sqlite3` dependencies.
 
 Architecture details: [docs/architecture/OVERVIEW.md](docs/architecture/OVERVIEW.md#fleet-architecture-v15).

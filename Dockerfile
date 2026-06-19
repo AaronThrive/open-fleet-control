@@ -7,10 +7,8 @@
 #   docker run -p 3333:3333 fleet-control:latest
 #
 # Notes:
-# - @lancedb/lancedb is a native (napi) dependency. `npm ci` resolves the
-#   platform-specific prebuilt binary for this image's platform. Cortex memory
-#   adapters (lancedb / gbrain / headroom / lean-ctx / lcm) additionally need
-#   their host data paths mounted into the container (read-only is fine) and
+# - Cortex memory adapters (gbrain / headroom / lean-ctx / lcm) need their host
+#   data paths mounted into the container (read-only is fine) and
 #   pointed at via FLEET_CONFIG_JSON, e.g.:
 #     FLEET_CONFIG_JSON={"cortex":{"leanCtxStats":"/cortex/lean-ctx/stats.json"}}
 #   Without those mounts the dashboard runs normally and cortex panels report

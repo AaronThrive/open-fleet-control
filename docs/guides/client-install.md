@@ -58,9 +58,7 @@ docker build -t fleet-control:latest .
 Notes:
 
 - The image installs production dependencies with `npm ci --omit=dev`.
-  `@lancedb/lancedb` is a native dependency; `npm ci` selects the prebuilt
-  binary for the image platform.
-- Cortex memory panels (lancedb / headroom / lean-ctx) only light up if the
+- Cortex memory panels (gbrain / headroom / lean-ctx) only light up if the
   matching host data paths are mounted into the container and pointed at via
   `FLEET_CONTROL_CONFIG_JSON` (step 3). Without them the dashboard still runs;
   those panels report "adapter unavailable".
