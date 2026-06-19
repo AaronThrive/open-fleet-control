@@ -205,10 +205,12 @@ function createGbrain(options = {}) {
    * returns every page. Returns { pages } on success or { error }.
    */
   async function listPages() {
-    // gbrain `list` defaults to --limit 50; the Cortex browser must show EVERY
-    // page (hundreds), so request an effectively-unbounded set. The adapter's own
-    // list({limit,offset}) then paginates the full result.
-    const listRes = await runCli(["list", "--json", "--limit", "100000"]);
+    // gbrain `list` hard-caps results (100 in TSV mode, 50 in --json mode) and
+    // exposes NO --offset/pagination, so the full page set (hundreds) can't be
+    // fetched in one call today. Use TSV + --limit 100 to surface the MAX gbrain
+    // will return (100 vs 50). The true total is shown separately via stats
+    // (pageCount). Lifting this to ALL pages needs a gbrain CLI pagination flag.
+    const listRes = await runCli(["list", "--limit", "100"]);
     if (listRes.error) {
       return { error: `gbrain list failed: ${listRes.error.message || listRes.error}` };
     }

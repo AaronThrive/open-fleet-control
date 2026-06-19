@@ -118,3 +118,4 @@ config/dashboard.local.json
 # E2E artifacts (failure screenshots)
 tests-e2e/artifacts/
 node_modules
+.claude/worktrees/
