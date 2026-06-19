@@ -179,12 +179,19 @@ function createRunRegistry({ nowFn, emit, setTimerFn = setTimeout }) {
     return runs.get(runId) || null;
   }
 
+  /** Snapshot of every live (not-yet-reaped) run, newest startedAt first. */
+  function list() {
+    return Array.from(runs.values()).sort((a, b) =>
+      String(b.startedAt).localeCompare(String(a.startedAt)),
+    );
+  }
+
   function scheduleReap(runId) {
     const t = setTimerFn(() => runs.delete(runId), RUN_TTL_MS);
     if (t && typeof t.unref === "function") t.unref();
   }
 
-  return { open, patch, settle, fail, get, _size: () => runs.size };
+  return { open, patch, settle, fail, get, list, _size: () => runs.size };
 }
 
 function httpError(statusCode, message) {
@@ -503,6 +510,15 @@ function createOrchestrate(options = {}) {
   /** Registry snapshot for GET /api/fleet/orchestrate/:runId (or null). */
   function getRun(runId) {
     return registry.get(runId);
+  }
+
+  /**
+   * Snapshot of every live (not-yet-reaped) run. Used by the Flight Recorder
+   * live view to show in-progress board/chain runs as their seats settle.
+   * @returns {Array<object>}
+   */
+  function listRuns() {
+    return registry.list();
   }
 
   /**
@@ -1070,6 +1086,7 @@ function createOrchestrate(options = {}) {
     runChain,
     getStatus,
     getRun,
+    listRuns,
     waitForRun,
     projectedSeatCostUSD,
   };

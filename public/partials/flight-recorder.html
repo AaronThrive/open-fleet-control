@@ -1,0 +1,362 @@
+<!-- Flight Recorder View Partial -->
+<div class="section" id="flight-recorder-view-section">
+  <style>
+    #flight-recorder-view-section .fr-filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: flex-end;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    #flight-recorder-view-section .fr-filter-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    #flight-recorder-view-section .fr-filter-field label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    #flight-recorder-view-section .fr-filter-field input,
+    #flight-recorder-view-section .fr-filter-field select {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 0.85rem;
+      font-family: inherit;
+      min-width: 130px;
+      color-scheme: dark;
+    }
+    #flight-recorder-view-section .fr-filter-field input:focus,
+    #flight-recorder-view-section .fr-filter-field select:focus {
+      outline: none;
+      border-color: var(--accent-2);
+    }
+    #flight-recorder-view-section .fr-filter-actions {
+      display: flex;
+      gap: 8px;
+      margin-left: auto;
+    }
+    #flight-recorder-view-section .fr-meta-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+    #flight-recorder-view-section .fr-live-badge {
+      font-size: 0.68rem;
+      letter-spacing: 0.08em;
+      padding: 2px 8px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+    }
+    #flight-recorder-view-section .fr-live-badge.fr-live-on {
+      color: #3fb950;
+      border-color: rgba(63, 185, 80, 0.5);
+      background: rgba(63, 185, 80, 0.08);
+    }
+    #flight-recorder-view-section .fr-error {
+      color: var(--red);
+    }
+    /* Master / detail split */
+    #flight-recorder-view-section .fr-split {
+      display: grid;
+      grid-template-columns: minmax(320px, 420px) 1fr;
+      gap: 14px;
+      align-items: start;
+    }
+    @media (max-width: 900px) {
+      #flight-recorder-view-section .fr-split {
+        grid-template-columns: 1fr;
+      }
+    }
+    /* Run list */
+    #flight-recorder-view-section .fr-list {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--card-bg);
+    }
+    #flight-recorder-view-section .fr-list-section-title {
+      font-size: 0.66rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+      padding: 8px 12px;
+      background: var(--card-hover);
+      border-bottom: 1px solid var(--border);
+    }
+    #flight-recorder-view-section .fr-run {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.1s ease;
+    }
+    #flight-recorder-view-section .fr-run:last-child {
+      border-bottom: none;
+    }
+    #flight-recorder-view-section .fr-run:hover {
+      background: var(--card-hover);
+    }
+    #flight-recorder-view-section .fr-run.fr-run-active {
+      background: var(--card-hover);
+      box-shadow: inset 3px 0 0 var(--accent-2);
+    }
+    #flight-recorder-view-section .fr-run-top {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #flight-recorder-view-section .fr-run-title {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+    #flight-recorder-view-section .fr-run-sub {
+      display: flex;
+      gap: 8px;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    #flight-recorder-view-section .fr-mode {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    /* Status pills */
+    #flight-recorder-view-section .fr-status {
+      display: inline-block;
+      font-size: 0.66rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 1px 7px;
+      border-radius: 4px;
+      border: 1px solid;
+      white-space: nowrap;
+    }
+    #flight-recorder-view-section .fr-status-done,
+    #flight-recorder-view-section .fr-status-ok {
+      color: #3fb950;
+      border-color: rgba(63, 185, 80, 0.45);
+      background: rgba(63, 185, 80, 0.08);
+    }
+    #flight-recorder-view-section .fr-status-failed,
+    #flight-recorder-view-section .fr-status-refused {
+      color: #f85149;
+      border-color: rgba(248, 81, 73, 0.45);
+      background: rgba(248, 81, 73, 0.08);
+    }
+    #flight-recorder-view-section .fr-status-timeout,
+    #flight-recorder-view-section .fr-status-budget {
+      color: #ffb224;
+      border-color: rgba(255, 178, 36, 0.45);
+      background: rgba(255, 178, 36, 0.08);
+    }
+    #flight-recorder-view-section .fr-status-running {
+      color: #58a6ff;
+      border-color: rgba(88, 166, 255, 0.45);
+      background: rgba(88, 166, 255, 0.08);
+    }
+    #flight-recorder-view-section .fr-status-skipped {
+      color: var(--text-muted);
+      border-color: var(--border);
+    }
+    /* Detail panel */
+    #flight-recorder-view-section .fr-detail {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--card-bg);
+      padding: 16px;
+      min-height: 200px;
+    }
+    #flight-recorder-view-section .fr-detail-empty {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      text-align: center;
+      padding: 40px 12px;
+    }
+    #flight-recorder-view-section .fr-detail-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 6px;
+    }
+    #flight-recorder-view-section .fr-detail-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    #flight-recorder-view-section .fr-detail-meta {
+      font-size: 0.74rem;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    #flight-recorder-view-section .fr-question {
+      font-size: 0.85rem;
+      color: var(--text);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 14px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    #flight-recorder-view-section .fr-seats-title {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    #flight-recorder-view-section .fr-seat {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+    #flight-recorder-view-section .fr-seat-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      background: var(--card-hover);
+      font-size: 0.82rem;
+    }
+    #flight-recorder-view-section .fr-seat-agent {
+      font-weight: 600;
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    #flight-recorder-view-section .fr-seat-dur {
+      margin-left: auto;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    #flight-recorder-view-section .fr-seat-body {
+      padding: 10px;
+      font-size: 0.82rem;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 320px;
+      overflow: auto;
+    }
+    #flight-recorder-view-section .fr-seat-body.fr-seat-muted {
+      color: var(--text-muted);
+      font-style: italic;
+    }
+    #flight-recorder-view-section .fr-truncated-note {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      padding: 0 10px 8px;
+    }
+    #flight-recorder-view-section .fr-load-more {
+      width: 100%;
+      margin-top: 10px;
+    }
+  </style>
+  <section class="view-panel">
+    <div class="view-header">
+      <div class="view-title">
+        <span class="view-icon">🛫</span>
+        <span data-i18n="views.flightRecorder.title">Flight Recorder</span>
+      </div>
+      <div class="view-subtitle" data-i18n="views.flightRecorder.subtitle">
+        Live and archived board / orchestration runs — every seat, answer, and outcome
+      </div>
+    </div>
+
+    <div class="fr-filter-bar" id="fr-filter-bar">
+      <div class="fr-filter-field">
+        <label for="fr-filter-status" data-i18n="views.flightRecorder.filterStatus">Status</label>
+        <select id="fr-filter-status">
+          <option value="" data-i18n="views.flightRecorder.allStatuses">All statuses</option>
+          <option value="done">done</option>
+          <option value="failed">failed</option>
+          <option value="running">running</option>
+        </select>
+      </div>
+      <div class="fr-filter-field">
+        <label for="fr-filter-agent" data-i18n="views.flightRecorder.filterAgent">Agent</label>
+        <input type="text" id="fr-filter-agent" placeholder="agent id" autocomplete="off" />
+      </div>
+      <div class="fr-filter-field">
+        <label for="fr-filter-limit" data-i18n="views.flightRecorder.filterLimit">Limit</label>
+        <select id="fr-filter-limit">
+          <option value="25">25</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+          <option value="200">200</option>
+        </select>
+      </div>
+      <div class="fr-filter-actions">
+        <button
+          class="btn-primary"
+          id="fr-refresh-btn"
+          type="button"
+          data-i18n="views.flightRecorder.refreshBtn"
+        >
+          Refresh
+        </button>
+      </div>
+    </div>
+
+    <div class="fr-meta-row">
+      <span id="fr-count-line">0 runs</span>
+      <span class="fr-live-badge" id="fr-live-badge">POLL</span>
+      <span class="fr-error" id="fr-error" hidden></span>
+    </div>
+
+    <div class="fr-split">
+      <div>
+        <div class="fr-list" id="fr-list" hidden></div>
+        <div class="empty-state" id="fr-empty-state">
+          <div class="empty-state-icon">🛫</div>
+          <div class="empty-state-title" data-i18n="views.flightRecorder.emptyTitle">
+            No runs recorded yet
+          </div>
+          <p class="empty-state-text" data-i18n="views.flightRecorder.emptyText">
+            Board councils and chains will appear here as they run — live while in progress, then
+            archived for review.
+          </p>
+        </div>
+        <button class="btn-secondary fr-load-more" id="fr-load-more" type="button" hidden>
+          <span data-i18n="views.flightRecorder.loadMore">Load older runs</span>
+        </button>
+      </div>
+      <div class="fr-detail" id="fr-detail">
+        <div class="fr-detail-empty" id="fr-detail-empty" data-i18n="views.flightRecorder.selectHint">
+          Select a run to see every seat, answer, and outcome.
+        </div>
+      </div>
+    </div>
+  </section>
+</div>

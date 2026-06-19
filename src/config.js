@@ -232,9 +232,17 @@ const FLEET_DEFAULTS = {
       // Dispatch follow-through completion ping (src/dispatch.js watcher).
       // Deliberately OFF by default — opt in via settings or the config file.
       dispatchComplete: false,
+      // Flight Recorder: a board/chain run failed or a seat timed out
+      // (src/run-archive.js → fleet.fireAlert). ON by default so a failed
+      // orchestration surfaces; routed to whichever sinks are configured (ntfy).
+      orchestrationFailed: true,
     },
     sinks: {
       slack: { enabled: false, gatewayUrl: "", channel: "" },
+      // ntfy push sink (src/alerts.js dispatchToNtfy). Disabled by default; set
+      // {enabled:true, topic:"<secret-topic>"} (optional server, default
+      // https://ntfy.sh) to receive Flight Recorder failure alerts on a phone.
+      ntfy: { enabled: false, server: "", topic: "" },
       webhooks: [],
     },
   },
@@ -301,6 +309,21 @@ const FLEET_DEFAULTS = {
     // seatCount) already reaches the CLOSED ceiling, BEFORE K seats fan out.
     // 0/unset disables the projection (gate behaves exactly as before).
     perSeatCostUSD: 0,
+  },
+  // Flight Recorder (src/run-archive.js): durable archive of board/chain runs,
+  // surfaced by the "Flight Recorder" dashboard tab. Additive — when disabled,
+  // no archive is built and orchestrate behaves byte-identically to today.
+  //   nodeId: this instance's id stamped on every archived row (multi-instance
+  //     ready from day one). Empty = resolved to dispatch.identity / dispatch.node
+  //     / os.hostname() at wiring time.
+  //   alertOnFailure: fire an ntfy/alert when a run fails or a seat times out.
+  //   retentionDays / maxRows: lazy-prune bounds on the archive DB.
+  flightRecorder: {
+    enabled: true,
+    nodeId: "",
+    alertOnFailure: true,
+    retentionDays: 30,
+    maxRows: 5000,
   },
   rateLimit: { windowMs: 60000, max: 120 },
   // Cost budgets (USD) over LLM API spend — see src/budgets.js. 0 = no limit.

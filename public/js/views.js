@@ -32,6 +32,7 @@
     "agents",
     "cerebro",
     "operators",
+    "flight-recorder",
   ];
   const VIEW_HASH_PREFIX = "#view-";
 
