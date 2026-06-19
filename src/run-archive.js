@@ -439,7 +439,7 @@ function createRunArchive({
    * @param {number} [filters.before] - archived_at cursor (ms); rows strictly older
    * @returns {{runs: Array, page: {limit, hasMore, nextBefore}}}
    */
-  function listRuns({ status, agent, node: nodeFilter, limit, before } = {}) {
+  function listRuns({ status, agent, node: nodeFilter, limit, before, since, until } = {}) {
     const conditions = [];
     const params = [];
 
@@ -465,6 +465,20 @@ function createRunArchive({
       if (!Number.isFinite(beforeMs)) throw httpError(400, "before must be a number (epoch ms)");
       conditions.push("archived_at < ?");
       params.push(beforeMs);
+    }
+    // Date-range filter (epoch ms). Composes with the `before` cursor — both are
+    // bounds on archived_at, so paging still works inside a date window.
+    if (since !== undefined && since !== null && since !== "") {
+      const sinceMs = Number(since);
+      if (!Number.isFinite(sinceMs)) throw httpError(400, "since must be epoch ms");
+      conditions.push("archived_at >= ?");
+      params.push(sinceMs);
+    }
+    if (until !== undefined && until !== null && until !== "") {
+      const untilMs = Number(until);
+      if (!Number.isFinite(untilMs)) throw httpError(400, "until must be epoch ms");
+      conditions.push("archived_at < ?");
+      params.push(untilMs);
     }
 
     let effectiveLimit = Number(limit);
