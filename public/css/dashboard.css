@@ -198,6 +198,10 @@ body {
   text-align: center;
 }
 .nav-badge {
+  /* Count badges removed from the nav — menu items are plain clickable tabs.
+     Hidden (not deleted) so sidebar.js updateBadges() stays a harmless no-op and
+     the badges can be restored by dropping this one declaration. */
+  display: none;
   margin-left: auto;
   background: var(--border);
   padding: 2px 8px;
