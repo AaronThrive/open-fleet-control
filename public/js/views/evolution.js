@@ -35,6 +35,10 @@ function toast(message, type = "success") {
 function relativeTime(ts) {
   const parsed = Date.parse(ts);
   if (Number.isNaN(parsed)) return t("time.unknown", {}, "unknown time");
+  // A year-less date string (e.g. "Fri Jun 19") parses to year 2001, which
+  // rendered as the misleading "25 years ago". Nothing in this product predates
+  // 2015, so treat an implausibly-old parse as unknown rather than show it.
+  if (new Date(parsed).getFullYear() < 2015) return t("time.unknown", {}, "unknown time");
   const diffMs = Date.now() - parsed;
   const mins = Math.round(diffMs / 60000);
   if (mins < 1) return t("time.relJustNow", {}, "just now");
