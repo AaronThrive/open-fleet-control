@@ -145,6 +145,19 @@
       "sequentialBoard": true,
       "timeoutSec": 1200
     },
+    "dispatch": {
+      "_comment": "Agent dispatch. token/identity/maxConcurrent set in dashboard.local.json. slack: DEPLOYMENT-SPECIFIC Slack routing — the brief tells each advisor to post its canonical answer via 'openclaw message send', which REQUIRES a channel-id target (channel:<id>), NOT a #name. boardChannel = the council channel id; chiefUserId = Chief's Slack user id (renders a real <@…> mention); agents[<agent>] = that agent's #<agent>-command channel id + bot userId. Discover ids with the Slack API (conversations.list / users.list / auth.test). Omit the slack block and the board still works via a hardcoded fallback, but per-agent (non-board) posts will fail until mapped.",
+      "token": null,
+      "identity": null,
+      "maxConcurrent": 6,
+      "slack": {
+        "boardChannel": "channel:CXXXXXXXXXX",
+        "chiefUserId": "UXXXXXXXXXX",
+        "agents": {
+          "ops": { "channel": "channel:CXXXXXXXXXX", "userId": "UXXXXXXXXXX" }
+        }
+      }
+    },
     "usage": {
       "_comment": "LLM usage source paths (supports ~ and $HOME). headroomStats empty = reuse fleet.cortex.headroomStats. openrouterKey: OPENROUTER_API_KEY env var takes precedence.",
       "claudeProjectsDir": "~/.claude/projects",
