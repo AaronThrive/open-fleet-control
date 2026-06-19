@@ -342,7 +342,9 @@ function createRunArchive({
     return {
       seq: Number(row.seq),
       agent: row.agent,
-      taskId: row.task_id,
+      // Derived boolean for at-a-glance UI; `status` carries the detail
+      // (ok | timeout | budget | refused | failed).
+      ok: row.status === "ok",
       status: row.status,
       resultText: row.result_text,
       error: row.error,
