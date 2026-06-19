@@ -14,70 +14,6 @@ try {
 }
 
 /**
- * Real ~/.headroom/subscription_state.json schema (verbatim shape from a
- * live host): five_hour/seven_day/extra_usage/polled_at live under `latest`,
- * window token totals under `window_tokens`. Regression fixture for the
- * "gauge renders zeros despite real data" bug.
- */
-const HEADROOM_FIXTURE = {
-  latest: {
-    five_hour: {
-      used: 29,
-      limit: 100,
-      utilization_pct: 29,
-      resets_at: "2026-06-11T22:00:00Z",
-      seconds_to_reset: 4200,
-    },
-    seven_day: {
-      used: 35,
-      limit: 100,
-      utilization_pct: 35,
-      resets_at: "2026-06-15T00:00:00Z",
-      seconds_to_reset: 273600,
-    },
-    extra_usage: {
-      is_enabled: true,
-      monthly_limit_usd: 50,
-      used_credits_usd: 12.34,
-      utilization_pct: 24.7,
-    },
-    polled_at: "2026-06-11T19:58:00Z",
-    seven_day_sonnet: { used: 11, limit: 100, utilization_pct: 11 },
-  },
-  window_tokens: {
-    input: 368180,
-    output: 545773,
-    cache_reads: 158577891,
-    cache_writes_5m: 3000000,
-    cache_writes_1h: 1291792,
-    cache_writes_total: 4291792,
-    total_raw: 163783636,
-    weighted_token_equivalent: 17000000,
-    by_model: { "claude-fable-5": { input: 368180, output: 545773 } },
-  },
-  contribution: { tokens_submitted: 0 },
-  poll_count: 417,
-  history: [],
-};
-
-/**
- * What headroom writes right after a restart / failed poll: same top-level
- * keys but latest and window_tokens are null. The gauge previously reported
- * available:true with all-zero numbers for this state.
- */
-const HEADROOM_NULL_STATE = {
-  latest: null,
-  window_tokens: null,
-  contribution: { tokens_submitted: 0 },
-  discrepancies: [],
-  poll_count: 417,
-  poll_errors: 1,
-  last_error: "fetch returned None",
-  last_active_at: null,
-  history: [],
-};
-
-/**
  * Real ~/.lean-ctx/stats.json schema: per-command entries carry
  * {count, input_tokens, output_tokens} where input ~== output for nearly
  * every command (the same measurement, not before/after compression).
@@ -111,7 +47,6 @@ const LEAN_CTX_FIXTURE = {
 };
 
 function writeFixtures(dir) {
-  fs.writeFileSync(path.join(dir, "headroom.json"), JSON.stringify(HEADROOM_FIXTURE));
   fs.writeFileSync(path.join(dir, "lean-ctx.json"), JSON.stringify(LEAN_CTX_FIXTURE));
 }
 
@@ -182,108 +117,26 @@ describe("cortex-gauges module", () => {
     });
   });
 
-  describe("headroom gauge (real subscription_state.json schema)", () => {
-    it("surfaces window totals, 5h/7d utilization, extra usage, and polled_at", () => {
-      const dir = fs.mkdtempSync(path.join(tmpDir, "hr-real-"));
-      writeFixtures(dir);
-      const [headroom] = createGauges({
-        paths: { headroom: path.join(dir, "headroom.json"), leanCtx: "/nope", lcmDb: "/nope" },
+  describe("getGauges() shape (headroom removed)", () => {
+    it("returns exactly two sources: lean-ctx then lcm", () => {
+      const gauges = createGauges({
+        paths: { leanCtx: "/nope", lcmDb: "/nope" },
       }).getGauges();
-
-      assert.strictEqual(headroom.available, true);
-      assert.strictEqual(headroom.rawTokens, 163783636);
-      assert.strictEqual(headroom.effectiveTokens, 17000000);
-      assert.strictEqual(headroom.savingsPct, computeSavingsPct(163783636, 17000000));
-
-      assert.strictEqual(headroom.detail.input, 368180);
-      assert.strictEqual(headroom.detail.output, 545773);
-      assert.strictEqual(headroom.detail.cacheReads, 158577891);
-      assert.strictEqual(headroom.detail.cacheWritesTotal, 4291792);
-      assert.strictEqual(headroom.detail.fiveHourUtilizationPct, 29);
-      assert.strictEqual(headroom.detail.sevenDayUtilizationPct, 35);
-      assert.strictEqual(headroom.detail.extraUsageUsd, 12.34);
-      assert.strictEqual(headroom.detail.extraUsageLimitUsd, 50);
-      assert.strictEqual(headroom.detail.polledAt, "2026-06-11T19:58:00Z");
-    });
-
-    it("sums the window components when total_raw is absent", () => {
-      const dir = fs.mkdtempSync(path.join(tmpDir, "hr-sum-"));
-      const fixture = JSON.parse(JSON.stringify(HEADROOM_FIXTURE));
-      delete fixture.window_tokens.total_raw;
-      fs.writeFileSync(path.join(dir, "headroom.json"), JSON.stringify(fixture));
-      const [headroom] = createGauges({
-        paths: { headroom: path.join(dir, "headroom.json"), leanCtx: "/nope", lcmDb: "/nope" },
-      }).getGauges();
-
-      // input + output + cache_reads + cache_writes_total
-      assert.strictEqual(headroom.rawTokens, 368180 + 545773 + 158577891 + 4291792);
-    });
-
-    it("reports unavailable (not zeros) when latest and window_tokens are null", () => {
-      const dir = fs.mkdtempSync(path.join(tmpDir, "hr-null-"));
-      fs.writeFileSync(path.join(dir, "headroom.json"), JSON.stringify(HEADROOM_NULL_STATE));
-      const [headroom] = createGauges({
-        paths: { headroom: path.join(dir, "headroom.json"), leanCtx: "/nope", lcmDb: "/nope" },
-      }).getGauges();
-
-      assert.strictEqual(headroom.available, false);
-      assert.ok(headroom.detail.error.includes("no poll data"));
-      assert.strictEqual(headroom.rawTokens, 0);
-    });
-
-    it("surfaces the 5h/7d window reset timestamps for the subscription card", () => {
-      const dir = fs.mkdtempSync(path.join(tmpDir, "hr-resets-"));
-      writeFixtures(dir);
-      const [headroom] = createGauges({
-        paths: { headroom: path.join(dir, "headroom.json"), leanCtx: "/nope", lcmDb: "/nope" },
-      }).getGauges();
-
-      assert.strictEqual(headroom.detail.fiveHourResetsAt, "2026-06-11T22:00:00Z");
-      assert.strictEqual(headroom.detail.sevenDayResetsAt, "2026-06-15T00:00:00Z");
-    });
-
-    it("marks the no-poll state as stale with the file mtime and last daemon error", () => {
-      // The daemon wrote the state file but every poll failed (latest: null).
-      // The UI needs: stale flag, when the file was last touched, and why.
-      const dir = fs.mkdtempSync(path.join(tmpDir, "hr-stale-"));
-      const statePath = path.join(dir, "headroom.json");
-      fs.writeFileSync(statePath, JSON.stringify(HEADROOM_NULL_STATE));
-      const [headroom] = createGauges({
-        paths: { headroom: statePath, leanCtx: "/nope", lcmDb: "/nope" },
-      }).getGauges();
-
-      assert.strictEqual(headroom.available, false);
-      assert.strictEqual(headroom.detail.stale, true);
-      assert.strictEqual(headroom.detail.lastError, "fetch returned None");
-      const mtime = Date.parse(headroom.detail.fileModifiedAt);
-      assert.ok(Number.isFinite(mtime), "fileModifiedAt must be a parseable timestamp");
-      assert.ok(Math.abs(mtime - Date.now()) < 60000, "fileModifiedAt must be the file mtime");
-    });
-
-    it("omits extra-usage dollars when extra usage is disabled", () => {
-      const dir = fs.mkdtempSync(path.join(tmpDir, "hr-noextra-"));
-      const fixture = JSON.parse(JSON.stringify(HEADROOM_FIXTURE));
-      fixture.latest.extra_usage.is_enabled = false;
-      fs.writeFileSync(path.join(dir, "headroom.json"), JSON.stringify(fixture));
-      const [headroom] = createGauges({
-        paths: { headroom: path.join(dir, "headroom.json"), leanCtx: "/nope", lcmDb: "/nope" },
-      }).getGauges();
-
-      assert.strictEqual(headroom.detail.extraUsageUsd, null);
-      assert.strictEqual(headroom.detail.extraUsageLimitUsd, null);
+      assert.strictEqual(gauges.length, 2);
+      assert.deepStrictEqual(
+        gauges.map((g) => g.source),
+        ["lean-ctx", "lcm"],
+      );
+      // No headroom gauge is ever produced.
+      assert.ok(!gauges.some((g) => g.source === "headroom"));
     });
   });
 
   describe("path overrides from config", () => {
     it("ignores empty-string overrides and falls back to the default paths", () => {
       // CONFIG defaults flow empty strings through fleet.js; they must not
-      // clobber the built-in ~/.headroom etc. locations.
+      // clobber the built-in ~/.lean-ctx etc. locations.
       const home = fs.mkdtempSync(path.join(tmpDir, "home-"));
-      fs.mkdirSync(path.join(home, ".headroom"), { recursive: true });
-      fs.writeFileSync(
-        path.join(home, ".headroom", "subscription_state.json"),
-        JSON.stringify(HEADROOM_FIXTURE),
-      );
       fs.mkdirSync(path.join(home, ".lean-ctx"), { recursive: true });
       fs.writeFileSync(
         path.join(home, ".lean-ctx", "stats.json"),
@@ -292,13 +145,11 @@ describe("cortex-gauges module", () => {
 
       const gauges = createGauges({
         home,
-        paths: { headroom: "", leanCtx: "   ", lcmDb: "" },
+        paths: { leanCtx: "   ", lcmDb: "" },
       }).getGauges();
 
       assert.strictEqual(gauges[0].available, true);
-      assert.strictEqual(gauges[0].rawTokens, 163783636);
-      assert.strictEqual(gauges[1].available, true);
-      assert.strictEqual(gauges[1].detail.totalCommands, 1508);
+      assert.strictEqual(gauges[0].detail.totalCommands, 1508);
     });
 
     it("still honours real path overrides", () => {
@@ -306,14 +157,12 @@ describe("cortex-gauges module", () => {
       writeFixtures(dir);
       const gauges = createGauges({
         paths: {
-          headroom: path.join(dir, "headroom.json"),
           leanCtx: path.join(dir, "lean-ctx.json"),
           lcmDb: path.join(dir, "missing.db"),
         },
       }).getGauges();
       assert.strictEqual(gauges[0].available, true);
-      assert.strictEqual(gauges[1].available, true);
-      assert.strictEqual(gauges[2].available, false);
+      assert.strictEqual(gauges[1].available, false);
     });
   });
 
@@ -322,8 +171,8 @@ describe("cortex-gauges module", () => {
       const dir = fs.mkdtempSync(path.join(tmpDir, "lc-real-"));
       writeFixtures(dir);
       const gauge = createGauges({
-        paths: { headroom: "/nope", leanCtx: path.join(dir, "lean-ctx.json"), lcmDb: "/nope" },
-      }).getGauges()[1];
+        paths: { leanCtx: path.join(dir, "lean-ctx.json"), lcmDb: "/nope" },
+      }).getGauges()[0];
 
       assert.strictEqual(gauge.available, true);
       // input_tokens ~== output_tokens in stats.json: NOT a raw/compressed
@@ -351,8 +200,8 @@ describe("cortex-gauges module", () => {
       };
       fs.writeFileSync(path.join(dir, "lean-ctx.json"), JSON.stringify(fixture));
       const gauge = createGauges({
-        paths: { headroom: "/nope", leanCtx: path.join(dir, "lean-ctx.json"), lcmDb: "/nope" },
-      }).getGauges()[1];
+        paths: { leanCtx: path.join(dir, "lean-ctx.json"), lcmDb: "/nope" },
+      }).getGauges()[0];
 
       assert.strictEqual(gauge.available, true);
       assert.strictEqual(gauge.rawTokens, 1000);
@@ -369,18 +218,27 @@ describe("cortex-gauges module", () => {
         JSON.stringify({ total_commands: 3, total_output_tokens: 99 }),
       );
       const gauge = createGauges({
-        paths: { headroom: "/nope", leanCtx: path.join(dir, "lean-ctx.json"), lcmDb: "/nope" },
-      }).getGauges()[1];
+        paths: { leanCtx: path.join(dir, "lean-ctx.json"), lcmDb: "/nope" },
+      }).getGauges()[0];
 
       assert.strictEqual(gauge.available, true);
       assert.strictEqual(gauge.savingsPct, null);
       assert.deepStrictEqual(gauge.detail.topCommands, []);
       assert.strictEqual(gauge.detail.tokensProcessed, 99);
     });
+
+    it("reports unavailable when the stats file is missing", () => {
+      const dir = fs.mkdtempSync(path.join(tmpDir, "lc-missing-"));
+      const gauge = createGauges({
+        paths: { leanCtx: path.join(dir, "lean-ctx.json"), lcmDb: "/nope" },
+      }).getGauges()[0];
+      assert.strictEqual(gauge.available, false);
+      assert.ok(gauge.detail.error.includes("file not found"));
+    });
   });
 
   describe("getGauges() with fixture files", () => {
-    it("reads all three sources", (t) => {
+    it("reads both sources", (t) => {
       if (!sqlite) return t.skip("node:sqlite unavailable");
       const dir = fs.mkdtempSync(path.join(tmpDir, "all-"));
       writeFixtures(dir);
@@ -389,20 +247,19 @@ describe("cortex-gauges module", () => {
 
       const gauges = createGauges({
         paths: {
-          headroom: path.join(dir, "headroom.json"),
           leanCtx: path.join(dir, "lean-ctx.json"),
           lcmDb,
         },
       }).getGauges();
 
-      assert.strictEqual(gauges.length, 3);
+      assert.strictEqual(gauges.length, 2);
       assert.deepStrictEqual(
         gauges.map((g) => g.source),
-        ["headroom", "lean-ctx", "lcm"],
+        ["lean-ctx", "lcm"],
       );
       assert.ok(gauges.every((g) => g.available === true));
 
-      const lcm = gauges[2];
+      const lcm = gauges[1];
       // lcm: summaries 1000 source tokens -> 100 summary tokens = 90% saved
       assert.strictEqual(lcm.rawTokens, 1000);
       assert.strictEqual(lcm.effectiveTokens, 100);
@@ -418,30 +275,25 @@ describe("cortex-gauges module", () => {
 
       const gauges = createGauges({
         paths: {
-          headroom: path.join(dir, "headroom.json"),
           leanCtx: path.join(dir, "lean-ctx.json"),
           lcmDb: path.join(dir, "lcm.db"),
         },
       }).getGauges();
 
-      assert.strictEqual(gauges[0].available, false);
-      assert.ok(gauges[0].detail.error.includes("file not found"));
-      assert.strictEqual(gauges[1].available, true);
-      assert.strictEqual(gauges[2].available, false);
-      assert.ok(gauges[2].detail.error.includes("database not found"));
+      assert.strictEqual(gauges[0].available, true);
+      assert.strictEqual(gauges[1].available, false);
+      assert.ok(gauges[1].detail.error.includes("database not found"));
     });
 
     it("tolerates corrupt JSON without breaking other sources", (t) => {
       if (!sqlite) return t.skip("node:sqlite unavailable");
       const dir = fs.mkdtempSync(path.join(tmpDir, "corrupt-"));
-      fs.writeFileSync(path.join(dir, "headroom.json"), "{not json!!");
-      fs.writeFileSync(path.join(dir, "lean-ctx.json"), JSON.stringify(LEAN_CTX_FIXTURE));
+      fs.writeFileSync(path.join(dir, "lean-ctx.json"), "{not json!!");
       const lcmDb = path.join(dir, "lcm.db");
       createLcmFixtureDb(lcmDb);
 
       const gauges = createGauges({
         paths: {
-          headroom: path.join(dir, "headroom.json"),
           leanCtx: path.join(dir, "lean-ctx.json"),
           lcmDb,
         },
@@ -449,7 +301,6 @@ describe("cortex-gauges module", () => {
 
       assert.strictEqual(gauges[0].available, false);
       assert.strictEqual(gauges[1].available, true);
-      assert.strictEqual(gauges[2].available, true);
     });
   });
 
@@ -466,9 +317,9 @@ describe("cortex-gauges module", () => {
       db.close();
 
       const gauges = createGauges({
-        paths: { headroom: "/nope", leanCtx: "/nope", lcmDb },
+        paths: { leanCtx: "/nope", lcmDb },
       }).getGauges();
-      const lcm = gauges[2];
+      const lcm = gauges[1];
 
       assert.strictEqual(lcm.available, true);
       assert.strictEqual(lcm.rawTokens, 500);
@@ -493,8 +344,8 @@ describe("cortex-gauges module", () => {
       db.close();
 
       const lcm = createGauges({
-        paths: { headroom: "/nope", leanCtx: "/nope", lcmDb },
-      }).getGauges()[2];
+        paths: { leanCtx: "/nope", lcmDb },
+      }).getGauges()[1];
 
       assert.strictEqual(lcm.available, true);
       assert.strictEqual(lcm.rawTokens, 400);
@@ -511,8 +362,8 @@ describe("cortex-gauges module", () => {
       db.close();
 
       const lcm = createGauges({
-        paths: { headroom: "/nope", leanCtx: "/nope", lcmDb },
-      }).getGauges()[2];
+        paths: { leanCtx: "/nope", lcmDb },
+      }).getGauges()[1];
 
       assert.strictEqual(lcm.available, false);
       assert.ok(lcm.detail.error.includes("no summaries/messages tables"));
@@ -527,9 +378,9 @@ describe("cortex-gauges module", () => {
       createLcmFixtureDbWithDates(lcmDb, ["2026-03-28 16:27:11", "2026-06-01 21:04:32"]);
 
       const lcm = createGauges({
-        paths: { headroom: "/nope", leanCtx: "/nope", lcmDb },
+        paths: { leanCtx: "/nope", lcmDb },
         now: () => Date.parse("2026-06-11T22:00:00Z"),
-      }).getGauges()[2];
+      }).getGauges()[1];
 
       assert.strictEqual(lcm.available, true);
       assert.strictEqual(lcm.detail.lastActivity, "2026-06-01 21:04:32");
@@ -544,9 +395,9 @@ describe("cortex-gauges module", () => {
       createLcmFixtureDbWithDates(lcmDb, ["2026-06-10 09:00:00"]);
 
       const lcm = createGauges({
-        paths: { headroom: "/nope", leanCtx: "/nope", lcmDb },
+        paths: { leanCtx: "/nope", lcmDb },
         now: () => Date.parse("2026-06-11T22:00:00Z"),
-      }).getGauges()[2];
+      }).getGauges()[1];
 
       assert.strictEqual(lcm.detail.lastActivity, "2026-06-10 09:00:00");
       assert.strictEqual(lcm.detail.stale, false);
@@ -559,8 +410,8 @@ describe("cortex-gauges module", () => {
       createLcmFixtureDb(lcmDb);
 
       const lcm = createGauges({
-        paths: { headroom: "/nope", leanCtx: "/nope", lcmDb },
-      }).getGauges()[2];
+        paths: { leanCtx: "/nope", lcmDb },
+      }).getGauges()[1];
 
       assert.strictEqual(lcm.available, true);
       assert.strictEqual(lcm.detail.lastActivity, null);
@@ -575,7 +426,6 @@ describe("cortex-gauges module", () => {
 
       const gauges = createGauges({
         paths: {
-          headroom: path.join(dir, "headroom.json"),
           leanCtx: path.join(dir, "lean-ctx.json"),
           lcmDb,
         },
@@ -584,11 +434,10 @@ describe("cortex-gauges module", () => {
         },
       }).getGauges();
 
-      assert.strictEqual(gauges[2].available, false);
-      assert.ok(gauges[2].detail.error.includes("node:sqlite not available"));
-      // Other gauges unaffected
+      assert.strictEqual(gauges[1].available, false);
+      assert.ok(gauges[1].detail.error.includes("node:sqlite not available"));
+      // Other gauge unaffected
       assert.strictEqual(gauges[0].available, true);
-      assert.strictEqual(gauges[1].available, true);
     });
   });
 
@@ -602,11 +451,11 @@ describe("cortex-gauges module", () => {
     it("reads the active engine from plugins.slots.contextEngine", () => {
       const dir = fs.mkdtempSync(path.join(tmpDir, "engine-"));
       const openclawConfig = writeOpenclawConfig(dir, {
-        plugins: { slots: { memory: "memory-lancedb-pro", contextEngine: "headroom" } },
+        plugins: { slots: { memory: "memory-lancedb-pro", contextEngine: "lean-ctx" } },
       });
 
       const engine = createGauges({ paths: { openclawConfig } }).getContextEngine();
-      assert.strictEqual(engine.engine, "headroom");
+      assert.strictEqual(engine.engine, "lean-ctx");
       assert.strictEqual(engine.source, "plugins.slots.contextEngine");
       assert.strictEqual(engine.reason, null);
     });

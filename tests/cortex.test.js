@@ -17,26 +17,14 @@ function mockExecFn(responder) {
   return fn;
 }
 
-const failingLoader = () => {
-  throw new Error("Cannot find module '@lancedb/lancedb'");
-};
-
-const STATS_TEXT = "• Total memories: 7\nMemories by scope:\n  • global: 7\n";
-
 function brokenCortexOptions(tmpDir) {
   return {
-    lancedb: {
-      dbPath: "/nonexistent/lancedb",
-      execFn: mockExecFn(() => ({ error: new Error("ENOENT"), stdout: "", stderr: "" })),
-      lanceModuleLoader: failingLoader,
-    },
     gbrain: {
       cliPath: "/nonexistent/gbrain",
       execFn: mockExecFn(() => ({ error: new Error("ENOENT"), stdout: "", stderr: "" })),
     },
     gauges: {
       paths: {
-        headroom: path.join(tmpDir, "missing-headroom.json"),
         leanCtx: path.join(tmpDir, "missing-lean-ctx.json"),
         lcmDb: path.join(tmpDir, "missing-lcm.db"),
         openclawConfig: path.join(tmpDir, "missing-openclaw.json"),
@@ -46,16 +34,11 @@ function brokenCortexOptions(tmpDir) {
 }
 
 function healthyCortexOptions(tmpDir) {
-  const headroomPath = path.join(tmpDir, "headroom.json");
   const leanCtxPath = path.join(tmpDir, "lean-ctx.json");
   const openclawConfigPath = path.join(tmpDir, "openclaw.json");
   fs.writeFileSync(
     openclawConfigPath,
-    JSON.stringify({ plugins: { slots: { contextEngine: "headroom" } } }),
-  );
-  fs.writeFileSync(
-    headroomPath,
-    JSON.stringify({ window_tokens: { total_raw: 1000, weighted_token_equivalent: 600 } }),
+    JSON.stringify({ plugins: { slots: { contextEngine: "lean-ctx" } } }),
   );
   fs.writeFileSync(
     leanCtxPath,
@@ -68,24 +51,23 @@ function healthyCortexOptions(tmpDir) {
     }),
   );
   return {
-    lancedb: {
-      dbPath: "/nonexistent/lancedb",
-      execFn: mockExecFn(({ args }) => {
-        if (args[1] === "search") return { error: null, stdout: "[]", stderr: "" };
-        return { error: null, stdout: STATS_TEXT, stderr: "" };
-      }),
-      lanceModuleLoader: failingLoader,
-    },
     gbrain: {
       execFn: mockExecFn(({ args }) => {
-        if (args[0] === "list")
-          return { error: null, stdout: '[{"slug":"a","title":"A"}]', stderr: "" };
-        return { error: null, stdout: "[]", stderr: "" };
+        if (args[0] === "stats") {
+          return { error: null, stdout: "Pages:     5\nLinks:     0\n", stderr: "" };
+        }
+        // list (probe + listing): two pages, newest first
+        return {
+          error: null,
+          stdout:
+            '[{"slug":"a","title":"Alpha","type":"note","updated_at":"Thu Jun 11"},' +
+            '{"slug":"b","title":"Bravo","type":"note","updated_at":"Mon Jun 08"}]',
+          stderr: "",
+        };
       }),
     },
     gauges: {
       paths: {
-        headroom: headroomPath,
         leanCtx: leanCtxPath,
         lcmDb: path.join(tmpDir, "missing-lcm.db"),
         openclawConfig: openclawConfigPath,
@@ -134,8 +116,8 @@ describe("cortex facade", () => {
         releaseExec = resolve;
       });
       const options = brokenCortexOptions(tmpDir);
-      // Make the memory adapter slow: getState must NOT wait for it.
-      options.lancedb.execFn = async () => {
+      // Make the gbrain adapter slow: getState must NOT wait for it.
+      options.gbrain.execFn = async () => {
         await gate;
         return { error: new Error("ENOENT"), stdout: "", stderr: "" };
       };
@@ -145,9 +127,12 @@ describe("cortex facade", () => {
       const state = await cortex.getState();
       assert.ok(Date.now() - startedAt < 1000, "cold getState must not await collection");
 
-      // Warming placeholder has the full empty shape.
+      // Warming placeholder has the full empty shape (gbrain-backed memory).
       assert.strictEqual(state.warming, true);
       assert.strictEqual(state.memory.available, false);
+      assert.strictEqual(state.memory.pageCount, null);
+      assert.strictEqual(state.memory.lastUpdated, null);
+      assert.strictEqual(state.memory.lancedb, undefined);
       assert.strictEqual(state.gbrain.available, false);
       assert.deepStrictEqual(state.gauges, []);
       assert.strictEqual(state.gaugeSummary.sources, 0);
@@ -172,6 +157,7 @@ describe("cortex facade", () => {
       const cortex = createCortex(options);
       const [a, b] = await Promise.all([cortex.warmup(), cortex.warmup()]);
       assert.strictEqual(a, b);
+      // available() is probed once and cached; the coalesced collection runs once.
       assert.strictEqual(collections, 1);
     });
   });
@@ -184,17 +170,23 @@ describe("cortex facade", () => {
       assert.ok(typeof state.timestamp === "number");
 
       assert.strictEqual(state.memory.available, false);
-      assert.ok(state.memory.reason.includes("openclaw CLI unavailable"));
-      assert.ok(state.memory.reason.includes("@lancedb/lancedb not loadable"));
-      assert.strictEqual(state.memory.stats, null);
+      assert.ok(state.memory.reason.includes("gbrain CLI failed"));
+      assert.strictEqual(state.memory.pageCount, null);
+      assert.strictEqual(state.memory.lastUpdated, null);
+      // No LanceDB field survives.
+      assert.strictEqual(state.memory.lancedb, undefined);
+      assert.strictEqual(state.memory.cli, undefined);
+      assert.strictEqual(state.memory.stats, undefined);
 
       assert.strictEqual(state.gbrain.available, false);
       assert.ok(state.gbrain.reason.includes("gbrain CLI failed"));
 
-      assert.strictEqual(state.gauges.length, 3);
+      // headroom removed: exactly two gauge sources remain.
+      assert.strictEqual(state.gauges.length, 2);
       assert.ok(state.gauges.every((g) => g.available === false));
+      assert.ok(!state.gauges.some((g) => g.source === "headroom"));
       assert.strictEqual(state.gaugeSummary.available, 0);
-      assert.strictEqual(state.gaugeSummary.sources, 3);
+      assert.strictEqual(state.gaugeSummary.sources, 2);
       assert.strictEqual(state.gaugeSummary.overallSavingsPct, null);
 
       // No openclaw config on this host: engine unknown, with a reason.
@@ -204,64 +196,72 @@ describe("cortex facade", () => {
   });
 
   describe("getState() when subsystems are healthy", () => {
-    it("includes availability, memory stats, and the gauge summary", async () => {
+    it("includes gbrain-backed memory, no graph, and the gauge summary", async () => {
       const cortex = createCortex(healthyCortexOptions(tmpDir));
       const state = await cortex.warmup();
 
       assert.strictEqual(state.memory.available, true);
-      assert.strictEqual(state.memory.cli, true);
-      assert.strictEqual(state.memory.lancedb, false);
-      assert.strictEqual(state.memory.stats.totalMemories, 7);
-      assert.deepStrictEqual(state.memory.stats.byScope, { global: 7 });
+      // Memory is gbrain-backed: pageCount from stats, lastUpdated from list.
+      assert.strictEqual(state.memory.pageCount, 5);
+      assert.strictEqual(state.memory.lastUpdated, "Thu Jun 11");
+      assert.strictEqual(state.memory.lancedb, undefined);
+      assert.strictEqual(state.memory.stats, undefined);
 
       assert.strictEqual(state.gbrain.available, true);
       assert.strictEqual(state.gbrain.reason, null);
 
-      // headroom + lean-ctx available, lcm db missing
+      // lean-ctx available, lcm db missing — no headroom entry.
+      assert.deepStrictEqual(
+        state.gauges.map((g) => g.source),
+        ["lean-ctx", "lcm"],
+      );
       assert.deepStrictEqual(
         state.gauges.map((g) => g.available),
-        [true, true, false],
+        [true, false],
       );
-      assert.strictEqual(state.gaugeSummary.available, 2);
-      assert.strictEqual(state.gaugeSummary.totalRawTokens, 1200);
-      assert.strictEqual(state.gaugeSummary.totalEffectiveTokens, 750);
-      assert.strictEqual(state.gaugeSummary.overallSavingsPct, 37.5);
+      assert.strictEqual(state.gaugeSummary.available, 1);
+      assert.strictEqual(state.gaugeSummary.totalRawTokens, 200);
+      assert.strictEqual(state.gaugeSummary.totalEffectiveTokens, 150);
+      assert.strictEqual(state.gaugeSummary.overallSavingsPct, 25);
 
       // Active context engine resolved from plugins.slots.contextEngine.
-      assert.strictEqual(state.contextEngine.engine, "headroom");
+      assert.strictEqual(state.contextEngine.engine, "lean-ctx");
       assert.strictEqual(state.contextEngine.source, "plugins.slots.contextEngine");
+
+      // No knowledge-graph viz data on the state payload.
+      assert.strictEqual(state.graph, undefined);
     });
   });
 
   describe("passthrough methods", () => {
-    it("delegates memory, graph, and gauge calls to the adapters", async () => {
+    it("delegates memory (list/search/get/stats) and gauge calls to gbrain", async () => {
       const options = healthyCortexOptions(tmpDir);
       const cortex = createCortex(options);
 
-      const search = await cortex.searchMemory("query", { limit: 3 });
-      assert.deepStrictEqual(search.results, []);
-      const searchCall = options.lancedb.execFn.calls.find((c) => c.args[1] === "search");
-      assert.deepStrictEqual(searchCall.args, [
-        "memory-pro",
-        "search",
-        "query",
-        "--json",
-        "--limit",
-        "3",
-      ]);
+      const list = await cortex.listMemory();
+      assert.strictEqual(list.total, 2);
+      assert.deepStrictEqual(list.items[0], {
+        id: "a",
+        title: "Alpha",
+        type: "note",
+        updatedAt: "Thu Jun 11",
+      });
+      // list must NOT pass a --limit cap (whole brain).
+      const listCall = options.gbrain.execFn.calls.find(
+        (c) => c.args[0] === "list" && !c.args.includes("--limit"),
+      );
+      assert.deepStrictEqual(listCall.args, ["list", "--json"]);
+
+      const search = await cortex.searchMemory("brav");
+      assert.strictEqual(search.total, 1);
+      assert.strictEqual(search.items[0].id, "b");
 
       const stats = await cortex.memoryStats();
-      assert.strictEqual(stats.totalMemories, 7);
-
-      const graph = await cortex.getGraph({ limit: 10 });
-      assert.deepStrictEqual(graph.nodes, [{ id: "a", title: "A", type: "page" }]);
-
-      const page = await cortex.getPage("a");
-      assert.ok(page.error || page.content); // empty stdout from mock yields {error}
+      assert.strictEqual(stats.pageCount, 5);
 
       const gauges = cortex.getGauges();
-      assert.strictEqual(gauges.length, 3);
-      assert.strictEqual(gauges[0].source, "headroom");
+      assert.strictEqual(gauges.length, 2);
+      assert.strictEqual(gauges[0].source, "lean-ctx");
     });
 
     it("propagates { error } results instead of throwing", async () => {
@@ -269,11 +269,17 @@ describe("cortex facade", () => {
       assert.ok((await cortex.searchMemory("q")).error);
       assert.ok((await cortex.listMemory()).error);
       assert.ok((await cortex.getMemory("id")).error);
-      assert.ok((await cortex.storeMemory("text")).error);
-      assert.ok((await cortex.updateMemory("id", { text: "x" })).error);
-      assert.ok((await cortex.deleteMemory("id")).error);
-      assert.ok((await cortex.getGraph()).error);
       assert.ok((await cortex.getPage("p")).error);
+      assert.ok((await cortex.memoryStats()).error);
+    });
+
+    it("no longer exposes write or graph passthroughs", () => {
+      const cortex = createCortex(brokenCortexOptions(tmpDir));
+      assert.strictEqual(cortex.storeMemory, undefined);
+      assert.strictEqual(cortex.updateMemory, undefined);
+      assert.strictEqual(cortex.deleteMemory, undefined);
+      assert.strictEqual(cortex.getGraph, undefined);
+      assert.strictEqual(cortex.memory, undefined);
     });
   });
 });

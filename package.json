@@ -48,7 +48,5 @@
     "playwright-core": "^1.60.0",
     "prettier": "^3.2.4"
   },
-  "dependencies": {
-    "@lancedb/lancedb": "^0.26.2"
-  }
+  "dependencies": {}
 }

@@ -1,13 +1,13 @@
 /**
- * Cortex facade — aggregates the LanceDB memory adapter, the gbrain
- * knowledge-graph adapter, and the compression gauges into one module with a
- * unified getState() for the dashboard state endpoint.
+ * Cortex facade — aggregates the read-only gbrain memory adapter and the
+ * compression gauges into one module with a unified getState() for the
+ * dashboard state endpoint.
  *
- * All heavy dependencies (native LanceDB module, CLIs, sqlite) load lazily
- * inside the adapters; creating a cortex performs no I/O.
+ * gbrain is the system of record for the memory browser (read-only here;
+ * writes happen via a nightly sync). All heavy dependencies (CLIs, sqlite)
+ * load lazily inside the adapters; creating a cortex performs no I/O.
  */
 
-const { createLanceMemory } = require("./cortex-lancedb");
 const { createGbrain } = require("./cortex-gbrain");
 const { createGauges } = require("./cortex-gauges");
 
@@ -40,12 +40,11 @@ function summarizeGauges(gauges) {
  * Create the cortex facade.
  *
  * @param {object} [options]
- * @param {object} [options.lancedb] - options for createLanceMemory
- * @param {object} [options.gbrain] - options for createGbrain
+ * @param {object} [options.gbrain] - options for createGbrain (the read-only
+ *   memory adapter and system of record)
  * @param {object} [options.gauges] - options for createGauges
  */
 function createCortex(options = {}) {
-  const memory = createLanceMemory(options.lancedb || {});
   const gbrain = createGbrain(options.gbrain || {});
   const gauges = createGauges(options.gauges || {});
 
@@ -77,7 +76,7 @@ function createCortex(options = {}) {
     return {
       warming: true,
       timestamp: Date.now(),
-      memory: { available: false, cli: false, lancedb: false, reason: null, stats: null },
+      memory: { available: false, reason: null, pageCount: null, lastUpdated: null },
       gbrain: { available: false, reason: null },
       gauges: [],
       gaugeSummary: summarizeGauges([]),
@@ -118,23 +117,25 @@ function createCortex(options = {}) {
   async function collectState() {
     const state = {
       timestamp: Date.now(),
-      memory: { available: false, cli: false, lancedb: false, reason: null, stats: null },
+      memory: { available: false, reason: null, pageCount: null, lastUpdated: null },
       gbrain: { available: false, reason: null },
       gauges: [],
       gaugeSummary: summarizeGauges([]),
       contextEngine: { engine: null, source: null, reason: null },
     };
 
+    // Memory browser is gbrain-backed (read-only). Availability comes from the
+    // same probe as the gbrain section; pageCount/lastUpdated come from stats.
+    let gbrainAvailability = null;
     try {
-      const memoryAvailability = await memory.available();
-      state.memory.available = !!memoryAvailability.available;
-      state.memory.cli = !!memoryAvailability.cli;
-      state.memory.lancedb = !!memoryAvailability.lancedb;
-      state.memory.reason = memoryAvailability.reason || null;
-      if (memoryAvailability.available) {
-        const memoryStats = await memory.stats();
+      gbrainAvailability = await gbrain.available();
+      state.memory.available = !!gbrainAvailability.available;
+      state.memory.reason = gbrainAvailability.reason || null;
+      if (gbrainAvailability.available) {
+        const memoryStats = await gbrain.stats();
         if (memoryStats && !memoryStats.error) {
-          state.memory.stats = memoryStats;
+          state.memory.pageCount = memoryStats.pageCount ?? null;
+          state.memory.lastUpdated = memoryStats.lastUpdated ?? null;
         } else if (memoryStats?.error) {
           state.memory.reason = state.memory.reason
             ? `${state.memory.reason}; stats: ${memoryStats.error}`
@@ -146,9 +147,9 @@ function createCortex(options = {}) {
     }
 
     try {
-      const gbrainAvailability = await gbrain.available();
-      state.gbrain.available = !!gbrainAvailability.available;
-      state.gbrain.reason = gbrainAvailability.reason || null;
+      const availability = gbrainAvailability ?? (await gbrain.available());
+      state.gbrain.available = !!availability.available;
+      state.gbrain.reason = availability.reason || null;
     } catch (e) {
       state.gbrain.reason = e.message;
     }
@@ -171,22 +172,16 @@ function createCortex(options = {}) {
 
   return {
     // Sub-adapters (for callers that need full access)
-    memory,
     gbrain,
     gauges,
     // Unified state
     getState,
     warmup,
-    // Memory passthroughs
-    searchMemory: (query, opts) => memory.search(query, opts),
-    listMemory: (opts) => memory.list(opts),
-    getMemory: (id) => memory.get(id),
-    storeMemory: (text, opts) => memory.store(text, opts),
-    updateMemory: (id, changes) => memory.update(id, changes),
-    deleteMemory: (id) => memory.remove(id),
-    memoryStats: () => memory.stats(),
-    // Graph passthroughs
-    getGraph: (opts) => gbrain.getGraph(opts),
+    // Memory passthroughs (read-only, gbrain-backed)
+    searchMemory: (query, opts) => gbrain.search(query, opts),
+    listMemory: (opts) => gbrain.list(opts),
+    getMemory: (id) => gbrain.get(id),
+    memoryStats: () => gbrain.stats(),
     getPage: (id) => gbrain.getPage(id),
     // Gauges passthrough
     getGauges: () => gauges.getGauges(),

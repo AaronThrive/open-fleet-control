@@ -1,5 +1,10 @@
 /**
- * Cortex gbrain adapter — read-only access to the gbrain knowledge graph CLI.
+ * Cortex gbrain adapter — READ-ONLY access to the gbrain knowledge store CLI.
+ *
+ * gbrain is the system of record for the Cortex memory browser; writes happen
+ * out-of-band via a nightly sync, so this adapter NEVER mutates gbrain. It
+ * exposes the memory-browser surface (list / search / get / stats) over the
+ * gbrain page set.
  *
  * IMPORTANT: never opens the PGLite database directly (single-writer lock).
  * All access shells out to the gbrain CLI with execFile semantics (args
@@ -12,7 +17,6 @@ const os = require("os");
 const path = require("path");
 
 const CLI_TIMEOUT_MS = 15000;
-const DEFAULT_GRAPH_LIMIT = 200;
 
 /**
  * Default exec function: execFile semantics (args array, never a shell).
@@ -94,39 +98,6 @@ function parseTsvPages(text) {
 }
 
 /**
- * Parse `gbrain extract links --dry-run --json` output. The real CLI emits
- * NDJSON candidate lines ({"action":"add_link","from":...,"to":...,"type":...})
- * followed by a pretty-printed summary object — not a single JSON array.
- * Also accepts a plain JSON array or { links: [...] } envelope for
- * forward-compatibility. Returns an array of link records, or null when the
- * output is unusable.
- */
-function parseExtractLinks(text) {
-  if (!text || typeof text !== "string") return null;
-  const links = [];
-  for (const line of text.split("\n")) {
-    const candidate = line.trim();
-    if (!candidate.startsWith("{")) continue;
-    try {
-      const obj = JSON.parse(candidate);
-      if (obj && obj.action === "add_link") links.push(obj);
-    } catch (e) {
-      // Not a complete single-line JSON object (e.g. part of the
-      // pretty-printed summary) — skip.
-    }
-  }
-  if (links.length > 0) return links;
-
-  const payload = parseJsonOutput(text);
-  if (Array.isArray(payload)) return payload;
-  if (payload && Array.isArray(payload.links)) return payload.links;
-  // A bare summary object ({ links_created: 0, ... }) means the extract ran
-  // and found zero candidates — a valid empty edge list.
-  if (payload && typeof payload === "object") return [];
-  return null;
-}
-
-/**
  * Parse `gbrain stats` text output ("Pages:     383\nLinks:     0\n…") into
  * counts. gbrain 0.12.x has no JSON mode for stats; the labelled-number lines
  * are the stable contract. Returns null when no Pages line is present (e.g.
@@ -149,8 +120,8 @@ function parseStatsText(text) {
   };
 }
 
-/** Normalize a gbrain page record into a graph node. */
-function toGraphNode(page) {
+/** Normalize a gbrain page record into a memory-browser list item. */
+function toMemoryItem(page) {
   if (!page || typeof page !== "object") return null;
   const id = page.slug ?? page.id ?? null;
   if (!id) return null;
@@ -158,20 +129,22 @@ function toGraphNode(page) {
     id,
     title: page.title ?? page.name ?? id,
     type: page.type ?? page.page_type ?? "page",
+    updatedAt: page.updated_at ?? page.updatedAt ?? null,
   };
 }
 
-/** Normalize a gbrain link record into a graph edge. */
-function toGraphEdge(link) {
-  if (!link || typeof link !== "object") return null;
-  const from = link.from ?? link.source ?? link.from_slug ?? null;
-  const to = link.to ?? link.target ?? link.to_slug ?? null;
-  if (!from || !to) return null;
-  return {
-    from,
-    to,
-    kind: link.kind ?? link.type ?? link.link_type ?? "link",
-  };
+/**
+ * The newest updated_at across a page list. gbrain `list` is sorted
+ * most-recently-updated first, so the first row carrying a date is the
+ * freshest — but we scan to tolerate rows with missing dates up front.
+ */
+function newestUpdatedAt(pages) {
+  if (!Array.isArray(pages)) return null;
+  for (const page of pages) {
+    const value = page && (page.updated_at ?? page.updatedAt);
+    if (value) return value;
+  }
+  return null;
 }
 
 /**
@@ -227,13 +200,12 @@ function createGbrain(options = {}) {
   }
 
   /**
-   * Build graph data { nodes, edges } from the CLI.
-   * Nodes come from `gbrain list --json`; edges are best-effort via
-   * `gbrain extract links --source db --dry-run --json` (failure to extract
-   * links degrades to an empty edge list with a note).
+   * Fetch ALL gbrain pages as normalized records. The memory browser shows
+   * the whole brain, so we do NOT cap the `list` output — gbrain `list`
+   * returns every page. Returns { pages } on success or { error }.
    */
-  async function getGraph({ limit = DEFAULT_GRAPH_LIMIT } = {}) {
-    const listRes = await runCli(["list", "--limit", String(limit), "--json"]);
+  async function listPages() {
+    const listRes = await runCli(["list", "--json"]);
     if (listRes.error) {
       return { error: `gbrain list failed: ${listRes.error.message || listRes.error}` };
     }
@@ -244,44 +216,69 @@ function createGbrain(options = {}) {
     if (!Array.isArray(pages)) {
       return { error: "gbrain list returned no usable JSON or TSV" };
     }
-    const nodes = pages.map(toGraphNode).filter(Boolean);
+    return { pages };
+  }
 
-    let edges = [];
-    let note = null;
-    const linksRes = await runCli(["extract", "links", "--source", "db", "--dry-run", "--json"]);
-    if (linksRes.error) {
-      note = `link extraction unavailable: ${linksRes.error.message || linksRes.error}`;
-    } else {
-      const links = parseExtractLinks(linksRes.stdout) ?? parseExtractLinks(linksRes.stderr);
-      if (links) {
-        edges = links.map(toGraphEdge).filter(Boolean);
-      } else {
-        note = "link extraction returned no usable JSON";
-      }
+  /**
+   * List gbrain pages for the memory browser. Returns the FULL page set
+   * shaped as { items: [{ id, title, type, updatedAt }], total }. `query`
+   * filters by case-insensitive substring on title/slug; limit/offset paginate
+   * the already-filtered set (total is the filtered count).
+   */
+  async function list({ limit, offset = 0, query } = {}) {
+    const loaded = await listPages();
+    if (loaded.error) return { error: loaded.error };
+
+    let items = loaded.pages.map(toMemoryItem).filter(Boolean);
+
+    if (typeof query === "string" && query.trim() !== "") {
+      const needle = query.trim().toLowerCase();
+      items = items.filter(
+        (item) =>
+          String(item.title).toLowerCase().includes(needle) ||
+          String(item.id).toLowerCase().includes(needle),
+      );
     }
 
-    // Provenance: where the nodes come from. `list` caps its output (100 in
-    // gbrain 0.12.x), so the TRUE page count comes from `gbrain stats`;
-    // dbLinks is the committed link count in the db (0 until the user runs
-    // `gbrain extract links`). lastUpdated rides on the newest list row
-    // (list output is sorted most-recently-updated first).
-    const provenance = {
-      totalPages: nodes.length,
-      dbLinks: null,
-      lastUpdated: pages.find((p) => p && p.updated_at)?.updated_at ?? null,
-    };
+    const total = items.length;
+    const start = Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0;
+    const sliced =
+      Number.isFinite(limit) && limit >= 0 ? items.slice(start, start + Math.floor(limit)) : items.slice(start);
+    return { items: sliced, total };
+  }
+
+  /** Search gbrain pages by query — a thin filter over list(). */
+  async function search(query, opts = {}) {
+    if (typeof query !== "string" || query.trim() === "") {
+      return { error: "search query must be a non-empty string" };
+    }
+    return list({ ...opts, query });
+  }
+
+  /** Fetch a single page's content by slug/id → { id, content }. */
+  async function get(id) {
+    return getPage(id);
+  }
+
+  /**
+   * Memory statistics for the cortex state payload. Prefers `gbrain stats`
+   * (the TRUE page count); falls back to counting the page list. lastUpdated
+   * rides on the newest list row (list is sorted most-recently-updated first).
+   * Returns { pageCount, lastUpdated } or { error }.
+   */
+  async function stats() {
+    const loaded = await listPages();
+    if (loaded.error) return { error: loaded.error };
+
+    let pageCount = loaded.pages.length;
+    const lastUpdated = newestUpdatedAt(loaded.pages);
+
     const statsRes = await runCli(["stats"]);
     if (!statsRes.error) {
-      const stats = parseStatsText(statsRes.stdout) ?? parseStatsText(statsRes.stderr);
-      if (stats) {
-        if (Number.isFinite(stats.pages)) provenance.totalPages = stats.pages;
-        if (Number.isFinite(stats.links)) provenance.dbLinks = stats.links;
-      }
+      const parsed = parseStatsText(statsRes.stdout) ?? parseStatsText(statsRes.stderr);
+      if (parsed && Number.isFinite(parsed.pages)) pageCount = parsed.pages;
     }
-
-    const graph = { nodes, edges, provenance };
-    if (note) graph.note = note;
-    return graph;
+    return { pageCount, lastUpdated };
   }
 
   /** Fetch a page's content by slug/id. */
@@ -300,13 +297,13 @@ function createGbrain(options = {}) {
     return { id, content };
   }
 
-  return { available, getGraph, getPage };
+  return { available, list, search, get, stats, getPage };
 }
 
 module.exports = {
   createGbrain,
   parseJsonOutput,
   parseTsvPages,
-  parseExtractLinks,
   parseStatsText,
+  toMemoryItem,
 };
