@@ -466,15 +466,19 @@ function createAgentsRoster(options = {}) {
 
   /**
    * Flat sorted assignee suggestions for the kanban dropdown: plain agent ids
-   * (deduped across nodes) plus "agent-id@node" qualified forms.
+   * (deduped across nodes), plus "agent-id@node" qualified forms ONLY when the
+   * fleet spans more than one node. The "@node" form exists to disambiguate
+   * remote-dispatch routing in a multi-node fleet; on a single-node install it
+   * just duplicates every agent in the picker, so omit it there.
    * @returns {Promise<string[]>}
    */
   async function getAssignees() {
     const roster = await getRoster();
+    const nodeCount = new Set(roster.agents.map((a) => a.node).filter(Boolean)).size;
     const values = new Set();
     for (const agent of roster.agents) {
       values.add(agent.id);
-      values.add(`${agent.id}@${agent.node}`);
+      if (nodeCount > 1) values.add(`${agent.id}@${agent.node}`);
     }
     return [...values].sort((a, b) => a.localeCompare(b));
   }
