@@ -103,11 +103,13 @@ function createRunRegistry({ nowFn, emit, setTimerFn = setTimeout }) {
   const runs = new Map();
 
   /** Start a run entry in "running" and return its snapshot. */
-  function open({ runId, mode, agents }) {
+  function open({ runId, mode, agents, title, question }) {
     const entry = {
       runId,
       mode, // "board" | "chain"
       status: "running", // running | done | failed
+      title: typeof title === "string" ? title : null, // human label for the log
+      question: typeof question === "string" ? question : null, // board: the asked question
       agents: agents.slice(),
       results: [], // filled when the background run settles
       missing: [], // board: timed-out / refused / budget seats
@@ -489,9 +491,9 @@ function createOrchestrate(options = {}) {
    *   returned). An UNEXPECTED throw flips the run to status:"failed".
    * @returns {{runId, entry, completion}}
    */
-  function startRun({ mode, agents, runner }) {
+  function startRun({ mode, agents, runner, title, question }) {
     const runId = newRunId();
-    const entry = registry.open({ runId, mode, agents });
+    const entry = registry.open({ runId, mode, agents, title, question });
     // Fire the background work; NEVER await it here. The watcher settles later.
     const completion = Promise.resolve()
       .then(runner)
@@ -867,7 +869,13 @@ function createOrchestrate(options = {}) {
       };
     };
 
-    const { runId, entry, completion } = startRun({ mode: "board", agents, runner });
+    const { runId, entry, completion } = startRun({
+      mode: "board",
+      agents,
+      runner,
+      title,
+      question,
+    });
     return {
       runId,
       mode: "board",
@@ -1039,6 +1047,7 @@ function createOrchestrate(options = {}) {
       mode: "chain",
       agents: steps.map((s) => s.agent),
       runner,
+      title,
     });
     return {
       runId,
