@@ -37,7 +37,7 @@ function hermesSession(key, updatedAt, extra = {}) {
 const CONFIG_YAML = [
   "model:",
   "  default: gpt-5.5",
-  "  provider: openai-codex",
+  "  provider: openai",
   "providers: {}",
   "agent:",
   "  max_turns: 90",
@@ -119,7 +119,7 @@ describe("summarizeHermesSessions", () => {
 
 describe("parseHermesModel", () => {
   it("combines provider and default from the model block", () => {
-    assert.equal(parseHermesModel(CONFIG_YAML), "openai-codex/gpt-5.5");
+    assert.equal(parseHermesModel(CONFIG_YAML), "openai/gpt-5.5");
   });
 
   it("returns the bare model when no provider is set", () => {
@@ -162,7 +162,7 @@ describe("createHermesAgents", () => {
     assert.deepEqual(agents[0], {
       id: "main",
       name: "Hermes",
-      model: "openai-codex/gpt-5.5",
+      model: "openai/gpt-5.5",
       workspace: path.join(root, "workspace"),
       subagentsMax: null,
       sessionCount: 2,

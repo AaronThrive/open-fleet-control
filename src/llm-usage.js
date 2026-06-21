@@ -47,7 +47,13 @@ function refreshLlmUsageAsync() {
 // Transform live usage data from OpenClaw CLI
 function transformLiveUsageData(usage) {
   const anthropic = usage.providers?.find((p) => p.provider === "anthropic");
-  const codexProvider = usage.providers?.find((p) => p.provider === "openai-codex");
+  // Codex-via-OAuth usage provider. Pre-migration OpenClaw reported this as
+  // "openai-codex"; after the openai-codex -> openai provider rename it reports
+  // as "openai" (still the Codex OAuth runtime). Match both so the Codex usage
+  // panel populates regardless of which OpenClaw build OFC is talking to.
+  const codexProvider = usage.providers?.find(
+    (p) => p.provider === "openai-codex" || p.provider === "openai",
+  );
 
   // Check for auth errors
   if (anthropic?.error) {
@@ -78,7 +84,11 @@ function transformLiveUsageData(usage) {
   const weekAll = anthropic?.windows?.find((w) => w.label === "Week");
   const sonnetWeek = anthropic?.windows?.find((w) => w.label === "Sonnet");
   const codex5h = codexProvider?.windows?.find((w) => w.label === "5h");
-  const codexDay = codexProvider?.windows?.find((w) => w.label === "Day");
+  // Post-migration OpenClaw labels the longer Codex window "Week"; older builds
+  // used "Day". Accept either so the longer-window gauge keeps populating.
+  const codexDay = codexProvider?.windows?.find(
+    (w) => w.label === "Day" || w.label === "Week",
+  );
 
   const formatReset = (resetAt) => {
     if (!resetAt) return "?";

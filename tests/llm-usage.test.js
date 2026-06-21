@@ -46,15 +46,15 @@ describe("llm-usage module", () => {
       assert.strictEqual(result.claude.weekly.usedPct, 0);
     });
 
-    it("handles codex provider data", () => {
+    it("handles codex provider data (new 'openai' provider name, Week window)", () => {
       const usage = {
         providers: [
           { provider: "anthropic", windows: [] },
           {
-            provider: "openai-codex",
+            provider: "openai",
             windows: [
               { label: "5h", usedPercent: 30 },
-              { label: "Day", usedPercent: 15 },
+              { label: "Week", usedPercent: 15 },
             ],
           },
         ],
@@ -63,6 +63,25 @@ describe("llm-usage module", () => {
       const result = transformLiveUsageData(usage);
       assert.strictEqual(result.codex.usage5hPct, 30);
       assert.strictEqual(result.codex.usageDayPct, 15);
+    });
+
+    it("still handles the legacy 'openai-codex' provider name with a Day window", () => {
+      const usage = {
+        providers: [
+          { provider: "anthropic", windows: [] },
+          {
+            provider: "openai-codex",
+            windows: [
+              { label: "5h", usedPercent: 42 },
+              { label: "Day", usedPercent: 7 },
+            ],
+          },
+        ],
+      };
+
+      const result = transformLiveUsageData(usage);
+      assert.strictEqual(result.codex.usage5hPct, 42);
+      assert.strictEqual(result.codex.usageDayPct, 7);
     });
 
     it("handles missing providers gracefully", () => {
