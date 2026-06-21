@@ -123,9 +123,11 @@ describe("composeKickoffMessage", () => {
       isBoard: true,
     });
     // Load-bearing: posts the canonical answer to the boardroom from the bot, @Chief framing.
-    assert.match(message, /--target #ceo-boardroom/);
+    // The boardroom is named in prose; the actual --target is the resolved
+    // channel id (channel:<id>), not the #name.
+    assert.match(message, /Slack #ceo-boardroom/);
     assert.match(message, /@Chief/);
-    assert.match(message, /openclaw message send --channel slack --account chief/);
+    assert.match(message, /openclaw message send --channel slack --account chief --target channel:/);
     // Lean: the heavy fleet-control protocol steps are NOT in the board brief
     // (the watcher captures result_text + auto-moves; the Flight Recorder archives).
     assert.doesNotMatch(message, /fleet\/chat\/publish/);

@@ -15,8 +15,15 @@
 
 const os = require("os");
 const path = require("path");
+const fs = require("fs");
 
 const CLI_TIMEOUT_MS = 15000;
+
+/** Window (ms) beyond which a mirror leg (import/export) is considered stale. ~26h. */
+const MIRROR_STALE_MS = 26 * 60 * 60 * 1000;
+
+/** Cap on log bytes read from the tail — sync logs can grow unbounded. */
+const LOG_TAIL_BYTES = 256 * 1024;
 
 /**
  * Default exec function: execFile semantics (args array, never a shell).
@@ -111,13 +118,70 @@ function parseStatsText(text) {
   };
   const pages = grab("Pages");
   if (pages === null) return null;
+  const chunks = grab("Chunks");
+  const embedded = grab("Embedded");
+  // embeddedCoverage: embedded/chunks ∈ [0,1], rounded to 4dp. Null when either
+  // figure is missing or chunks is 0 (avoid divide-by-zero / meaningless ratio).
+  let embeddedCoverage = null;
+  if (Number.isFinite(chunks) && Number.isFinite(embedded) && chunks > 0) {
+    embeddedCoverage = Math.round((embedded / chunks) * 10000) / 10000;
+  }
   return {
     pages,
-    chunks: grab("Chunks"),
-    embedded: grab("Embedded"),
+    chunks,
+    embedded,
+    embeddedCoverage,
     links: grab("Links"),
     tags: grab("Tags"),
   };
+}
+
+/**
+ * Pull the most recent ISO timestamp from log lines matching `pattern`. The
+ * pattern MUST capture the ISO timestamp in group 1 and (optionally) a trailing
+ * summary in group 2. Logs are append-only and chronological, so the LAST match
+ * is the most recent. Returns { at, summary, line } or null when no line matches.
+ */
+function lastLogMatch(text, pattern) {
+  if (!text || typeof text !== "string") return null;
+  let result = null;
+  for (const line of text.split("\n")) {
+    const m = line.match(pattern);
+    if (m) {
+      result = {
+        at: m[1] || null,
+        summary: typeof m[2] === "string" ? m[2].trim() : null,
+        line: line.trim(),
+      };
+    }
+  }
+  return result;
+}
+
+/**
+ * Read the tail of a log file defensively. Missing file / permission error /
+ * any I/O failure → null (never throws). Reads at most LOG_TAIL_BYTES from the
+ * end so an unbounded sync log can't blow up memory.
+ */
+function readLogTail(filePath, readFileSyncFn) {
+  if (!filePath || typeof filePath !== "string") return null;
+  const readSync = readFileSyncFn || ((p, o) => fs.readFileSync(p, o));
+  try {
+    let buf = readSync(filePath, "utf8");
+    if (typeof buf !== "string") return null;
+    if (buf.length > LOG_TAIL_BYTES) buf = buf.slice(buf.length - LOG_TAIL_BYTES);
+    return buf;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** True when an ISO timestamp is missing OR older than MIRROR_STALE_MS from now. */
+function isStaleTimestamp(iso, nowMs) {
+  if (!iso) return true;
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return true;
+  return nowMs - ms > MIRROR_STALE_MS;
 }
 
 /** Normalize a gbrain page record into a memory-browser list item. */
@@ -170,10 +234,22 @@ function newestUpdatedAt(pages) {
  * @param {object} [options]
  * @param {string} [options.cliPath] - path to the gbrain CLI binary
  * @param {function} [options.execFn] - (cmd, args, opts) => Promise<{error, stdout, stderr}>
+ * @param {string} [options.vaultDir] - Obsidian KB vault root (default `<home>/OC Obsidian KB Vault`)
+ * @param {string} [options.syncLogPath] - vault→gbrain import log (default `<vaultDir>/_system/logs/gbrain-sync.log`)
+ * @param {string} [options.exportLogPath] - gbrain→vault export log (default `<home>/logs/gbrain-export.log`)
+ * @param {function} [options.readFileSyncFn] - (path, encoding) => string (test seam; defaults to fs.readFileSync)
+ * @param {function} [options.nowFn] - () => epoch ms (test seam; defaults to Date.now)
  */
 function createGbrain(options = {}) {
-  const cliPath = options.cliPath || path.join(os.homedir(), "gbrain", "bin", "gbrain");
+  const home = os.homedir();
+  const cliPath = options.cliPath || path.join(home, "gbrain", "bin", "gbrain");
   const execFn = options.execFn || defaultExecFn;
+  const vaultDir = options.vaultDir || path.join(home, "OC Obsidian KB Vault");
+  const syncLogPath =
+    options.syncLogPath || path.join(vaultDir, "_system", "logs", "gbrain-sync.log");
+  const exportLogPath = options.exportLogPath || path.join(home, "logs", "gbrain-export.log");
+  const readFileSyncFn = options.readFileSyncFn;
+  const nowFn = typeof options.nowFn === "function" ? options.nowFn : () => Date.now();
 
   let cachedAvailability = null;
 
@@ -286,7 +362,11 @@ function createGbrain(options = {}) {
    * Memory statistics for the cortex state payload. Prefers `gbrain stats`
    * (the TRUE page count); falls back to counting the page list. lastUpdated
    * rides on the newest list row (list is sorted most-recently-updated first).
-   * Returns { pageCount, lastUpdated } or { error }.
+   * Returns { pageCount, lastUpdated, chunks, embedded, embeddedCoverage } or
+   * { error }. The chunk/embedding fields ride along so the UI can render
+   * "1573/1573 embedded = healthy"; they are null when `gbrain stats` did not
+   * surface them (backward-compatible — existing { pageCount, lastUpdated }
+   * consumers are unaffected).
    */
   async function stats() {
     const loaded = await listPages();
@@ -294,13 +374,119 @@ function createGbrain(options = {}) {
 
     let pageCount = loaded.pages.length;
     const lastUpdated = newestUpdatedAt(loaded.pages);
+    let chunks = null;
+    let embedded = null;
+    let embeddedCoverage = null;
 
     const statsRes = await runCli(["stats"]);
     if (!statsRes.error) {
       const parsed = parseStatsText(statsRes.stdout) ?? parseStatsText(statsRes.stderr);
       if (parsed && Number.isFinite(parsed.pages)) pageCount = parsed.pages;
+      if (parsed) {
+        chunks = Number.isFinite(parsed.chunks) ? parsed.chunks : null;
+        embedded = Number.isFinite(parsed.embedded) ? parsed.embedded : null;
+        embeddedCoverage =
+          parsed.embeddedCoverage === null || Number.isFinite(parsed.embeddedCoverage)
+            ? parsed.embeddedCoverage
+            : null;
+      }
     }
-    return { pageCount, lastUpdated };
+    return { pageCount, lastUpdated, chunks, embedded, embeddedCoverage };
+  }
+
+  /**
+   * Embedding-health view over `gbrain stats`, for the health/observability
+   * panel. Returns { pageCount, chunks, embedded, embeddedCoverage, healthy }
+   * where `healthy` = embeddedCoverage >= 0.999 (every chunk embedded). Returns
+   * { error } when stats are unavailable. A thin wrapper over stats() so it
+   * stays consistent with the cortex state payload.
+   */
+  async function healthStats() {
+    const s = await stats();
+    if (s.error) return { error: s.error };
+    const healthy =
+      typeof s.embeddedCoverage === "number" ? s.embeddedCoverage >= 0.999 : null;
+    return {
+      pageCount: s.pageCount,
+      chunks: s.chunks,
+      embedded: s.embedded,
+      embeddedCoverage: s.embeddedCoverage,
+      healthy,
+    };
+  }
+
+  /**
+   * Report the Obsidian↔gbrain mirror wiring by reading the two sync logs:
+   *   - import (vault→gbrain): lines like "[<ISO>] Sync complete"
+   *   - export (gbrain→vault): lines like "[<ISO>] gbrain->vault done: <summary>"
+   * Returns { lastImportAt, lastImportOk, lastExportAt, lastExportSummary,
+   * vaultPagesApprox, stale }. `stale` is true when NEITHER leg has run within
+   * ~26h (MIRROR_STALE_MS). Fully defensive: missing logs → nulls + stale:true,
+   * never throws.
+   */
+  async function obsidianHealth() {
+    const nowMs = nowFn();
+
+    const importText = readLogTail(syncLogPath, readFileSyncFn);
+    const exportText = readLogTail(exportLogPath, readFileSyncFn);
+
+    const importMatch = lastLogMatch(importText, /\[([^\]]+)\]\s*Sync complete\b/i);
+    const exportMatch = lastLogMatch(
+      exportText,
+      /\[([^\]]+)\]\s*gbrain->vault done:\s*(.*)$/i,
+    );
+
+    const lastImportAt = importMatch ? importMatch.at : null;
+    const lastExportAt = exportMatch ? exportMatch.at : null;
+    const lastExportSummary = exportMatch ? exportMatch.summary : null;
+
+    // Approx vault page count, opportunistically parsed from the export summary
+    // (e.g. "412 pages" / "exported 412"). Best-effort only → null when absent.
+    let vaultPagesApprox = null;
+    if (lastExportSummary) {
+      const num = lastExportSummary.match(/(\d+)\s*pages?\b/i) || lastExportSummary.match(/\b(\d+)\b/);
+      if (num) vaultPagesApprox = Number(num[1]);
+    }
+
+    const importStale = isStaleTimestamp(lastImportAt, nowMs);
+    const exportStale = isStaleTimestamp(lastExportAt, nowMs);
+
+    return {
+      lastImportAt,
+      // lastImportOk: the "Sync complete" marker IS the success signal, so its
+      // presence (recent or not) means the last import finished cleanly. Null
+      // when no import line was found at all.
+      lastImportOk: lastImportAt ? true : null,
+      lastExportAt,
+      lastExportSummary,
+      vaultPagesApprox,
+      // stale only when BOTH legs are stale/absent — a single healthy leg keeps
+      // the mirror "live" for the dashboard.
+      stale: importStale && exportStale,
+    };
+  }
+
+  /**
+   * Most-recently-updated gbrain pages for an activity feed. Reuses listPages()
+   * (gbrain `list` is already sorted most-recent-first) and re-sorts by parsed
+   * updatedAt desc to tolerate rows with missing/odd dates. Returns
+   * { items: [{ id, title, type, updatedAt }] } capped at `limit`, or { error }.
+   */
+  async function recentUpdates(limit = 10) {
+    const loaded = await listPages();
+    if (loaded.error) return { error: loaded.error };
+
+    const items = loaded.pages.map(toMemoryItem).filter(Boolean);
+    items.sort((a, b) => {
+      const am = a.updatedAt ? Date.parse(a.updatedAt) : NaN;
+      const bm = b.updatedAt ? Date.parse(b.updatedAt) : NaN;
+      const av = Number.isFinite(am) ? am : -Infinity;
+      const bv = Number.isFinite(bm) ? bm : -Infinity;
+      return bv - av;
+    });
+
+    const cap = Number.isFinite(limit) && limit >= 0 ? Math.floor(limit) : 10;
+    return { items: items.slice(0, cap) };
   }
 
   /** Fetch a page's content by slug/id. */
@@ -319,7 +505,17 @@ function createGbrain(options = {}) {
     return { id, content };
   }
 
-  return { available, list, search, get, stats, getPage };
+  return {
+    available,
+    list,
+    search,
+    get,
+    stats,
+    getPage,
+    healthStats,
+    obsidianHealth,
+    recentUpdates,
+  };
 }
 
 module.exports = {
@@ -328,4 +524,7 @@ module.exports = {
   parseTsvPages,
   parseStatsText,
   toMemoryItem,
+  lastLogMatch,
+  readLogTail,
+  isStaleTimestamp,
 };

@@ -43,8 +43,6 @@ const VIEWS = [
   "settings",
   "docker",
   "agents",
-  "cerebro",
-  "operators",
 ];
 
 const BULK_COMMANDS = [

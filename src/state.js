@@ -532,20 +532,96 @@ function createStateModule(deps) {
     }
   }
 
+  // Extract a concise task description from a sub-agent's first user message.
+  //
+  // The canonical OpenClaw sub-agent prompt looks like:
+  //
+  //   [Sun 2026-03-22 19:07 UTC] [Subagent Context] You are running as a
+  //   subagent (depth 1/1). Results auto-announce to your requester; ...
+  //
+  //   [Subagent Task]: Generate an image using the nano-banana-pro skill. ...
+  //
+  // The old code grabbed the FIRST line, which is the boilerplate
+  // "[Subagent Context] You are running as a subagent ..." preamble — making
+  // every sub-agent look like generic agent chatter ("shows main"). Here we
+  // (1) prefer the explicit "[Subagent Task]:" marker, then (2) fall back to
+  // the first meaningful line *after* stripping timestamp / context boilerplate.
+  // Returns a trimmed string, or null when nothing usable is found.
+  function extractSubagentTask(raw) {
+    if (typeof raw !== "string") return null;
+    const text = raw.trim();
+    if (!text) return null;
+
+    const clamp = (str) => {
+      const oneLine = str.replace(/\s+/g, " ").trim();
+      if (!oneLine) return null;
+      return oneLine.length > 140 ? `${oneLine.slice(0, 137)}...` : oneLine;
+    };
+
+    // Pattern 1 (canonical): "[Subagent Task]: <task>"
+    const taskMarker = text.match(/\[Subagent Task\]:?\s*([\s\S]+?)(?:\n\n|$)/i);
+    if (taskMarker && taskMarker[1].trim()) {
+      return clamp(taskMarker[1]);
+    }
+
+    // Pattern 2: legacy "You were created to handle: **TASK**"
+    const createdFor = text.match(/You were created to handle:\s*\*\*([^*]+)\*\*/i);
+    if (createdFor && createdFor[1].trim()) {
+      return clamp(createdFor[1]);
+    }
+
+    // Pattern 3: Linear-style issue marker "**JON-123: Description**"
+    const issue = text.match(/\*\*([A-Z]{2,5}-\d+:\s*[^*]+)\*\*/);
+    if (issue && issue[1].trim()) {
+      return clamp(issue[1]);
+    }
+
+    // Pattern 4: first meaningful line, after stripping known boilerplate:
+    //   - leading "[<timestamp>]" / "[Subagent Context]" bracket tags
+    //   - "You are running as a subagent ..." preamble
+    for (const line of text.split("\n")) {
+      let candidate = line.trim();
+      // Strip every leading "[...]" tag (timestamp, Subagent Context, etc.).
+      // A "/g" anchored replace does NOT repeat past the first match, so loop.
+      let prev;
+      do {
+        prev = candidate;
+        candidate = candidate.replace(/^\[[^\]]*\]\s*/, "").trim();
+      } while (candidate !== prev);
+      candidate = candidate.replace(/^\*\*|\*\*$/g, "").trim();
+      if (!candidate) continue;
+      if (/^you are running as a subagent/i.test(candidate)) continue;
+      if (/^results auto-announce/i.test(candidate)) continue;
+      if (/^subagent context/i.test(candidate)) continue;
+      if (candidate.length < 8) continue;
+      return clamp(candidate);
+    }
+
+    return null;
+  }
+
   // Get detailed sub-agent status (served from the sessions cache —
   // classification uses the kind-derived sessionType, not key matching)
   function getSubagentStatus() {
     const subagents = [];
     try {
       const cached = getSessions({ limit: null }) || [];
+      // Only real sub-agent sessions: sessionType is derived from the
+      // store/CLI `kind` field (spawn-child) — never the "main" session.
+      // Defend against the rare case where a key still leaks through by
+      // explicitly excluding anything classified as main.
       const subagentSessions = cached
-        .filter((s) => s.sessionType === "subagent")
+        .filter((s) => s && s.sessionType === "subagent")
+        .filter((s) => s.sessionType !== "main")
         .map((s) => ({
-          key: s.sessionKey,
+          key: s.sessionKey || "",
           sessionId: s.sessionId,
           ageMs: (s.minutesAgo ?? Infinity) * 60000,
           totalTokens: s.tokens || 0,
           model: s.model,
+          // The session store already carries a human label for spawned
+          // sub-agents (e.g. "image-gen"); prefer it over transcript parsing.
+          sessionLabel: s.label || s.displayName || null,
         }));
       {
         for (const s of subagentSessions) {
@@ -553,66 +629,60 @@ function createStateModule(deps) {
           const isActive = ageMs < 5 * 60 * 1000; // Active if < 5 min
           const isRecent = ageMs < 30 * 60 * 1000; // Recent if < 30 min
 
-          // Extract subagent ID from key
-          const match = s.key.match(/:subagent:([a-f0-9-]+)$/);
-          const subagentId = match ? match[1] : s.sessionId;
-          const shortId = subagentId.slice(0, 8);
+          // Extract subagent ID from key (keys end with the spawn UUID:
+          // "agent:main:subagent:<uuid>"). Fall back to the sessionId.
+          const match = s.key.match(/:subagent:([0-9a-fA-F-]+)$/);
+          const subagentId = match ? match[1] : s.sessionId || "unknown";
+          const shortId = String(subagentId).slice(0, 8);
 
-          // Try to get task info from transcript
-          let taskSummary = "Unknown task";
-          let label = null;
-          const transcript = readTranscript(s.sessionId);
+          // Try to get task info from transcript. Be defensive: readTranscript
+          // can return [] for missing/partial/unreadable files.
+          let taskSummary = null;
+          let label = s.sessionLabel; // prefer the store-provided label
+          const transcript = Array.isArray(readTranscript(s.sessionId))
+            ? readTranscript(s.sessionId)
+            : [];
 
-          // Look for task description in first 15 messages (subagent context can be deep)
-          for (const entry of transcript.slice(0, 15)) {
-            if (entry.type === "message" && entry.message?.role === "user") {
+          // The first transcript entries are non-message events (session,
+          // model_change, thinking_level_change, custom). Scan the first
+          // several *user* messages rather than slicing raw entries, so the
+          // task prompt is found even behind a deep preamble.
+          const userTexts = [];
+          for (const entry of transcript) {
+            if (entry?.type === "message" && entry.message?.role === "user") {
               const content = entry.message.content;
               let text = "";
               if (typeof content === "string") {
                 text = content;
               } else if (Array.isArray(content)) {
-                const textPart = content.find((c) => c.type === "text");
+                const textPart = content.find((c) => c?.type === "text");
                 if (textPart) text = textPart.text || "";
               }
-
-              if (!text) continue;
-
-              // Extract label from subagent context
-              const labelMatch = text.match(/Label:\s*([^\n]+)/i);
-              if (labelMatch) {
-                label = labelMatch[1].trim();
-              }
-
-              // Extract task summary - try multiple patterns
-              // Pattern 1: "You were created to handle: **TASK**"
-              let taskMatch = text.match(/You were created to handle:\s*\*\*([^*]+)\*\*/i);
-              if (taskMatch) {
-                taskSummary = taskMatch[1].trim();
-                break;
-              }
-
-              // Pattern 2: Linear issue format "**JON-XXX: Description**"
-              taskMatch = text.match(/\*\*([A-Z]{2,5}-\d+:\s*[^*]+)\*\*/);
-              if (taskMatch) {
-                taskSummary = taskMatch[1].trim();
-                break;
-              }
-
-              // Pattern 3: First meaningful line of user message
-              const firstLine = text
-                .split("\n")[0]
-                .replace(/^\*\*|\*\*$/g, "")
-                .trim();
-              if (firstLine.length > 10 && firstLine.length < 100) {
-                taskSummary = firstLine;
-                break;
-              }
+              if (text && text.trim()) userTexts.push(text);
+              if (userTexts.length >= 5) break; // bounded scan
             }
           }
 
-          // Count messages
+          for (const text of userTexts) {
+            // Explicit label marker overrides the store label only if present.
+            const labelMatch = text.match(/Label:\s*([^\n]+)/i);
+            if (labelMatch) label = labelMatch[1].trim();
+
+            const extracted = extractSubagentTask(text);
+            if (extracted) {
+              taskSummary = extracted;
+              break;
+            }
+          }
+
+          if (!taskSummary) {
+            // No usable prompt text — fall back to a sensible, non-"main" label.
+            taskSummary = label || `Sub-agent ${shortId}`;
+          }
+
+          // Count messages defensively.
           const messageCount = transcript.filter(
-            (e) => e.type === "message" && e.message?.role,
+            (e) => e?.type === "message" && e.message?.role,
           ).length;
 
           subagents.push({
@@ -620,7 +690,7 @@ function createStateModule(deps) {
             shortId,
             sessionId: s.sessionId,
             label: label || shortId,
-            task: taskSummary,
+            task: taskSummary || `Sub-agent ${shortId}`,
             model: s.model?.replace("anthropic/", "") || "unknown",
             status: isActive ? "active" : isRecent ? "idle" : "stale",
             ageMs,

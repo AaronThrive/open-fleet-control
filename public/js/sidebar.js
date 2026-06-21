@@ -9,14 +9,8 @@
 (function () {
   "use strict";
 
-  // State for sidebar badges
+  // Sidebar tracks only the live timestamp — nav badges are removed by design.
   const sidebarState = {
-    sessions: 0,
-    cron: 0,
-    jobs: 0,
-    memory: 0,
-    cerebro: 0,
-    operators: 0,
     lastUpdated: null,
   };
 
@@ -190,71 +184,11 @@
   }
 
   /**
-   * Handle state updates and update badges
+   * Handle state updates — refresh only the live timestamp (no nav badges).
    */
-  function handleStateUpdate(data) {
-    // Update session count
-    if (data.sessions) {
-      sidebarState.sessions = data.sessions.length || 0;
-    }
-    if (data.statusCounts) {
-      sidebarState.sessions = data.statusCounts.all || 0;
-    }
-
-    // Update cron count
-    if (data.cron) {
-      sidebarState.cron = Array.isArray(data.cron) ? data.cron.length : 0;
-    }
-
-    // Update jobs count (from jobs API if available)
-    if (data.jobs) {
-      sidebarState.jobs = Array.isArray(data.jobs) ? data.jobs.length : data.jobs.total || 0;
-    }
-
-    // Update memory count
-    if (data.memory) {
-      sidebarState.memory = data.memory.fileCount || data.memory.totalFiles || 0;
-    }
-
-    // Update cerebro count
-    if (data.cerebro) {
-      sidebarState.cerebro =
-        data.cerebro.topics?.total || data.cerebro.topicCount || data.cerebro.totalTopics || 0;
-    }
-
-    // Update operators count
-    if (data.operators) {
-      sidebarState.operators = Array.isArray(data.operators.operators)
-        ? data.operators.operators.length
-        : 0;
-    }
-
+  function handleStateUpdate() {
     sidebarState.lastUpdated = new Date();
-
-    // Update the DOM
-    updateBadges();
     updateTimestamp();
-  }
-
-  /**
-   * Update badge elements
-   */
-  function updateBadges() {
-    const updates = {
-      "nav-session-count": sidebarState.sessions,
-      "nav-cron-count": sidebarState.cron,
-      "nav-jobs-count": sidebarState.jobs || "-",
-      "nav-memory-count": sidebarState.memory,
-      "nav-cerebro-count": sidebarState.cerebro,
-      "nav-operator-count": sidebarState.operators,
-    };
-
-    for (const [id, value] of Object.entries(updates)) {
-      const el = document.getElementById(id);
-      if (el && el.textContent !== String(value)) {
-        el.textContent = value;
-      }
-    }
   }
 
   /**
@@ -321,8 +255,6 @@
         return;
       }
       setJobsNavVisible(true);
-      sidebarState.jobs = data.jobs?.length || 0;
-      updateBadges();
     } catch (error) {
       // Jobs API may not be reachable — leave the nav as-is
     }

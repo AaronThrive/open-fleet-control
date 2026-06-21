@@ -10,6 +10,56 @@ const TOKEN_RATES = {
   cacheWrite: 18.75, // $18.75/1M (25% premium on input)
 };
 
+// Billing-mode constants. "subscription" providers are paid via a flat
+// monthly OAuth/subscription plan (Codex OAuth, Claude Code Max, …) and have
+// NO per-token marginal cost — their dollar figures are purely hypothetical
+// ("if billed per-token"). "per-token" providers (OpenRouter, raw API keys)
+// incur real marginal spend per request.
+const BILLING_SUBSCRIPTION = "subscription";
+const BILLING_PER_TOKEN = "per-token";
+const DEFAULT_BILLING_MODE = BILLING_PER_TOKEN;
+
+// Map a raw model id (e.g. "gpt-5.3-codex", "claude-opus-4", "anthropic/…")
+// to a coarse provider key matching the keys used in
+// config.billing.providerBillingModes. Heuristic + backward-compatible:
+// unknown shapes fall through to the literal model id so an explicit
+// per-model entry in the config map can still match.
+function modelToProvider(model) {
+  const id = String(model || "").toLowerCase();
+  if (!id || id === "unknown") return "unknown";
+  // OpenRouter-style "vendor/model" slugs → the vendor segment is the route,
+  // but the marginal cost is OpenRouter's, so bill under "openrouter".
+  if (id.includes("/")) return "openrouter";
+  if (id.includes("codex")) return "codex";
+  if (id.startsWith("claude") || id.includes("anthropic")) return "claude-code";
+  if (id.startsWith("gpt") || id.startsWith("o1") || id.startsWith("o3") || id.includes("openai"))
+    return "codex";
+  if (id.startsWith("gemini") || id.includes("google")) return "gemini";
+  return id;
+}
+
+// Resolve the billing mode for a provider/model from an optional
+// providerBillingModes map. Unknown providers default to "per-token" so the
+// honest worst-case (real marginal $) is assumed unless config says otherwise.
+function resolveBillingMode(provider, providerBillingModes) {
+  const map =
+    providerBillingModes && typeof providerBillingModes === "object" ? providerBillingModes : {};
+  const mode = map[provider];
+  return mode === BILLING_SUBSCRIPTION || mode === BILLING_PER_TOKEN ? mode : DEFAULT_BILLING_MODE;
+}
+
+// Read the providerBillingModes map off a config object (never throws,
+// tolerates absent config.billing).
+function getProviderBillingModes(config) {
+  const modes = config && config.billing && config.billing.providerBillingModes;
+  return modes && typeof modes === "object" && !Array.isArray(modes) ? modes : {};
+}
+
+// True when this model id is billed via a flat subscription (zero marginal $).
+function isSubscriptionModel(model, providerBillingModes) {
+  return resolveBillingMode(modelToProvider(model), providerBillingModes) === BILLING_SUBSCRIPTION;
+}
+
 // Token usage cache with async background refresh
 let tokenUsageCache = { data: null, timestamp: 0, refreshing: false };
 const TOKEN_USAGE_CACHE_TTL = 30000; // 30 seconds
@@ -206,31 +256,91 @@ function getDailyTokenUsage(getOpenClawDir) {
   return tokenUsageCache.data || emptyResult;
 }
 
-// Calculate cost for a usage bucket
-function calculateCostForBucket(bucket, rates = TOKEN_RATES) {
+// Calculate cost for a usage bucket.
+//
+// `billingMode` (optional, default "per-token") controls how `totalCost` is
+// reported. For a subscription bucket the per-token line items
+// (input/output/cache*) and `hypotheticalTotal` are still computed and
+// returned — so a UI can show "if billed per-token" — but `totalCost`
+// (the REAL marginal spend) is forced to 0. Existing callers that omit the
+// param get the unchanged per-token behavior, where totalCost ===
+// hypotheticalTotal.
+function calculateCostForBucket(bucket, rates = TOKEN_RATES, billingMode = DEFAULT_BILLING_MODE) {
   const inputCost = (bucket.input / 1_000_000) * rates.input;
   const outputCost = (bucket.output / 1_000_000) * rates.output;
   const cacheReadCost = (bucket.cacheRead / 1_000_000) * rates.cacheRead;
   const cacheWriteCost = (bucket.cacheWrite / 1_000_000) * rates.cacheWrite;
+  const hypotheticalTotal = inputCost + outputCost + cacheReadCost + cacheWriteCost;
+  const subscription = billingMode === BILLING_SUBSCRIPTION;
   return {
     inputCost,
     outputCost,
     cacheReadCost,
     cacheWriteCost,
-    totalCost: inputCost + outputCost + cacheReadCost + cacheWriteCost,
+    billingMode: subscription ? BILLING_SUBSCRIPTION : BILLING_PER_TOKEN,
+    // "if billed per-token" projection (always the raw token math)
+    hypotheticalTotal,
+    // REAL marginal spend: 0 under a flat subscription
+    marginalTotal: subscription ? 0 : hypotheticalTotal,
+    // Backward-compatible: real spend (0 for subscription, per-token otherwise)
+    totalCost: subscription ? 0 : hypotheticalTotal,
+  };
+}
+
+// Aggregate a per-window per-model map into subscription-aware totals, so a
+// window's marginal spend counts ONLY per-token models while the per-token
+// projection counts everything. Returns:
+//   { marginalTotal, hypotheticalTotal, subscriptionTotal }
+// where subscriptionTotal is the per-token value of subscription-billed models
+// (i.e. the money NOT spent because of the flat plan).
+function aggregateModelCosts(byModel = {}, rates = TOKEN_RATES, providerBillingModes = {}) {
+  let marginalTotal = 0;
+  let hypotheticalTotal = 0;
+  let subscriptionTotal = 0;
+  for (const row of summarizeModelUsage(byModel, rates, providerBillingModes)) {
+    hypotheticalTotal += row.hypotheticalCost;
+    marginalTotal += row.marginalCost;
+    if (row.subscription) subscriptionTotal += row.hypotheticalCost;
+  }
+  return {
+    marginalTotal: Math.round(marginalTotal * 1e6) / 1e6,
+    hypotheticalTotal: Math.round(hypotheticalTotal * 1e6) / 1e6,
+    subscriptionTotal: Math.round(subscriptionTotal * 1e6) / 1e6,
   };
 }
 
 // Summarize a per-model usage map into a sorted array with honest costs.
-// `reportedCost` is the provider-reported spend (preferred when present);
-// `estCost` is estimated from the default rates as a fallback.
-function summarizeModelUsage(byModel = {}, rates = TOKEN_RATES) {
+//
+// Billing-aware semantics (never conflate the three):
+//   - `hypotheticalCost`  — always the per-token estimate at `rates` (or the
+//                            provider-reported figure when present). For
+//                            subscription models this is the "if billed
+//                            per-token" projection, NOT money spent.
+//   - `marginalCost`      — REAL incremental spend. 0 for subscription models
+//                            (flat plan), equal to `hypotheticalCost` for
+//                            per-token models.
+//   - `cost`              — backward-compatible field: the displayable figure.
+//                            Kept as the per-token/reported value so existing
+//                            callers don't change, but `billingMode` +
+//                            `marginalCost` let honest UIs override it.
+//
+// `providerBillingModes` is the optional config map; absent → everything
+// defaults to per-token (the honest worst case).
+function summarizeModelUsage(byModel = {}, rates = TOKEN_RATES, providerBillingModes = {}) {
   return Object.entries(byModel)
     .map(([model, bucket]) => {
       const estCost = calculateCostForBucket(bucket, rates).totalCost;
       const reportedCost = bucket.cost || 0;
+      const hypotheticalCost = reportedCost > 0 ? reportedCost : estCost;
+      const provider = modelToProvider(model);
+      const billingMode = resolveBillingMode(provider, providerBillingModes);
+      const subscription = billingMode === BILLING_SUBSCRIPTION;
+      const marginalCost = subscription ? 0 : hypotheticalCost;
       return {
         model,
+        provider,
+        billingMode,
+        subscription,
         input: bucket.input,
         output: bucket.output,
         cacheRead: bucket.cacheRead,
@@ -238,20 +348,35 @@ function summarizeModelUsage(byModel = {}, rates = TOKEN_RATES) {
         requests: bucket.requests,
         reportedCost,
         estCost,
-        cost: reportedCost > 0 ? reportedCost : estCost,
+        // Explicit, never-conflated figures:
+        marginalCost, // real $ — 0 for subscription
+        hypotheticalCost, // "if billed per-token" projection
+        // Backward-compatible display field (unchanged meaning):
+        cost: hypotheticalCost,
       };
     })
-    .sort((a, b) => b.cost - a.cost);
+    .sort((a, b) => b.hypotheticalCost - a.hypotheticalCost);
 }
 
-// Get detailed cost breakdown for the modal
+// Get detailed cost breakdown for the modal.
+//
+// Honesty contract — the returned object NEVER conflates these:
+//   - marginal* fields  → REAL incremental dollars (per-token providers only;
+//                          subscription providers contribute $0).
+//   - hypothetical* fields → "if EVERYTHING were billed per-token" projection
+//                          at TOKEN_RATES. This is the old (misleading)
+//                          "monthlyProjected" number, now explicitly labeled.
+//   - planCost / planName → the flat monthly subscription fee, a SEPARATE line.
+// Token counts are always real regardless of billing mode.
 function getCostBreakdown(config, getSessions, getOpenClawDir) {
   const usage = getDailyTokenUsage(getOpenClawDir);
   if (!usage) {
     return { error: "Failed to get usage data" };
   }
 
-  // Calculate costs for 24h (primary display)
+  const providerBillingModes = getProviderBillingModes(config);
+
+  // Per-token line-item breakdown for 24h (the hypothetical math).
   const costs = calculateCostForBucket(usage);
 
   // Get plan info from config
@@ -268,20 +393,64 @@ function getCostBreakdown(config, getSessions, getOpenClawDir) {
   const windows = {};
   for (const [key, windowConfig] of Object.entries(windowConfigs)) {
     const bucket = usage.windows?.[key] || usage;
-    const bucketCosts = calculateCostForBucket(bucket);
-    const dailyAvg = bucketCosts.totalCost / windowConfig.days;
-    const monthlyProjected = dailyAvg * 30;
-    const monthlySavings = monthlyProjected - planCost;
+    const byModel = summarizeModelUsage(bucket.byModel, TOKEN_RATES, providerBillingModes);
+    // Split totals by billing mode using the per-model provider map. When no
+    // per-model data exists, fall back to the aggregate per-token math (the
+    // honest worst case: treat it as per-token / hypothetical).
+    const split = bucket.byModel
+      ? aggregateModelCosts(bucket.byModel, TOKEN_RATES, providerBillingModes)
+      : (() => {
+          const c = calculateCostForBucket(bucket);
+          return { marginalTotal: c.totalCost, hypotheticalTotal: c.totalCost, subscriptionTotal: 0 };
+        })();
+
+    const marginalDailyAvg = split.marginalTotal / windowConfig.days;
+    const hypotheticalDailyAvg = split.hypotheticalTotal / windowConfig.days;
+
+    // REAL marginal monthly spend (per-token providers only).
+    const marginalMonthly = marginalDailyAvg * 30;
+    // HYPOTHETICAL monthly if every provider were billed per-token.
+    const hypotheticalMonthly = hypotheticalDailyAvg * 30;
+
+    // Savings = what a fully-per-token bill WOULD have been, minus what we
+    // actually pay (flat plan + any real marginal spend).
+    const actualMonthlySpend = planCost + marginalMonthly;
+    const monthlySavings = hypotheticalMonthly - actualMonthlySpend;
 
     windows[key] = {
       label: windowConfig.label,
       days: windowConfig.days,
-      totalCost: bucketCosts.totalCost,
-      dailyAvg,
-      monthlyProjected,
+
+      // REAL marginal spend (≈0 when everything is subscription-billed)
+      marginalCost: split.marginalTotal,
+      marginalDailyAvg,
+      marginalMonthly,
+
+      // HYPOTHETICAL "if billed per-token" projection (clearly labeled)
+      hypotheticalCost: split.hypotheticalTotal,
+      hypotheticalDailyAvg,
+      hypotheticalMonthly,
+      // Portion of the hypothetical attributable to subscription models
+      // (i.e. the dollars NOT spent because of the flat plan).
+      subscriptionCoveredCost: split.subscriptionTotal,
+
+      // Flat plan + real marginal = what is actually paid this month
+      planCost,
+      actualMonthlySpend,
       monthlySavings,
       savingsPercent:
-        monthlySavings > 0 ? Math.round((monthlySavings / monthlyProjected) * 100) : 0,
+        monthlySavings > 0 && hypotheticalMonthly > 0
+          ? Math.round((monthlySavings / hypotheticalMonthly) * 100)
+          : 0,
+
+      // ---- Backward-compatible aliases (deprecated; do NOT treat as real $)
+      // `totalCost`/`monthlyProjected` historically meant the per-token
+      // projection. Kept pointing at the hypothetical figures so old callers
+      // don't break, but honest UIs should read marginal*/hypothetical*.
+      totalCost: split.hypotheticalTotal,
+      dailyAvg: hypotheticalDailyAvg,
+      monthlyProjected: hypotheticalMonthly,
+
       requests: bucket.requests,
       tokens: {
         input: bucket.input,
@@ -289,19 +458,21 @@ function getCostBreakdown(config, getSessions, getOpenClawDir) {
         cacheRead: bucket.cacheRead,
         cacheWrite: bucket.cacheWrite,
       },
-      byModel: summarizeModelUsage(bucket.byModel),
+      byModel,
     };
   }
 
+  const primary = windows["24h"];
+
   return {
-    // Raw token counts (24h for backward compatibility)
+    // Raw token counts (24h for backward compatibility) — always real
     inputTokens: usage.input,
     outputTokens: usage.output,
     cacheRead: usage.cacheRead,
     cacheWrite: usage.cacheWrite,
     requests: usage.requests,
 
-    // Pricing rates
+    // Pricing rates (per-token reference rates; apply to the hypothetical math)
     rates: {
       input: TOKEN_RATES.input.toFixed(2),
       output: TOKEN_RATES.output.toFixed(2),
@@ -309,18 +480,37 @@ function getCostBreakdown(config, getSessions, getOpenClawDir) {
       cacheWrite: TOKEN_RATES.cacheWrite.toFixed(2),
     },
 
-    // Cost calculation breakdown (24h)
+    // Per-token line-item breakdown (24h) — this is the HYPOTHETICAL math.
+    // Labeled so a UI never presents it as money spent.
     calculation: {
       inputCost: costs.inputCost,
       outputCost: costs.outputCost,
       cacheReadCost: costs.cacheReadCost,
       cacheWriteCost: costs.cacheWriteCost,
+      hypotheticalTotal: costs.hypotheticalTotal,
+      note: "per-token projection — not money spent for subscription providers",
     },
 
-    // Totals (24h for backward compatibility)
-    totalCost: costs.totalCost,
+    // ---- Honest top-level totals (24h) -------------------------------------
+    // REAL marginal spend (per-token providers only; ≈0 for subscriptions)
+    marginalCost: primary.marginalCost,
+    marginalMonthly: primary.marginalMonthly,
+    // HYPOTHETICAL "if billed per-token" projection (the old misleading number)
+    hypotheticalCost: primary.hypotheticalCost,
+    hypotheticalMonthly: primary.hypotheticalMonthly,
+    // Flat subscription plan — a SEPARATE line, never summed into marginal
     planCost,
     planName,
+    // What is actually paid this month: flat plan + real marginal spend
+    actualMonthlySpend: primary.actualMonthlySpend,
+
+    // Billing-mode map echoed back so the UI can label each provider row
+    providerBillingModes,
+
+    // ---- Backward-compatible alias (deprecated) ----------------------------
+    // Historically `totalCost` was the per-token projection. Preserved as the
+    // hypothetical figure so existing callers don't break.
+    totalCost: primary.hypotheticalCost,
 
     // Period
     period: "24 hours",
@@ -385,15 +575,26 @@ function getTokenStats(sessions, capacity, config = {}) {
   const totalOutput = usage?.output || 0;
   const total = totalInput + totalOutput;
 
-  // Calculate cost using shared helper
-  const costs = calculateCostForBucket(usage);
-  const estCost = costs.totalCost;
+  const providerBillingModes = getProviderBillingModes(config);
+
+  // Subscription-aware 24h split. `estCost` stays the HYPOTHETICAL per-token
+  // figure (backward compatible) while `marginalCost` is the REAL spend.
+  const split24h = usage?.byModel
+    ? aggregateModelCosts(usage.byModel, TOKEN_RATES, providerBillingModes)
+    : (() => {
+        const c = calculateCostForBucket(usage);
+        return { marginalTotal: c.totalCost, hypotheticalTotal: c.totalCost, subscriptionTotal: 0 };
+      })();
+  const estCost = split24h.hypotheticalTotal; // hypothetical per-token (legacy meaning)
+  const marginalCost = split24h.marginalTotal; // real marginal $ (≈0 for subs)
 
   // Calculate savings vs plan cost (compare monthly to monthly)
   const planCost = config?.billing?.claudePlanCost ?? 200;
   const planName = config?.billing?.claudePlanName ?? "Claude Code Max";
-  const monthlyApiCost = estCost * 30; // Project daily to monthly
-  const monthlySavings = monthlyApiCost - planCost;
+  const monthlyApiCost = estCost * 30; // HYPOTHETICAL: project per-token daily → monthly
+  const marginalMonthly = marginalCost * 30; // REAL marginal monthly spend
+  const actualMonthlySpend = planCost + marginalMonthly;
+  const monthlySavings = monthlyApiCost - actualMonthlySpend;
   const savingsPositive = monthlySavings > 0;
 
   // Calculate per-session averages
@@ -413,20 +614,34 @@ function getTokenStats(sessions, capacity, config = {}) {
     // Map '3dma' -> '3d' for bucket lookup
     const bucketKey = key.replace("dma", "d").replace("24h", "24h");
     const bucket = usage.windows?.[bucketKey === "24h" ? "24h" : bucketKey] || usage;
-    const bucketCosts = calculateCostForBucket(bucket);
-    const dailyAvg = bucketCosts.totalCost / windowConfig.days;
+    const wSplit = bucket.byModel
+      ? aggregateModelCosts(bucket.byModel, TOKEN_RATES, providerBillingModes)
+      : (() => {
+          const c = calculateCostForBucket(bucket);
+          return { marginalTotal: c.totalCost, hypotheticalTotal: c.totalCost, subscriptionTotal: 0 };
+        })();
+    // dailyAvg/monthlyProjected remain the HYPOTHETICAL per-token figures for
+    // backward compatibility; marginal* are the REAL spend.
+    const dailyAvg = wSplit.hypotheticalTotal / windowConfig.days;
     const monthlyProjected = dailyAvg * 30;
-    const windowSavings = monthlyProjected - planCost;
+    const marginalMonthlyW = (wSplit.marginalTotal / windowConfig.days) * 30;
+    const windowActualSpend = planCost + marginalMonthlyW;
+    const windowSavings = monthlyProjected - windowActualSpend;
     const windowSavingsPositive = windowSavings > 0;
 
     savingsWindows[key] = {
       label: windowConfig.label,
+      // legacy fields = hypothetical per-token projection
       estCost: `$${formatNumber(dailyAvg)}`,
       estMonthlyCost: `$${Math.round(monthlyProjected).toLocaleString()}`,
+      // explicit honest fields
+      marginalMonthlyCost: `$${Math.round(marginalMonthlyW).toLocaleString()}`,
+      hypotheticalMonthlyCost: `$${Math.round(monthlyProjected).toLocaleString()}`,
       estSavings: windowSavingsPositive ? `$${formatNumber(windowSavings)}/mo` : null,
-      savingsPercent: windowSavingsPositive
-        ? Math.round((windowSavings / monthlyProjected) * 100)
-        : 0,
+      savingsPercent:
+        windowSavingsPositive && monthlyProjected > 0
+          ? Math.round((windowSavings / monthlyProjected) * 100)
+          : 0,
       requests: bucket.requests,
     };
   }
@@ -443,13 +658,24 @@ function getTokenStats(sessions, capacity, config = {}) {
     activeSubagentCount,
     mainLimit,
     subagentLimit,
+    // estCost stays the hypothetical per-token daily figure (legacy meaning)
     estCost: `$${formatNumber(estCost)}`,
+    // REAL marginal spend (≈$0 when everything is subscription-billed)
+    marginalCost: `$${formatNumber(marginalCost)}`,
+    marginalMonthlyCost: `$${Math.round(marginalMonthly).toLocaleString()}`,
+    // The flat plan, a SEPARATE line; and the true monthly outlay
     planCost: `$${planCost.toFixed(0)}`,
     planName,
+    actualMonthlyCost: `$${Math.round(actualMonthlySpend).toLocaleString()}`,
     // 24h savings (backward compatible)
     estSavings: savingsPositive ? `$${formatNumber(monthlySavings)}/mo` : null,
-    savingsPercent: savingsPositive ? Math.round((monthlySavings / monthlyApiCost) * 100) : 0,
+    savingsPercent:
+      savingsPositive && monthlyApiCost > 0
+        ? Math.round((monthlySavings / monthlyApiCost) * 100)
+        : 0,
+    // estMonthlyCost = hypothetical per-token monthly (the old "$513" number)
     estMonthlyCost: `$${Math.round(monthlyApiCost).toLocaleString()}`,
+    hypotheticalMonthlyCost: `$${Math.round(monthlyApiCost).toLocaleString()}`,
     // Multi-window savings (24h, 3da, 7da)
     savingsWindows,
     // Per-session averages
@@ -478,10 +704,18 @@ function startTokenUsageRefresh(getOpenClawDir) {
 
 module.exports = {
   TOKEN_RATES,
+  BILLING_SUBSCRIPTION,
+  BILLING_PER_TOKEN,
+  DEFAULT_BILLING_MODE,
+  modelToProvider,
+  resolveBillingMode,
+  getProviderBillingModes,
+  isSubscriptionModel,
   emptyUsageBucket,
   addUsageToBucket,
   addUsageToModelMap,
   summarizeModelUsage,
+  aggregateModelCosts,
   refreshTokenUsageAsync,
   getDailyTokenUsage,
   calculateCostForBucket,

@@ -148,6 +148,8 @@ function normalizeEvent(event, nowFn) {
     task: event.task != null ? String(event.task) : null,
     message: event.message != null ? String(event.message) : "",
     ts: Number.isFinite(event.ts) ? event.ts : nowFn(),
+    // Origin of the alert: "ofc" (engine-fired), "ntfy" (ingested), "cron" (run log).
+    source: event.source != null ? String(event.source) : "ofc",
   };
 }
 
@@ -489,6 +491,19 @@ function createAlerts({
     return history.query(filters);
   }
 
+  /**
+   * Record an already-fired EXTERNAL event (ntfy ingest, cron run log) into the
+   * ring + history WITHOUT rule-gating, mute, dedupe, or sink re-dispatch. These
+   * are a log of things that already happened elsewhere — not new alerts to
+   * evaluate or re-publish. Callers (the ingest pollers) handle their own dedupe.
+   */
+  function record(event) {
+    const alert = normalizeEvent(event, nowFn);
+    recentAlerts = [...recentAlerts, alert].slice(-RING_BUFFER_SIZE);
+    if (history) history.append(alert);
+    return alert;
+  }
+
   /** Number of alerts skipped by mute entries since this engine was built. */
   function getMutedCount() {
     return mutedCount;
@@ -507,7 +522,7 @@ function createAlerts({
     return history.analytics(options);
   }
 
-  return { fire, getRecent, query, getMutedCount, analytics };
+  return { fire, record, getRecent, query, getMutedCount, analytics };
 }
 
 // ---------------------------------------------------------------------------

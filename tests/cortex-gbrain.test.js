@@ -8,6 +8,16 @@ const {
   toMemoryItem,
 } = require("../src/cortex-gbrain");
 
+/**
+ * Mirror of the adapter's date normalization for year-less gbrain dates
+ * ("Tue Jun 09" → ISO with the current year). Kept here so the expected
+ * values track the same calendar year the adapter assumes, instead of being
+ * hardcoded to a single year that would rot.
+ */
+function expectedIso(raw) {
+  return new Date(Date.parse(`${raw} ${new Date().getFullYear()}`)).toISOString();
+}
+
 /** Verbatim `gbrain stats` text output from gbrain 0.12.3 on a live host. */
 const STATS_TEXT_OUTPUT =
   "Pages:     383\n" +
@@ -90,7 +100,7 @@ describe("cortex-gbrain module", () => {
     it("normalizes a page record into a memory-browser item", () => {
       assert.deepStrictEqual(
         toMemoryItem({ slug: "a/b", title: "B", type: "concept", updated_at: "Tue Jun 09" }),
-        { id: "a/b", title: "B", type: "concept", updatedAt: "Tue Jun 09" },
+        { id: "a/b", title: "B", type: "concept", updatedAt: expectedIso("Tue Jun 09") },
       );
     });
 
@@ -178,12 +188,19 @@ describe("cortex-gbrain module", () => {
       const gbrain = createGbrain({ execFn });
       const result = await gbrain.list();
 
-      // No --limit flag: the memory browser shows the whole brain.
-      assert.deepStrictEqual(execFn.calls[0].args, ["list", "--json"]);
+      // gbrain `list` hard-caps results and has no pagination, so the adapter
+      // requests the MAX gbrain returns via TSV (--limit 100); the true total
+      // is surfaced separately via stats().
+      assert.deepStrictEqual(execFn.calls[0].args, ["list", "--limit", "100"]);
       assert.strictEqual(result.total, 3);
       assert.deepStrictEqual(result.items, [
-        { id: "projects/alpha", title: "Project Alpha", type: "project", updatedAt: "Thu Jun 11" },
-        { id: "people/bob", title: "Bob", type: "person", updatedAt: "Mon Jun 08" },
+        {
+          id: "projects/alpha",
+          title: "Project Alpha",
+          type: "project",
+          updatedAt: expectedIso("Thu Jun 11"),
+        },
+        { id: "people/bob", title: "Bob", type: "person", updatedAt: expectedIso("Mon Jun 08") },
         { id: "fallback-id", title: "No slug page", type: "page", updatedAt: null },
       ]);
     });
@@ -200,7 +217,7 @@ describe("cortex-gbrain module", () => {
       const result = await gbrain.list();
       assert.strictEqual(result.total, 2);
       assert.strictEqual(result.items[0].id, "projects/alpha");
-      assert.strictEqual(result.items[0].updatedAt, "Tue Jun 09");
+      assert.strictEqual(result.items[0].updatedAt, expectedIso("Tue Jun 09"));
     });
 
     it("paginates with limit and offset over the full set", async () => {
@@ -268,7 +285,15 @@ describe("cortex-gbrain module", () => {
       const gbrain = createGbrain({ execFn });
       const result = await gbrain.stats();
       // list cap < true count: page count must come from stats (383), not 2.
-      assert.deepStrictEqual(result, { pageCount: 383, lastUpdated: "Thu Jun 11" });
+      // stats() also rides the embedding-health fields along (chunks/embedded/
+      // embeddedCoverage); lastUpdated stays the raw newest list date.
+      assert.deepStrictEqual(result, {
+        pageCount: 383,
+        lastUpdated: "Thu Jun 11",
+        chunks: 1582,
+        embedded: 1582,
+        embeddedCoverage: 1,
+      });
     });
 
     it("falls back to the listed page count when stats is unusable", async () => {
@@ -295,6 +320,7 @@ describe("cortex-gbrain module", () => {
         pages: 383,
         chunks: 1582,
         embedded: 1582,
+        embeddedCoverage: 1,
         links: 0,
         tags: 8,
       });

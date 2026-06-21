@@ -138,14 +138,15 @@ describe("board settlement race — completion must win against dispatch's kill 
     assert.deepStrictEqual(snap.missing, [], "no seat is wrongly flagged missing");
 
     // Each card's dispatch attempt settled success with result_text, and the
-    // watcher auto-moved it out of assigned/inprogress into review.
+    // watcher auto-moved it out of assigned/inprogress. Board dispatches go
+    // straight to `done` (the boardroom never leaves a growing pile in review).
     const board = kanban.getBoard();
     for (const task of board.tasks) {
       const a0 = task.attempts[0];
       assert.strictEqual(a0.result, "success", `${task.id} attempt settled success`);
       assert.strictEqual(a0.ended_at !== null, true, `${task.id} attempt is CLOSED`);
       assert.ok(a0.result_text && a0.result_text.length > 0, `${task.id} captured result_text`);
-      assert.strictEqual(task.status, "review", `${task.id} auto-moved to review`);
+      assert.strictEqual(task.status, "done", `${task.id} auto-moved to done`);
     }
   });
 

@@ -12,8 +12,13 @@ const { execFile } = require("child_process");
 //                     background refresh keeps a 60s-TTL cache and the request
 //                     path never blocks.
 //   3. Hermes       — ~/.hermes/cron/jobs.json (best-effort second source).
+//   4. Host crontab — the running user's own crontab (`crontab -l`). Plain
+//                     cron lines with no scheduler metadata; surfaced
+//                     read-only. Best-effort: failures contribute nothing.
 // Each job: { id, name, schedule, scheduleHuman, enabled, nextRun,
-//             lastStatus, agent, node, source: 'openclaw'|'hermes' }
+//             lastStatus, lastRunAtMs, agent, node,
+//             source: 'openclaw'|'hermes'|'host' }
+// Host-source records additionally carry { command, readOnly: true }.
 // ---------------------------------------------------------------------------
 
 const CLI_CACHE_TTL_MS = 60000;
@@ -206,6 +211,101 @@ function mapHermesJob(job, node) {
 }
 
 // ---------------------------------------------------------------------------
+// Host crontab source — the broclaw2 user's own crontab (`crontab -l`).
+// These are plain cron lines (5 schedule fields + command), with no scheduler
+// metadata: no ids, no last/next-run state, no enable/disable. They are
+// surfaced read-only. Env/PATH assignment lines, comments, and blank lines are
+// skipped. Read synchronously with a tight timeout; any failure contributes
+// nothing (never throws).
+// ---------------------------------------------------------------------------
+
+const HOST_CRONTAB_TIMEOUT_MS = 5000;
+
+// Derive a readable name from a cron command line. Picks the basename of the
+// first path-like token (skipping leading `VAR=val` env assignments), strips a
+// common script extension, and falls back to the first token or a truncated
+// command when nothing better is available.
+function hostCronName(command) {
+  const tokens = String(command || "").trim().split(/\s+/);
+  let i = 0;
+  // Skip inline `VAR=value` env assignments that can precede the command.
+  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
+  const cmd = tokens[i] || "";
+  if (!cmd) return String(command || "").slice(0, 40) || "cron job";
+  // Basename of the executable, minus a trailing shell/script extension.
+  const base = cmd.split("/").pop() || cmd;
+  const cleaned = base.replace(/\.(sh|py|js|ts|rb|pl)$/i, "");
+  return cleaned || base || cmd;
+}
+
+// Map a single raw host crontab line into a job record matching the
+// openclaw/hermes shape. Returns null for lines that are not real jobs
+// (blank, comment, or `VAR=value` environment assignments).
+function mapHostCronLine(line, index, node) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed || trimmed.startsWith("#")) return null;
+
+  const parts = trimmed.split(/\s+/);
+  if (parts.length < 6) return null;
+
+  // Environment / PATH assignment lines: `NAME=value ...` with no schedule.
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(parts[0])) return null;
+
+  const schedule = parts.slice(0, 5).join(" ");
+  const command = parts.slice(5).join(" ");
+  if (!command) return null;
+
+  return {
+    id: `host-${index}`,
+    name: hostCronName(command),
+    schedule,
+    scheduleHuman: cronToHuman(schedule),
+    enabled: true,
+    nextRun: "—",
+    lastStatus: null,
+    lastRunAtMs: null,
+    command,
+    agent: null,
+    node,
+    source: "host",
+    readOnly: true,
+  };
+}
+
+// Default reader for the host crontab. Returns the raw stdout of `crontab -l`,
+// or "" when the user has no crontab / the command is unavailable.
+function defaultHostCrontabReader() {
+  const { execFileSync } = require("child_process");
+  try {
+    return execFileSync("crontab", ["-l"], {
+      encoding: "utf8",
+      timeout: HOST_CRONTAB_TIMEOUT_MS,
+      maxBuffer: 4 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    // No crontab for user, crontab not installed, or timeout — contribute nothing.
+    return "";
+  }
+}
+
+let hostCrontabReader = defaultHostCrontabReader;
+
+// Parse the host crontab into mapped job records. Defensive: never throws.
+function getHostCronJobs(node) {
+  let raw = "";
+  try {
+    raw = hostCrontabReader() || "";
+  } catch {
+    return [];
+  }
+  return String(raw)
+    .split("\n")
+    .map((line, i) => mapHostCronLine(line, i, node))
+    .filter((job) => job !== null);
+}
+
+// ---------------------------------------------------------------------------
 // CLI source — async cached runner. getCronJobs() stays synchronous: it
 // returns whatever is cached and kicks off a background refresh when stale.
 // ---------------------------------------------------------------------------
@@ -310,7 +410,14 @@ function getCronJobs(getOpenClawDir, opts = {}) {
     console.error("Failed to get Hermes cron:", e.message);
   }
 
-  return [...openclawJobs, ...hermesJobs];
+  let hostJobs = [];
+  try {
+    hostJobs = getHostCronJobs(node);
+  } catch (e) {
+    console.error("Failed to get host cron:", e.message);
+  }
+
+  return [...openclawJobs, ...hermesJobs, ...hostJobs];
 }
 
 /**
@@ -334,10 +441,12 @@ function forceCliRefresh() {
  * Reset module state for testing.
  * @param {object} [options]
  * @param {function} [options.cliRunner] - replacement async runner returning CLI stdout
+ * @param {function} [options.hostCrontabReader] - replacement sync reader returning `crontab -l` stdout
  */
 function _resetForTesting(options = {}) {
   cliCache = { rawJobs: null, fetchedAt: 0, refreshing: false, promise: null };
   cliRunner = options.cliRunner || defaultCliRunner;
+  hostCrontabReader = options.hostCrontabReader || defaultHostCrontabReader;
 }
 
 /** Await any in-flight background CLI refresh (tests only). */
