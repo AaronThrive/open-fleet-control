@@ -95,6 +95,9 @@ function extractJobs(parsed) {
  */
 function extractRuns(parsed) {
   if (Array.isArray(parsed)) return parsed;
+  // `openclaw cron runs` returns a { entries: [...] } envelope (it does NOT accept
+  // --json; the command is JSONL-backed and prints JSON by default).
+  if (parsed && Array.isArray(parsed.entries)) return parsed.entries;
   if (parsed && Array.isArray(parsed.runs)) return parsed.runs;
   return [];
 }
@@ -271,7 +274,6 @@ function createCronLog(options = {}) {
         jobId,
         "--limit",
         String(runsPerJob),
-        "--json",
       ]);
       parsed = parseJsonLoose(stdout);
     } catch (e) {
@@ -283,6 +285,8 @@ function createCronLog(options = {}) {
     // emission order matches chronology even when the CLI returns newest-first.
     const fresh = [];
     for (const run of extractRuns(parsed)) {
+      // A run logs "started" then "finished" entries — only log completions.
+      if (run.action && run.action !== "finished") continue;
       const key = runDedupeKey(run, jobId);
       if (!key || knownRuns.has(key)) continue;
       const event = normalizeRun(run, job, key);
