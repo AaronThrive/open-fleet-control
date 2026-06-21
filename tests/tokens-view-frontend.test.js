@@ -26,22 +26,22 @@ describe("tokens view row builders", () => {
       const rows = windowRows({
         windows: {
           "24h": {
-            totalCost: 1.5,
+            marginalCost: 1.5,
             requests: 10,
-            monthlyProjected: 45,
+            hypotheticalCost: 45,
             tokens: { input: 100, output: 50, cacheRead: 25, cacheWrite: 25 },
           },
-          "7d": { totalCost: 9, requests: 70, tokens: {} },
+          "7d": { marginalCost: 9, requests: 70, tokens: {} },
         },
       });
       assert.strictEqual(rows.length, 2);
       assert.strictEqual(rows[0].key, "24h");
       assert.strictEqual(rows[0].tokens, 200);
-      assert.strictEqual(rows[0].cost, 1.5);
-      assert.strictEqual(rows[0].projected, 45);
+      assert.strictEqual(rows[0].marginal, 1.5);
+      assert.strictEqual(rows[0].hypothetical, 45);
       assert.strictEqual(rows[1].key, "7d");
       assert.strictEqual(rows[1].tokens, 0);
-      assert.strictEqual(rows[1].projected, null);
+      assert.strictEqual(rows[1].hypothetical, 0);
     });
 
     it("returns [] for missing/malformed payloads", () => {

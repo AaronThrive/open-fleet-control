@@ -198,9 +198,10 @@
     }
     #alerts-view-section .alerts-message {
       font-size: 0.82rem;
+      display: flex;
+      align-items: center;
+      min-width: 0;
       overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
     }
     #alerts-view-section .alerts-row-actions {
       display: flex;
@@ -221,6 +222,93 @@
     #alerts-view-section .alerts-mini-btn:hover {
       color: var(--accent-2);
       border-color: var(--accent-2);
+    }
+    #alerts-view-section .alerts-mini-btn:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+    #alerts-view-section .alerts-mini-btn:disabled:hover {
+      color: var(--text-muted);
+      border-color: var(--border);
+    }
+    #alerts-view-section .alerts-danger-btn:hover {
+      color: #f85149;
+      border-color: rgba(248, 81, 73, 0.5);
+    }
+    /* Per-row dismiss (×) */
+    #alerts-view-section .alerts-dismiss-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    #alerts-view-section .alerts-dismiss-btn:hover {
+      color: #f85149;
+      background: rgba(248, 81, 73, 0.1);
+    }
+    /* Source origin badge on each row */
+    #alerts-view-section .alerts-source-badge {
+      display: inline-block;
+      font-size: 0.68rem;
+      padding: 1px 6px;
+      margin-right: 6px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text-muted);
+      white-space: nowrap;
+      vertical-align: baseline;
+    }
+    #alerts-view-section .alerts-source-ntfy {
+      border-color: rgba(88, 166, 255, 0.4);
+      color: #58a6ff;
+    }
+    #alerts-view-section .alerts-source-cron {
+      border-color: rgba(255, 178, 36, 0.4);
+      color: #ffb224;
+    }
+    #alerts-view-section .alerts-source-ofc {
+      border-color: rgba(63, 185, 80, 0.4);
+      color: #3fb950;
+    }
+    #alerts-view-section .alerts-message-text {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    /* Unread styling — bold row + leading dot until "Mark all read" */
+    #alerts-view-section .alerts-row-unread {
+      background: rgba(88, 166, 255, 0.04);
+    }
+    #alerts-view-section .alerts-row-unread .alerts-message-text,
+    #alerts-view-section .alerts-row-unread .alerts-time {
+      font-weight: 600;
+      color: var(--text);
+    }
+    #alerts-view-section .alerts-unread-dot {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      margin-right: 6px;
+      border-radius: 50%;
+      background: #58a6ff;
+      vertical-align: middle;
+    }
+    #alerts-view-section .alerts-unread-count {
+      font-size: 0.72rem;
+      padding: 2px 8px;
+      border-radius: 10px;
+      color: #58a6ff;
+      border: 1px solid rgba(88, 166, 255, 0.4);
+      background: rgba(88, 166, 255, 0.08);
+    }
+    #alerts-view-section .alerts-unread-count[hidden] {
+      display: none;
     }
     @media (max-width: 1000px) {
       #alerts-view-section .alerts-table-head {
@@ -383,6 +471,23 @@
         <input type="text" id="alerts-filter-node" placeholder="hostname" autocomplete="off" />
       </div>
       <div class="alerts-filter-field">
+        <label for="alerts-filter-since" data-i18n="views.alerts.filterFrom">From</label>
+        <input type="date" id="alerts-filter-since" autocomplete="off" />
+      </div>
+      <div class="alerts-filter-field">
+        <label for="alerts-filter-until" data-i18n="views.alerts.filterTo">To</label>
+        <input type="date" id="alerts-filter-until" autocomplete="off" />
+      </div>
+      <div class="alerts-filter-field">
+        <label for="alerts-filter-source-origin" data-i18n="views.alerts.filterOrigin">Origin</label>
+        <select id="alerts-filter-source-origin">
+          <option value="all" selected data-i18n="views.alerts.originAll">All sources</option>
+          <option value="ofc" data-i18n="views.alerts.originOfc">🔔 ofc</option>
+          <option value="ntfy" data-i18n="views.alerts.originNtfy">📨 ntfy</option>
+          <option value="cron" data-i18n="views.alerts.originCron">⏰ cron</option>
+        </select>
+      </div>
+      <div class="alerts-filter-field">
         <label for="alerts-filter-source" data-i18n="views.alerts.filterSource">Source</label>
         <select id="alerts-filter-source">
           <option value="history" selected data-i18n="views.alerts.sourceHistory">
@@ -402,6 +507,22 @@
       </div>
       <div class="alerts-filter-actions">
         <button
+          class="alerts-mini-btn"
+          id="alerts-markread-btn"
+          type="button"
+          data-i18n="views.alerts.markAllRead"
+        >
+          Mark all read
+        </button>
+        <button
+          class="alerts-mini-btn alerts-danger-btn"
+          id="alerts-clear-btn"
+          type="button"
+          data-i18n="views.alerts.clearAll"
+        >
+          Clear all
+        </button>
+        <button
           class="btn-primary"
           id="alerts-refresh-btn"
           type="button"
@@ -415,6 +536,7 @@
     <div class="alerts-meta-row">
       <!-- count line is owned by alerts.js (views.alerts.countOne/countMany) -->
       <span id="alerts-count-line">0 alerts shown</span>
+      <span class="alerts-unread-count" id="alerts-unread-count" hidden></span>
       <span class="alerts-live-badge" id="alerts-live-badge">POLL</span>
       <span class="alerts-error" id="alerts-error" hidden></span>
     </div>

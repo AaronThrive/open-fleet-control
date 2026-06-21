@@ -1,0 +1,462 @@
+<!-- Playbooks View Partial -->
+<div class="section" id="playbooks-view-section">
+  <style>
+    #playbooks-view-section [hidden] {
+      display: none !important;
+    }
+    #playbooks-view-section .playbooks-layout {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      gap: 14px;
+      margin-top: 16px;
+      min-height: 0;
+    }
+    #playbooks-view-section .playbooks-toolbar {
+      display: flex;
+      justify-content: flex-end;
+    }
+    #playbooks-view-section .playbooks-new-btn {
+      font-weight: 600;
+    }
+    /* LIVE badge — flags the agent-task-protocol playbook (load-bearing) */
+    #playbooks-view-section .playbooks-live-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.62rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: rgba(46, 204, 113, 0.14);
+      border: 1px solid rgba(46, 204, 113, 0.55);
+      color: var(--green);
+      white-space: nowrap;
+    }
+    #playbooks-view-section .playbooks-live-badge::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 6px rgba(46, 204, 113, 0.9);
+      animation: playbooks-live-pulse 1.6s ease-in-out infinite;
+    }
+    @keyframes playbooks-live-pulse {
+      0%,
+      100% {
+        opacity: 1;
+      }
+      50% {
+        opacity: 0.35;
+      }
+    }
+    #playbooks-view-section .playbooks-live-banner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      background: rgba(46, 204, 113, 0.07);
+      border: 1px solid rgba(46, 204, 113, 0.35);
+    }
+    #playbooks-view-section .playbooks-live-banner-text {
+      font-size: 0.76rem;
+      color: var(--text-muted);
+    }
+    /* Row + detail-panel actions */
+    #playbooks-view-section .playbooks-row-actions,
+    #playbooks-view-section .playbooks-detail-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    #playbooks-view-section .playbooks-detail {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    #playbooks-view-section .playbooks-detail-loading {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+    #playbooks-view-section .playbooks-edit-btn {
+      padding: 4px 12px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      border-radius: 6px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+    }
+    #playbooks-view-section .playbooks-edit-btn:hover:not(:disabled) {
+      border-color: rgba(var(--accent-rgb), 0.6);
+      color: var(--accent);
+    }
+    /* Editor (below the list) */
+    #playbooks-view-section .playbooks-editor {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg);
+      overflow: hidden;
+    }
+    #playbooks-view-section .playbooks-editor-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--card-bg);
+      flex-wrap: wrap;
+    }
+    #playbooks-view-section .playbooks-editor-name {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: "SF Mono", "Fira Code", Consolas, monospace;
+      font-size: 0.82rem;
+      color: var(--text);
+      min-width: 0;
+      word-break: break-all;
+    }
+    #playbooks-view-section .playbooks-dirty-dot {
+      color: var(--yellow);
+      font-size: 0.9rem;
+      line-height: 1;
+    }
+    #playbooks-view-section .playbooks-editor-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #playbooks-view-section .playbooks-mode-toggle {
+      display: flex;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    #playbooks-view-section .playbooks-mode-btn {
+      padding: 5px 12px;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #playbooks-view-section .playbooks-mode-btn.active {
+      background: rgba(var(--accent-2-rgb), 0.15);
+      color: var(--accent-2);
+    }
+    #playbooks-view-section .playbooks-save-btn {
+      padding: 5px 14px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      border-radius: 6px;
+    }
+    #playbooks-view-section .playbooks-save-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    #playbooks-view-section .playbooks-delete-btn {
+      padding: 5px 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      border-radius: 6px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--red);
+      cursor: pointer;
+      transition: border-color 0.15s ease;
+    }
+    #playbooks-view-section .playbooks-delete-btn:hover {
+      border-color: var(--red);
+    }
+    #playbooks-view-section .playbooks-delete-btn.small {
+      padding: 4px 12px;
+      font-size: 0.72rem;
+    }
+    #playbooks-view-section .playbooks-close-btn {
+      padding: 5px 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      border-radius: 6px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    #playbooks-view-section .playbooks-close-btn:hover {
+      border-color: rgba(var(--accent-rgb), 0.6);
+      color: var(--text);
+    }
+    #playbooks-view-section .playbooks-textarea {
+      flex: 1;
+      width: 100%;
+      min-height: 380px;
+      padding: 14px 16px;
+      background: var(--bg);
+      color: var(--text);
+      border: none;
+      outline: none;
+      resize: vertical;
+      font-family: "SF Mono", "Fira Code", Consolas, monospace;
+      font-size: 0.82rem;
+      line-height: 1.6;
+    }
+    #playbooks-view-section .playbooks-textarea:focus {
+      box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.35);
+    }
+    /* Markdown preview (editor preview mode AND row detail panels) */
+    #playbooks-view-section .playbooks-preview {
+      flex: 1;
+      padding: 4px 2px;
+      overflow-y: auto;
+      font-size: 0.85rem;
+      line-height: 1.65;
+      color: var(--text);
+    }
+    #playbooks-view-section .playbooks-editor .playbooks-preview {
+      min-height: 380px;
+      padding: 16px 20px;
+    }
+    #playbooks-view-section .playbooks-preview h1,
+    #playbooks-view-section .playbooks-preview h2,
+    #playbooks-view-section .playbooks-preview h3,
+    #playbooks-view-section .playbooks-preview h4,
+    #playbooks-view-section .playbooks-preview h5,
+    #playbooks-view-section .playbooks-preview h6 {
+      margin: 1.1em 0 0.45em;
+      color: var(--accent);
+      line-height: 1.3;
+    }
+    #playbooks-view-section .playbooks-preview h1:first-child,
+    #playbooks-view-section .playbooks-preview h2:first-child {
+      margin-top: 0;
+    }
+    #playbooks-view-section .playbooks-preview h1 {
+      font-size: 1.3rem;
+    }
+    #playbooks-view-section .playbooks-preview h2 {
+      font-size: 1.1rem;
+    }
+    #playbooks-view-section .playbooks-preview h3 {
+      font-size: 0.95rem;
+    }
+    #playbooks-view-section .playbooks-preview p {
+      margin: 0.55em 0;
+    }
+    #playbooks-view-section .playbooks-preview a {
+      color: var(--accent-2);
+    }
+    #playbooks-view-section .playbooks-preview code {
+      font-family: "SF Mono", "Fira Code", Consolas, monospace;
+      font-size: 0.78rem;
+      background: rgba(var(--accent-2-rgb), 0.1);
+      color: var(--accent-2);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    #playbooks-view-section .playbooks-preview pre {
+      margin: 0.8em 0;
+      padding: 12px 14px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow-x: auto;
+    }
+    #playbooks-view-section .playbooks-preview pre code {
+      background: none;
+      color: var(--text);
+      padding: 0;
+    }
+    #playbooks-view-section .playbooks-preview ul,
+    #playbooks-view-section .playbooks-preview ol {
+      margin: 0.55em 0;
+      padding-left: 1.6em;
+    }
+    #playbooks-view-section .playbooks-preview li {
+      margin: 0.25em 0;
+    }
+    #playbooks-view-section .playbooks-preview blockquote {
+      margin: 0.8em 0;
+      padding: 4px 14px;
+      border-left: 3px solid var(--accent);
+      background: rgba(var(--accent-rgb), 0.05);
+      color: var(--text-muted);
+    }
+    #playbooks-view-section .playbooks-preview blockquote p {
+      margin: 0.35em 0;
+    }
+    #playbooks-view-section .playbooks-preview hr {
+      margin: 1.2em 0;
+      border: none;
+      border-top: 1px solid var(--border);
+    }
+    /* Toasts */
+    #playbooks-view-section .playbooks-toasts {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 1000;
+    }
+    #playbooks-view-section .playbooks-toast {
+      padding: 10px 16px;
+      border-radius: 8px;
+      background: var(--card-bg);
+      border: 1px solid var(--accent);
+      color: var(--text);
+      font-size: 0.8rem;
+      max-width: 360px;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
+      animation: playbooks-toast-in 0.18s ease;
+    }
+    #playbooks-view-section .playbooks-toast.error {
+      border-color: var(--red);
+      color: var(--red);
+    }
+    @keyframes playbooks-toast-in {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+  </style>
+  <section class="view-panel">
+    <div class="view-header">
+      <div class="view-title">
+        <span class="view-icon">📒</span>
+        <span data-i18n="views.playbooks.title">Playbooks</span>
+      </div>
+      <div class="view-subtitle" data-i18n="views.playbooks.subtitle">
+        Operating procedures and protocols the fleet runs on — including the live agent task protocol
+      </div>
+    </div>
+    <div class="empty-state" id="playbooks-empty-state">
+      <div class="empty-state-icon">📒</div>
+      <div class="empty-state-title" data-i18n="views.playbooks.emptyTitle">No playbooks yet</div>
+      <p class="empty-state-text" data-i18n="views.playbooks.emptyText">
+        No playbooks have been written yet. Standard operating procedures and agent protocols will
+        live here.
+      </p>
+      <button
+        class="btn-primary empty-state-cta"
+        id="playbooks-empty-cta"
+        data-i18n="views.playbooks.cta"
+      >
+        Create your first playbook →
+      </button>
+    </div>
+    <div class="playbooks-layout" id="playbooks-layout" hidden>
+      <div class="playbooks-toolbar">
+        <button
+          class="btn-primary playbooks-new-btn"
+          id="playbooks-new-btn"
+          type="button"
+          data-i18n="views.playbooks.newBtn"
+        >
+          + New playbook
+        </button>
+      </div>
+
+      <!-- Detail list host (built by views/playbooks.js via the shared component) -->
+      <div id="playbooks-list"></div>
+
+      <!-- Editor (opened via the Edit actions) -->
+      <div class="playbooks-editor" id="playbooks-editor" hidden>
+        <div class="playbooks-editor-toolbar">
+          <div class="playbooks-editor-name">
+            <span id="playbooks-editor-filename"></span>
+            <span
+              class="playbooks-live-badge"
+              id="playbooks-editor-live"
+              hidden
+              data-i18n="views.playbooks.liveBadge"
+              title="Read by every dispatched task — edit with care."
+              data-i18n-title="views.playbooks.liveTooltip"
+              >LIVE</span
+            >
+            <span
+              class="playbooks-dirty-dot"
+              id="playbooks-dirty-dot"
+              hidden
+              title="Unsaved changes"
+              data-i18n-title="views.playbooks.unsaved"
+              >●</span
+            >
+          </div>
+          <div class="playbooks-editor-actions">
+            <div class="playbooks-mode-toggle" role="tablist">
+              <button
+                class="playbooks-mode-btn active"
+                id="playbooks-mode-edit"
+                type="button"
+                data-i18n="views.playbooks.edit"
+              >
+                Edit
+              </button>
+              <button
+                class="playbooks-mode-btn"
+                id="playbooks-mode-preview"
+                type="button"
+                data-i18n="views.playbooks.preview"
+              >
+                Preview
+              </button>
+            </div>
+            <button
+              class="btn-primary playbooks-save-btn"
+              id="playbooks-save-btn"
+              type="button"
+              data-i18n="views.playbooks.save"
+            >
+              Save
+            </button>
+            <button
+              class="playbooks-delete-btn"
+              id="playbooks-delete-btn"
+              type="button"
+              data-i18n="views.playbooks.delete"
+            >
+              Delete
+            </button>
+            <button
+              class="playbooks-close-btn"
+              id="playbooks-editor-close"
+              type="button"
+              data-i18n="actions.close"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+        <textarea
+          class="playbooks-textarea"
+          id="playbooks-textarea"
+          spellcheck="false"
+          placeholder="Write markdown here..."
+          data-i18n-placeholder="views.playbooks.markdownPlaceholder"
+        ></textarea>
+        <div class="playbooks-preview" id="playbooks-preview" hidden></div>
+      </div>
+    </div>
+    <div class="playbooks-toasts" id="playbooks-toasts"></div>
+  </section>
+</div>

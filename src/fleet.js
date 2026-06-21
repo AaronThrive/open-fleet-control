@@ -28,6 +28,7 @@ const { createAlerts, createNodeAlertTracker, createSinkDispatcher } = require("
 const { createRateLimiter } = require("./rate-limit");
 const { createBudgets } = require("./budgets");
 const { createDigest } = require("./digest");
+const { createDigestsStore } = require("./digests-store");
 const { createNtfyIngest } = require("./ntfy-ingest");
 const { createCronLog } = require("./cron-log");
 const { defaultSecrets } = require("./secrets");
@@ -369,6 +370,10 @@ function createFleetRuntime({ config, broadcast }) {
   const digestDispatcher = createSinkDispatcher();
   let digestExtras = {};
 
+  // Read-only store over the SAME directory the digest writer persists to
+  // (path.join(stateDir, "digests")) — backs the "Digests" tab's list/read.
+  const digests = createDigestsStore({ digestsDir: path.join(stateDir, "digests") });
+
   const digest = createDigest({
     config: config.digest,
     stateFile: path.join(stateDir, "digest.json"),
@@ -625,6 +630,7 @@ function createFleetRuntime({ config, broadcast }) {
     applyBudgetsConfig,
     setUsageProvider,
     digest,
+    digests,
     applyDigestConfig,
     setDigestSources,
     rateLimiter,

@@ -347,7 +347,34 @@ function createAlertHistory({
     return computeAlertAnalytics(entries, options);
   }
 
-  return { append, query, analytics };
+  /**
+   * Archive the active history file by renaming it to a timestamped
+   * `alerts.<stamp>.cleared` backup, then start fresh (the next append()
+   * recreates alerts.jsonl). Best-effort: a missing active file is a no-op,
+   * and failures are logged and never thrown. Rotated files are left intact.
+   *
+   * @returns {{archived: boolean, backup: string|null}}
+   */
+  function clear() {
+    try {
+      if (!fs.existsSync(activePath)) return { archived: false, backup: null };
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      let backupPath = path.join(logsDir, `alerts.${stamp}.cleared`);
+      if (fs.existsSync(backupPath)) {
+        backupPath = path.join(
+          logsDir,
+          `alerts.${stamp}-${crypto.randomBytes(3).toString("hex")}.cleared`,
+        );
+      }
+      fs.renameSync(activePath, backupPath);
+      return { archived: true, backup: path.basename(backupPath) };
+    } catch (e) {
+      console.error("[AlertHistory] Clear failed:", e.message);
+      return { archived: false, backup: null };
+    }
+  }
+
+  return { append, query, analytics, clear };
 }
 
 module.exports = { createAlertHistory, computeAlertAnalytics, MAX_QUERY_LIMIT };

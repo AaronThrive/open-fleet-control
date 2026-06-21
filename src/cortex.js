@@ -81,6 +81,9 @@ function createCortex(options = {}) {
       gauges: [],
       gaugeSummary: summarizeGauges([]),
       contextEngine: { engine: null, source: null, reason: "warming" },
+      health: null,
+      obsidian: null,
+      recentUpdates: [],
     };
   }
 
@@ -122,6 +125,11 @@ function createCortex(options = {}) {
       gauges: [],
       gaugeSummary: summarizeGauges([]),
       contextEngine: { engine: null, source: null, reason: null },
+      // gbrain observability extras (shell out to the gbrain CLI; defensive,
+      // null/[] when unavailable so existing consumers are unaffected).
+      health: null,
+      obsidian: null,
+      recentUpdates: [],
     };
 
     // Memory browser is gbrain-backed (read-only). Availability comes from the
@@ -167,6 +175,60 @@ function createCortex(options = {}) {
       state.contextEngine = { engine: null, source: null, reason: e.message };
     }
 
+    // gbrain health/obsidian/recent-updates: only meaningful once gbrain is
+    // available, and each is independently guarded so a failing CLI call
+    // leaves the field at its null/[] default rather than breaking the payload.
+    if (state.gbrain.available && typeof gbrain.healthStats === "function") {
+      try {
+        const h = await gbrain.healthStats();
+        if (h && !h.error) {
+          state.health = {
+            pageCount: h.pageCount ?? null,
+            chunks: h.chunks ?? null,
+            embedded: h.embedded ?? null,
+            embeddedCoverage: h.embeddedCoverage ?? null,
+            healthy: h.healthy ?? null,
+          };
+        }
+      } catch (e) {
+        // leave state.health = null
+      }
+    }
+
+    if (state.gbrain.available && typeof gbrain.obsidianHealth === "function") {
+      try {
+        const o = await gbrain.obsidianHealth();
+        if (o && !o.error) {
+          state.obsidian = {
+            lastImportAt: o.lastImportAt ?? null,
+            lastImportOk: o.lastImportOk ?? null,
+            lastExportAt: o.lastExportAt ?? null,
+            lastExportSummary: o.lastExportSummary ?? null,
+            vaultPagesApprox: o.vaultPagesApprox ?? null,
+            stale: o.stale ?? null,
+          };
+        }
+      } catch (e) {
+        // leave state.obsidian = null
+      }
+    }
+
+    if (state.gbrain.available && typeof gbrain.recentUpdates === "function") {
+      try {
+        const r = await gbrain.recentUpdates(10);
+        if (r && !r.error && Array.isArray(r.items)) {
+          state.recentUpdates = r.items.map((item) => ({
+            id: item.id ?? null,
+            title: item.title ?? null,
+            type: item.type ?? null,
+            updatedAt: item.updatedAt ?? null,
+          }));
+        }
+      } catch (e) {
+        // leave state.recentUpdates = []
+      }
+    }
+
     return state;
   }
 
@@ -183,6 +245,10 @@ function createCortex(options = {}) {
     getMemory: (id) => gbrain.get(id),
     memoryStats: () => gbrain.stats(),
     getPage: (id) => gbrain.getPage(id),
+    // gbrain observability passthroughs (read-only; surfaced into getState too)
+    healthStats: () => gbrain.healthStats(),
+    obsidianHealth: () => gbrain.obsidianHealth(),
+    recentUpdates: (limit) => gbrain.recentUpdates(limit),
     // Gauges passthrough
     getGauges: () => gauges.getGauges(),
   };

@@ -988,6 +988,34 @@ function createFleetRoutes({
   }
 
   // -------------------------------------------------------------------
+  // Digests (read-only browser over persisted *.md fleet digests)
+  // -------------------------------------------------------------------
+
+  /**
+   * GET /api/fleet/digests           → { digests: [...] } (newest-first list)
+   * GET /api/fleet/digests/<name>    → { name, title, content, generatedAt }
+   *
+   * Read-only — digests are written by the digest scheduler (src/digest.js).
+   * The store applies the same defense-in-depth name validation + path
+   * containment as briefs, so a missing/foreign name maps to 404 via
+   * statusForError. Mirrors handleBriefs for style + path-safety.
+   */
+  async function handleDigests(req, res, method, segments) {
+    if (segments.length === 1 && method === "GET") {
+      json(res, 200, { digests: fleet.digests.list() });
+      return true;
+    }
+    if (segments.length !== 2) return false;
+    const name = segments[1];
+
+    if (method === "GET") {
+      json(res, 200, fleet.digests.read(name));
+      return true;
+    }
+    return false;
+  }
+
+  // -------------------------------------------------------------------
   // Evolution
   // -------------------------------------------------------------------
 
@@ -1116,19 +1144,39 @@ function createFleetRoutes({
   }
 
   /**
-   * GET /api/fleet/alerts?limit&type&node&severity&since[&history=1]
+   * GET /api/fleet/alerts?limit&type&node&severity&since&until[&history=1]
    * Default: in-memory ring buffer (newest first). history=1 reads the
    * persistent JSONL history from disk instead (limit capped at 500).
+   * `until` is an inclusive upper bound on ts (epoch ms or ISO string).
    *
    * GET /api/fleet/alerts/analytics[?days=14]
    * Read-only rollup of the persistent history (per-day counts, flap
    * cycles, top nodes/rules). days is clamped to 1..90.
+   *
+   * POST /api/fleet/alerts/clear → empty the ring + archive history.
+   * DELETE /api/fleet/alerts/<id> → dismiss one alert from the ring.
    */
-  function handleAlerts(res, method, segments, query) {
+  async function handleAlerts(req, res, method, segments, query) {
     if (segments.length === 2 && segments[1] === "analytics" && method === "GET") {
       const days = parseIntParam(query, "days", 14);
       if (days < 1 || days > 90) throw httpError(400, "days must be between 1 and 90");
       json(res, 200, fleet.alerts.analytics({ days }));
+      return true;
+    }
+    if (segments.length === 2 && segments[1] === "clear" && method === "POST") {
+      const user = guardMutation(req, res);
+      if (!user) return true;
+      const result = fleet.alerts.clear();
+      recordAudit(user, "alert.test", null, { op: "clear", cleared: result.cleared });
+      json(res, 200, { success: true, cleared: result.cleared });
+      return true;
+    }
+    if (segments.length === 2 && method === "DELETE") {
+      const user = guardMutation(req, res);
+      if (!user) return true;
+      const result = fleet.alerts.dismiss(segments[1]);
+      recordAudit(user, "alert.test", segments[1], { op: "dismiss", dismissed: result.dismissed });
+      json(res, 200, { success: true, dismissed: result.dismissed });
       return true;
     }
     if (segments.length !== 1 || method !== "GET") return false;
@@ -1138,6 +1186,7 @@ function createFleetRoutes({
     if (query.get("node")) filters.node = query.get("node");
     if (query.get("severity")) filters.severity = query.get("severity");
     if (query.get("since")) filters.since = query.get("since");
+    if (query.get("until")) filters.until = query.get("until");
     if (query.get("history") === "1") {
       json(res, 200, { alerts: fleet.alerts.query({ ...filters, limit }), source: "history" });
     } else {
@@ -1349,6 +1398,8 @@ function createFleetRoutes({
         return handleOrchestrate(req, res, method, segments, query);
       case "briefs":
         return handleBriefs(req, res, method, segments);
+      case "digests":
+        return handleDigests(req, res, method, segments);
       case "evolution":
         return handleEvolution(req, res, method, segments);
       case "cortex":
@@ -1356,7 +1407,7 @@ function createFleetRoutes({
       case "audit":
         return handleAudit(res, method, segments, query);
       case "alerts":
-        return handleAlerts(res, method, segments, query);
+        return handleAlerts(req, res, method, segments, query);
       case "settings":
         return handleSettings(req, res, method, segments);
       case "bulk":

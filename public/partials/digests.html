@@ -1,0 +1,188 @@
+<!-- Digests View Partial -->
+<div class="section" id="digests-view-section">
+  <style>
+    #digests-view-section [hidden] {
+      display: none !important;
+    }
+    #digests-view-section .digests-layout {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      gap: 14px;
+      margin-top: 16px;
+      min-height: 0;
+    }
+    /* Schedule chips (daily / weekly) */
+    #digests-view-section .digests-chip {
+      display: inline-block;
+      padding: 2px 9px;
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    #digests-view-section .digests-chip-daily {
+      background: rgba(var(--accent-2-rgb), 0.12);
+      border-color: rgba(var(--accent-2-rgb), 0.45);
+      color: var(--accent-2);
+    }
+    #digests-view-section .digests-chip-weekly {
+      background: rgba(var(--accent-rgb), 0.12);
+      border-color: rgba(var(--accent-rgb), 0.45);
+      color: var(--accent);
+    }
+    /* Detail panel */
+    #digests-view-section .digests-detail {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    #digests-view-section .digests-detail-loading {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+    /* Markdown preview (row detail panels) */
+    #digests-view-section .digests-preview {
+      flex: 1;
+      padding: 4px 2px;
+      overflow-y: auto;
+      font-size: 0.85rem;
+      line-height: 1.65;
+      color: var(--text);
+    }
+    #digests-view-section .digests-preview h1,
+    #digests-view-section .digests-preview h2,
+    #digests-view-section .digests-preview h3,
+    #digests-view-section .digests-preview h4,
+    #digests-view-section .digests-preview h5,
+    #digests-view-section .digests-preview h6 {
+      margin: 1.1em 0 0.45em;
+      color: var(--accent);
+      line-height: 1.3;
+    }
+    #digests-view-section .digests-preview h1:first-child,
+    #digests-view-section .digests-preview h2:first-child {
+      margin-top: 0;
+    }
+    #digests-view-section .digests-preview h1 {
+      font-size: 1.3rem;
+    }
+    #digests-view-section .digests-preview h2 {
+      font-size: 1.1rem;
+    }
+    #digests-view-section .digests-preview h3 {
+      font-size: 0.95rem;
+    }
+    #digests-view-section .digests-preview p {
+      margin: 0.55em 0;
+    }
+    #digests-view-section .digests-preview a {
+      color: var(--accent-2);
+    }
+    #digests-view-section .digests-preview code {
+      font-family: "SF Mono", "Fira Code", Consolas, monospace;
+      font-size: 0.78rem;
+      background: rgba(var(--accent-2-rgb), 0.1);
+      color: var(--accent-2);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    #digests-view-section .digests-preview pre {
+      margin: 0.8em 0;
+      padding: 12px 14px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow-x: auto;
+    }
+    #digests-view-section .digests-preview pre code {
+      background: none;
+      color: var(--text);
+      padding: 0;
+    }
+    #digests-view-section .digests-preview ul,
+    #digests-view-section .digests-preview ol {
+      margin: 0.55em 0;
+      padding-left: 1.6em;
+    }
+    #digests-view-section .digests-preview li {
+      margin: 0.25em 0;
+    }
+    #digests-view-section .digests-preview blockquote {
+      margin: 0.8em 0;
+      padding: 4px 14px;
+      border-left: 3px solid var(--accent);
+      background: rgba(var(--accent-rgb), 0.05);
+      color: var(--text-muted);
+    }
+    #digests-view-section .digests-preview blockquote p {
+      margin: 0.35em 0;
+    }
+    #digests-view-section .digests-preview hr {
+      margin: 1.2em 0;
+      border: none;
+      border-top: 1px solid var(--border);
+    }
+    /* Toasts */
+    #digests-view-section .digests-toasts {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 1000;
+    }
+    #digests-view-section .digests-toast {
+      padding: 10px 16px;
+      border-radius: 8px;
+      background: var(--card-bg);
+      border: 1px solid var(--accent);
+      color: var(--text);
+      font-size: 0.8rem;
+      max-width: 360px;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
+      animation: digests-toast-in 0.18s ease;
+    }
+    #digests-view-section .digests-toast.error {
+      border-color: var(--red);
+      color: var(--red);
+    }
+    @keyframes digests-toast-in {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+  </style>
+  <section class="view-panel">
+    <div class="view-header">
+      <div class="view-title">
+        <span class="view-icon">📰</span>
+        <span data-i18n="views.digests.title">Digests</span>
+      </div>
+      <div class="view-subtitle" data-i18n="views.digests.subtitle">
+        Auto-compiled daily and weekly digest reports of fleet activity
+      </div>
+    </div>
+    <div class="empty-state" id="digests-empty-state">
+      <div class="empty-state-icon">📰</div>
+      <div class="empty-state-title" data-i18n="views.digests.emptyTitle">No digests yet</div>
+      <p class="empty-state-text" data-i18n="views.digests.emptyText">
+        No digests yet — the fleet digest runs daily/weekly and will appear here.
+      </p>
+    </div>
+    <div class="digests-layout" id="digests-layout" hidden>
+      <!-- Detail list host (built by views/digests.js via the shared component) -->
+      <div id="digests-list"></div>
+    </div>
+    <div class="digests-toasts" id="digests-toasts"></div>
+  </section>
+</div>

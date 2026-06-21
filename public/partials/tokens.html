@@ -1,8 +1,13 @@
-<!-- Tokens & Cost View Partial -->
+<!-- Tokens, Usage & Cost View Partial -->
 <div class="section" id="tokens-view-section">
   <style>
     #tokens-view-section .tokens-view-error {
       color: var(--red);
+      font-size: 0.8rem;
+      margin-bottom: 8px;
+    }
+    #tokens-view-section .llm-auth-error {
+      color: #f59e0b;
       font-size: 0.8rem;
       margin-bottom: 8px;
     }
@@ -52,6 +57,16 @@
       text-transform: uppercase;
       letter-spacing: 0.04em;
     }
+    #tokens-view-section .cost-badge.subscription {
+      color: var(--green, #3fb950);
+      background: rgba(63, 185, 80, 0.12);
+      border: 1px solid rgba(63, 185, 80, 0.35);
+    }
+    #tokens-view-section .cost-badge.per-token {
+      color: var(--yellow, #ffb224);
+      background: rgba(255, 178, 36, 0.12);
+      border: 1px solid rgba(255, 178, 36, 0.35);
+    }
     #tokens-view-section .cost-badge.est {
       color: var(--yellow, #ffb224);
       background: rgba(255, 178, 36, 0.12);
@@ -75,25 +90,675 @@
       margin-top: 10px;
       line-height: 1.5;
     }
+    /* ---- Honest cost summary cards ---- */
+    #tokens-view-section .tokens-cost-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+    }
+    #tokens-view-section .tokens-cost-card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    #tokens-view-section .tokens-cost-card.actual {
+      border-color: rgba(63, 185, 80, 0.45);
+    }
+    #tokens-view-section .tokens-cost-card.hypothetical {
+      border-color: rgba(255, 178, 36, 0.45);
+      border-style: dashed;
+    }
+    #tokens-view-section .tcc-label {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    #tokens-view-section .tcc-value {
+      font-size: 1.35rem;
+      font-weight: 700;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    #tokens-view-section .tokens-cost-card.actual .tcc-value {
+      color: var(--green, #3fb950);
+    }
+    #tokens-view-section .tokens-cost-card.hypothetical .tcc-value {
+      color: var(--yellow, #ffb224);
+    }
+    #tokens-view-section .tcc-sub {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+    }
+    #tokens-view-section .tokens-cost-warning {
+      font-size: 0.74rem;
+      color: var(--text-muted);
+      margin-top: 12px;
+      padding: 8px 10px;
+      border-left: 3px solid rgba(255, 178, 36, 0.6);
+      background: rgba(255, 178, 36, 0.06);
+      border-radius: 0 6px 6px 0;
+      line-height: 1.5;
+    }
+    /* ---- Folded-in LLM fuel-gauge sections (scoped) ---- */
+    #tokens-view-section .lvx-panel {
+      margin-top: 0;
+    }
+    #tokens-view-section .lvx-status {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      padding: 6px 0;
+    }
+    #tokens-view-section .lvx-status.warn {
+      color: #f59e0b;
+    }
+    #tokens-view-section .lvx-badge {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 2px 8px;
+      border-radius: 10px;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+    #tokens-view-section .lvx-badge.stale {
+      background: rgba(245, 158, 11, 0.15);
+      border: 1px solid rgba(245, 158, 11, 0.5);
+      color: #f59e0b;
+    }
+    #tokens-view-section .lvx-badge.live {
+      background: rgba(63, 185, 80, 0.12);
+      border: 1px solid rgba(63, 185, 80, 0.45);
+      color: var(--green, #3fb950);
+    }
+    #tokens-view-section .lvx-rings {
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+      align-items: stretch;
+    }
+    #tokens-view-section .lvx-ring-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      padding: 12px 18px;
+      min-width: 140px;
+    }
+    #tokens-view-section .lvx-ring {
+      --pct: 0;
+      --ring-color: var(--green, #3fb950);
+      width: 88px;
+      height: 88px;
+      border-radius: 50%;
+      background: conic-gradient(
+        var(--ring-color) calc(var(--pct) * 1%),
+        rgba(128, 128, 128, 0.18) 0
+      );
+      display: grid;
+      place-items: center;
+    }
+    #tokens-view-section .lvx-ring.warn {
+      --ring-color: #f59e0b;
+    }
+    #tokens-view-section .lvx-ring.crit {
+      --ring-color: var(--red, #f85149);
+    }
+    #tokens-view-section .lvx-ring-inner {
+      width: 66px;
+      height: 66px;
+      border-radius: 50%;
+      background: var(--card-bg, var(--bg));
+      display: grid;
+      place-items: center;
+      font-size: 1.05rem;
+      font-weight: 700;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    #tokens-view-section .lvx-ring-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      text-align: center;
+    }
+    #tokens-view-section .lvx-ring-reset {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    #tokens-view-section .lvx-token-strip {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    #tokens-view-section .lvx-token-chip {
+      flex: 1 1 120px;
+      min-width: 120px;
+      padding: 8px 12px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      text-align: center;
+    }
+    #tokens-view-section .lvx-token-chip .chip-value {
+      font-size: 0.95rem;
+      font-weight: 700;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      display: block;
+    }
+    #tokens-view-section .lvx-token-chip .chip-label {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    #tokens-view-section .lvx-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 0.78rem;
+    }
+    #tokens-view-section .lvx-table th {
+      text-align: left;
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      padding: 4px 10px 4px 0;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+    }
+    #tokens-view-section .lvx-table td {
+      padding: 5px 10px 5px 0;
+      border-bottom: 1px solid var(--border);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--text);
+    }
+    #tokens-view-section .lvx-table td:first-child {
+      font-family: inherit;
+      color: var(--text-muted);
+    }
+    #tokens-view-section .lvx-note {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin-top: 8px;
+      font-style: italic;
+    }
+    #tokens-view-section .lvx-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 12px;
+      margin-top: 10px;
+    }
+    #tokens-view-section .lvx-empty {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      padding: 10px 0;
+    }
+    #tokens-view-section .lvx-flex-split {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      align-items: flex-start;
+    }
+    #tokens-view-section .lvx-flex-split > .vital-card {
+      flex: 1 1 240px;
+    }
   </style>
   <section class="view-panel">
     <div class="view-header">
       <div class="view-title">
         <span class="view-icon">🎫</span>
-        <span data-i18n="views.tokens.title">Tokens &amp; Cost</span>
+        <span data-i18n="views.tokens.title">Tokens, Usage &amp; Cost</span>
       </div>
       <div class="view-subtitle" data-i18n="views.tokens.subtitle">
-        Token totals across 24h / 3d / 7d windows with a per-model breakdown
+        Honest subscription-aware cost, LLM fuel gauges, and per-model token usage in one place
       </div>
     </div>
 
     <div class="tokens-view-error" id="tokens-view-error" hidden></div>
+    <div class="llm-auth-error" id="tokens-view-auth" hidden>
+      ⚠️ Auth error — run <code>claude setup-token</code> and refresh
+    </div>
 
+    <!-- ============ Honest cost summary ============ -->
+    <div class="tokens-section">
+      <div class="tokens-toolbar">
+        <div class="tokens-section-title" style="margin-bottom: 0">
+          <span data-i18n="views.tokens.costSummaryTitle">Cost summary</span>
+        </div>
+        <div class="filter-group" id="tokens-cost-window-tabs" style="margin-left: auto">
+          <span class="filter-label" data-i18n="views.tokens.windowLabel">Window:</span>
+          <button class="filter-btn active" data-window="24h" type="button">24h</button>
+          <button class="filter-btn" data-window="3d" type="button">3d</button>
+          <button class="filter-btn" data-window="7d" type="button">7d</button>
+        </div>
+      </div>
+      <div class="tokens-cost-cards">
+        <div class="tokens-cost-card actual">
+          <span class="tcc-label" data-i18n="views.tokens.marginalLabel"
+            >Actual marginal spend</span
+          >
+          <span class="tcc-value" id="tokens-marginal">$0.00</span>
+          <span class="tcc-sub" id="tokens-marginal-sub" data-i18n="views.tokens.marginalSub"
+            >Real incremental $ — billed per token outside your subscription</span
+          >
+        </div>
+        <div class="tokens-cost-card">
+          <span class="tcc-label" data-i18n="views.tokens.planLabel">Flat plan cost</span>
+          <span class="tcc-value" id="tokens-plan">$0.00</span>
+          <span class="tcc-sub" id="tokens-plan-name">—</span>
+        </div>
+        <div class="tokens-cost-card actual">
+          <span class="tcc-label" data-i18n="views.tokens.actualMonthlyLabel"
+            >Actual monthly</span
+          >
+          <span class="tcc-value" id="tokens-actual-monthly">$0.00</span>
+          <span class="tcc-sub" data-i18n="views.tokens.actualMonthlySub"
+            >Plan + marginal — what you actually pay</span
+          >
+        </div>
+        <div class="tokens-cost-card hypothetical">
+          <span class="tcc-label" data-i18n="views.tokens.hypotheticalLabel"
+            >If billed per-token (hypothetical)</span
+          >
+          <span class="tcc-value" id="tokens-hypothetical">$0.00</span>
+          <span class="tcc-sub" data-i18n="views.tokens.hypotheticalSub"
+            >Projection only — NOT money you are spending</span
+          >
+        </div>
+      </div>
+      <p class="tokens-cost-warning" data-i18n="views.tokens.hypotheticalWarning">
+        The "if billed per-token" figure is a hypothetical estimate of what this usage <em>would</em>
+        cost at public per-token rates. Because usage runs through OAuth / subscription plans, you are
+        <strong>not</strong> paying that amount. Your real outlay is the flat plan cost plus any
+        marginal spend shown above.
+      </p>
+    </div>
+
+    <!-- ============ LLM fuel gauges (folded from LLM Usage) ============ -->
+    <div class="tokens-section">
+      <div class="vitals-panel" style="margin: 0; border: none; padding: 0; background: none">
+        <div class="vitals-header">
+          <div class="vitals-title">
+            ⛽ <span data-i18n="views.tokens.gauges">LLM Fuel Gauges</span>
+            <span class="vitals-hostname" id="lv-sync-time">-</span>
+          </div>
+          <div class="vitals-uptime">Routing: <span id="lv-routing-summary">-</span></div>
+        </div>
+        <div class="vitals-grid">
+          <!-- Claude Session -->
+          <div class="vital-card">
+            <div class="vital-header">
+              <span class="vital-label">🔮 Session Limit</span>
+              <span class="vital-value" id="lv-claude-session-pct">-%</span>
+            </div>
+            <div class="vital-bar">
+              <div class="vital-bar-fill purple" id="lv-claude-session-bar" style="width: 0%"></div>
+            </div>
+            <div class="vital-detail">
+              <div class="vital-detail-item">
+                <span class="vital-detail-value" id="lv-claude-session-remaining">-%</span>
+                <span class="vital-detail-label">remaining</span>
+              </div>
+              <div class="vital-detail-item">
+                <span class="vital-detail-value" id="lv-claude-session-reset">-</span>
+                <span class="vital-detail-label">resets in</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Claude Weekly -->
+          <div class="vital-card">
+            <div class="vital-header">
+              <span class="vital-label">📅 Weekly (All Models)</span>
+              <span class="vital-value" id="lv-claude-weekly-pct">-%</span>
+            </div>
+            <div class="vital-bar">
+              <div class="vital-bar-fill blue" id="lv-claude-weekly-bar" style="width: 0%"></div>
+            </div>
+            <div class="vital-detail">
+              <div class="vital-detail-item">
+                <span class="vital-detail-value" id="lv-claude-weekly-remaining">-%</span>
+                <span class="vital-detail-label">remaining</span>
+              </div>
+              <div class="vital-detail-item">
+                <span class="vital-detail-value" id="lv-claude-weekly-reset">-</span>
+                <span class="vital-detail-label">resets in</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sonnet Weekly -->
+          <div class="vital-card">
+            <div class="vital-header">
+              <span class="vital-label">✨ Sonnet Weekly</span>
+              <span class="vital-value" id="lv-sonnet-weekly-pct">-%</span>
+            </div>
+            <div class="vital-bar">
+              <div class="vital-bar-fill green" id="lv-sonnet-weekly-bar" style="width: 0%"></div>
+            </div>
+            <div class="vital-detail">
+              <div class="vital-detail-item">
+                <span class="vital-detail-value" id="lv-sonnet-weekly-remaining">-%</span>
+                <span class="vital-detail-label">remaining</span>
+              </div>
+              <div class="vital-detail-item">
+                <span class="vital-detail-value" id="lv-sonnet-weekly-reset">-</span>
+                <span class="vital-detail-label">resets</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Codex -->
+          <div class="vital-card">
+            <div class="vital-header">
+              <span class="vital-label">⚡ Codex (OpenAI)</span>
+              <span class="vital-value" id="lv-codex-5h-pct">-%</span>
+            </div>
+            <div class="vital-bar">
+              <div class="vital-bar-fill blue" id="lv-codex-5h-bar" style="width: 0%"></div>
+            </div>
+            <div class="vital-detail">
+              <div class="vital-detail-item">
+                <span class="vital-detail-value" id="lv-codex-day-pct">-%</span>
+                <span class="vital-detail-label">daily used</span>
+              </div>
+              <div class="vital-detail-item">
+                <span class="vital-detail-value" id="lv-codex-tasks">-</span>
+                <span class="vital-detail-label">tasks today</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Task Routing -->
+          <div class="vital-card">
+            <div class="vital-header">
+              <span class="vital-label">🦞 Task Routing</span>
+              <span class="vital-value" id="lv-total-routed">-</span>
+            </div>
+            <div class="vital-detail" style="margin-top: 12px">
+              <div class="vital-detail-item">
+                <span class="vital-detail-value" id="lv-claude-tasks">-</span>
+                <span class="vital-detail-label">Claude</span>
+              </div>
+              <div class="vital-detail-item">
+                <span class="vital-detail-value" id="lv-codex-task-count">-</span>
+                <span class="vital-detail-label">Codex</span>
+              </div>
+            </div>
+            <div class="vital-detail" style="margin-top: 8px">
+              <div class="vital-detail-item">
+                <span class="vital-detail-value" id="lv-llama-tasks">-</span>
+                <span class="vital-detail-label">🦙 Llama</span>
+              </div>
+              <div class="vital-detail-item">
+                <span class="vital-detail-value" id="lv-qwen-tasks">-</span>
+                <span class="vital-detail-label">🐱 Qwen</span>
+              </div>
+            </div>
+            <div
+              style="margin-top: 8px; text-align: center"
+              title="Average routing latency (classification + execution)"
+            >
+              <span class="pressure-indicator" id="lv-routing-latency">Avg latency: -</span>
+            </div>
+            <div style="margin-top: 6px; text-align: center">
+              <span class="pressure-indicator" id="lv-codex-floor">Codex ≥20%: -</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ Budgets (burn-down gauges) ============ -->
+    <div class="vitals-panel lvx-panel" id="lvx-bg-panel" hidden>
+      <div class="vitals-header">
+        <div class="vitals-title">💰 <span>Budgets</span></div>
+      </div>
+      <div class="lvx-cards" id="lvx-bg-gauges"></div>
+    </div>
+
+    <!-- ============ Claude Max Subscription (headroom) ============ -->
+    <div class="vitals-panel lvx-panel" id="lvx-sub-panel" hidden>
+      <div class="vitals-header">
+        <div class="vitals-title">
+          👑 <span>Claude Max Subscription</span>
+          <span class="lvx-badge stale" id="lvx-sub-stale" hidden>STALE</span>
+          <span class="vitals-hostname" id="lvx-sub-polled">-</span>
+        </div>
+      </div>
+      <div class="lvx-status warn" id="lvx-sub-status" hidden></div>
+      <div class="lvx-flex-split">
+        <div class="vital-card lvx-rings" style="flex: 2 1 420px; justify-content: space-around">
+          <div class="lvx-ring-card">
+            <div class="lvx-ring" id="lvx-sub-5h-ring">
+              <div class="lvx-ring-inner" id="lvx-sub-5h-pct">-%</div>
+            </div>
+            <div class="lvx-ring-label">5-hour window</div>
+            <div class="lvx-ring-reset" id="lvx-sub-5h-reset">-</div>
+          </div>
+          <div class="lvx-ring-card">
+            <div class="lvx-ring" id="lvx-sub-7d-ring">
+              <div class="lvx-ring-inner" id="lvx-sub-7d-pct">-%</div>
+            </div>
+            <div class="lvx-ring-label">7-day (all)</div>
+            <div class="lvx-ring-reset" id="lvx-sub-7d-reset">-</div>
+          </div>
+          <div class="lvx-ring-card">
+            <div class="lvx-ring" id="lvx-sub-sonnet-ring">
+              <div class="lvx-ring-inner" id="lvx-sub-sonnet-pct">-%</div>
+            </div>
+            <div class="lvx-ring-label">7-day Sonnet</div>
+            <div class="lvx-ring-reset" id="lvx-sub-sonnet-reset">-</div>
+          </div>
+        </div>
+        <div class="vital-card" id="lvx-sub-extra-card">
+          <div class="vital-header">
+            <span class="vital-label">💳 <span>Extra usage</span></span>
+            <span class="vital-value" id="lvx-sub-extra-used">-</span>
+          </div>
+          <div class="vital-bar">
+            <div class="vital-bar-fill green" id="lvx-sub-extra-bar" style="width: 0%"></div>
+          </div>
+          <div class="vital-detail">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-sub-extra-limit">-</span>
+              <span class="vital-detail-label">monthly limit</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-sub-extra-pct">-</span>
+              <span class="vital-detail-label">used</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="lvx-token-strip" id="lvx-sub-tokens">
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-sub-tok-input">-</span>
+          <span class="chip-label">Input</span>
+        </div>
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-sub-tok-output">-</span>
+          <span class="chip-label">Output</span>
+        </div>
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-sub-tok-cacher">-</span>
+          <span class="chip-label">Cache reads</span>
+        </div>
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-sub-tok-cachew">-</span>
+          <span class="chip-label">Cache writes</span>
+        </div>
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-sub-tok-total">-</span>
+          <span class="chip-label">Total (raw)</span>
+        </div>
+      </div>
+      <table class="lvx-table" id="lvx-sub-model-table" hidden>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Input</th>
+            <th>Output</th>
+            <th>Cache reads</th>
+            <th>Cache writes</th>
+          </tr>
+        </thead>
+        <tbody id="lvx-sub-models"></tbody>
+      </table>
+    </div>
+
+    <!-- ============ Terminal Sessions (Claude Code) ============ -->
+    <div class="vitals-panel lvx-panel" id="lvx-cc-panel" hidden>
+      <div class="vitals-header">
+        <div class="vitals-title">
+          💻
+          <span>Terminal Sessions (Claude Code)</span>
+          <span class="lvx-badge live" id="lvx-cc-live" hidden></span>
+          <span class="vitals-hostname" id="lvx-cc-ttys"></span>
+        </div>
+      </div>
+      <div class="lvx-status warn" id="lvx-cc-status" hidden></div>
+      <div class="lvx-cards">
+        <div class="vital-card">
+          <div class="vital-header">
+            <span class="vital-label">🕐 24h</span>
+            <span class="vital-value" id="lvx-cc-h24-cost">-</span>
+          </div>
+          <div class="vital-detail">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-cc-h24-tokens">-</span>
+              <span class="vital-detail-label">tokens</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-cc-h24-req">-</span>
+              <span class="vital-detail-label">requests</span>
+            </div>
+          </div>
+        </div>
+        <div class="vital-card">
+          <div class="vital-header">
+            <span class="vital-label">📆 3d</span>
+            <span class="vital-value" id="lvx-cc-d3-cost">-</span>
+          </div>
+          <div class="vital-detail">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-cc-d3-tokens">-</span>
+              <span class="vital-detail-label">tokens</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-cc-d3-req">-</span>
+              <span class="vital-detail-label">requests</span>
+            </div>
+          </div>
+        </div>
+        <div class="vital-card">
+          <div class="vital-header">
+            <span class="vital-label">🗓️ 7d</span>
+            <span class="vital-value" id="lvx-cc-d7-cost">-</span>
+          </div>
+          <div class="vital-detail">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-cc-d7-tokens">-</span>
+              <span class="vital-detail-label">tokens</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-cc-d7-req">-</span>
+              <span class="vital-detail-label">requests</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="lvx-note">
+        Cost figures are estimates priced at Opus rates — actual subscription usage is covered by
+        the Claude Max plan.
+      </div>
+    </div>
+
+    <!-- ============ Codex (activity only) ============ -->
+    <div class="vitals-panel lvx-panel" id="lvx-cx-panel" hidden>
+      <div class="vitals-header">
+        <div class="vitals-title">
+          ⚡ <span>Codex Activity</span>
+          <span class="lvx-badge live" id="lvx-cx-live" hidden></span>
+        </div>
+      </div>
+      <div class="lvx-status warn" id="lvx-cx-status" hidden></div>
+      <div class="lvx-token-strip">
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-cx-procs">-</span>
+          <span class="chip-label">Live processes</span>
+        </div>
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-cx-entries">-</span>
+          <span class="chip-label">Activity entries</span>
+        </div>
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-cx-sessions">-</span>
+          <span class="chip-label">Sessions</span>
+        </div>
+        <div class="lvx-token-chip">
+          <span class="chip-value" id="lvx-cx-last">-</span>
+          <span class="chip-label">Last activity</span>
+        </div>
+      </div>
+      <div class="lvx-note">
+        Token counts are not available from Codex activity logs — counts reflect prompts/sessions
+        only.
+      </div>
+    </div>
+
+    <!-- ============ Nine Router ============ -->
+    <div class="vitals-panel lvx-panel" id="lvx-nr-panel" hidden>
+      <div class="vitals-header">
+        <div class="vitals-title">
+          🔀 <span>Nine Router</span>
+          <span class="vitals-hostname" id="lvx-nr-totals"></span>
+        </div>
+      </div>
+      <div class="lvx-status warn" id="lvx-nr-status" hidden></div>
+      <div class="lvx-empty" id="lvx-nr-empty" hidden></div>
+      <table class="lvx-table" id="lvx-nr-table" hidden>
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Requests</th>
+            <th>Tokens</th>
+            <th>Cost</th>
+          </tr>
+        </thead>
+        <tbody id="lvx-nr-body"></tbody>
+      </table>
+    </div>
+
+    <!-- ============ OpenRouter ============ -->
+    <div class="vitals-panel lvx-panel" id="lvx-or-panel" hidden>
+      <div class="vitals-header">
+        <div class="vitals-title">🌐 <span>OpenRouter</span></div>
+      </div>
+      <div class="lvx-status warn" id="lvx-or-status" hidden></div>
+      <div class="lvx-token-strip" id="lvx-or-body" hidden></div>
+    </div>
+
+    <!-- Additional usage sources (future adapters) render here from whatever
+         /api/llm-usage exposes; sources with dedicated sections above are
+         excluded to avoid double-rendering. -->
+    <div class="llm-extra-grid" id="lv-extra-sources"></div>
+
+    <!-- ============ Token windows ============ -->
     <div class="tokens-section">
       <div class="tokens-section-title" data-i18n="views.tokens.windowsTitle">Windows</div>
       <div id="tokens-windows-list"></div>
     </div>
 
+    <!-- ============ Per-model breakdown ============ -->
     <div class="tokens-section">
       <div class="tokens-toolbar">
         <div class="filter-group" id="tokens-window-tabs">
@@ -129,10 +794,12 @@
     </div>
 
     <p class="tokens-honesty-note" data-i18n="views.tokens.honestyNote">
-      Costs marked EST are computed locally from token counts and public per-model rates; REPORTED
-      costs come straight from provider usage records. Cache reads are billed at a steep discount
-      and cache writes at a premium, so they are shown separately and never lumped into raw
-      input/output totals.
+      Per-model rows are badged "subscription" when their marginal (real) cost is $0 because the
+      usage is covered by an OAuth / subscription plan, or "per-token" when billed incrementally.
+      The hypothetical column shows what each model's tokens would cost at public per-token rates —
+      it is a projection, not money spent. Cache reads are billed at a steep discount and cache
+      writes at a premium, so they are shown separately and never lumped into raw input/output
+      totals.
     </p>
   </section>
 </div>

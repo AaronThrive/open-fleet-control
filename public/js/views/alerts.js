@@ -25,6 +25,14 @@ const SSE_REFRESH_DEBOUNCE_MS = 400;
 const SSE_URL = "/api/events";
 const NODE_RULES = ["nodeOffline", "nodeUnreachable"];
 const HOUR_MS = 3600000;
+const LAST_READ_KEY = "ofc-alerts-lastread";
+
+// Source badges: small per-origin tag shown on each row.
+const SOURCE_BADGES = {
+  ntfy: { icon: "📨", label: "ntfy" },
+  cron: { icon: "⏰", label: "cron" },
+  ofc: { icon: "🔔", label: "ofc" },
+};
 
 // Module-scope state (the module is cached by the browser; only init()
 // re-runs on each visit).
@@ -33,6 +41,7 @@ let sseDebounceTimer = null;
 let eventSource = null; // module-level singleton, survives revisits
 let requestSeq = 0;
 let activeEls = null; // els of the current visit (used by SSE handler)
+let lastAlerts = []; // most recent server payload, kept for client-side re-filter
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -54,14 +63,56 @@ function relativeTime(tsMs) {
   return new Date(tsMs).toLocaleDateString();
 }
 
+/** Absolute local date+time like "2026-06-20 14:32" (zero-padded, 24h). */
+function fmtAbsolute(ms) {
+  if (!Number.isFinite(ms)) return "—";
+  const d = new Date(ms);
+  const pad = (n) => String(n).padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  );
+}
+
+/** Epoch ms of the last "mark all read" action (0 if never / unparseable). */
+function getLastRead() {
+  try {
+    const raw = window.localStorage.getItem(LAST_READ_KEY);
+    const ms = Number(raw);
+    return Number.isFinite(ms) && ms > 0 ? ms : 0;
+  } catch (error) {
+    return 0; // private mode / storage disabled — treat everything as read
+  }
+}
+
+/** Persist "mark all read" to now; best-effort (storage may be unavailable). */
+function setLastReadNow() {
+  try {
+    window.localStorage.setItem(LAST_READ_KEY, String(Date.now()));
+  } catch (error) {
+    // No persistence available; the toolbar count just won't clear.
+  }
+}
+
 function buildQuery(els) {
   const params = new URLSearchParams();
   if (els.severity.value) params.set("severity", els.severity.value);
   if (els.type.value) params.set("type", els.type.value);
   const node = els.node.value.trim();
   if (node) params.set("node", node);
+  // Date window: local-date inputs → epoch ms in the user's own timezone, so
+  // the server filters `ts` without timezone guesswork. `until` is end-of-day
+  // so the picked day is inclusive (mirrors the flight-recorder pattern).
+  if (els.since && els.since.value) {
+    const ms = new Date(`${els.since.value}T00:00:00`).getTime();
+    if (Number.isFinite(ms)) params.set("since", String(ms));
+  }
+  if (els.until && els.until.value) {
+    const ms = new Date(`${els.until.value}T23:59:59.999`).getTime();
+    if (Number.isFinite(ms)) params.set("until", String(ms));
+  }
   params.set("limit", els.limit.value || "100");
-  if (els.source.value === "history") params.set("history", "1");
+  if (els.dataSource.value === "history") params.set("history", "1");
   return params.toString();
 }
 
@@ -90,14 +141,25 @@ async function fetchJson(url, options = {}) {
 /* Rendering (DOM-built, textContent only — XSS-safe)                  */
 /* ------------------------------------------------------------------ */
 
-function buildRow(els, alert) {
+function buildRow(els, alert, lastRead) {
   const row = document.createElement("div");
   row.className = "alerts-row";
 
+  // Unread = fired after the last "mark all read" click (client-side only).
+  const isUnread = Number.isFinite(alert.ts) && alert.ts > lastRead;
+  if (isUnread) row.classList.add("alerts-row-unread");
+
   const time = document.createElement("span");
   time.className = "alerts-time";
-  time.textContent = relativeTime(alert.ts);
-  if (Number.isFinite(alert.ts)) time.title = new Date(alert.ts).toLocaleString();
+  // Primary display is the absolute local timestamp; relative is the hover.
+  time.textContent = fmtAbsolute(alert.ts);
+  if (Number.isFinite(alert.ts)) time.title = relativeTime(alert.ts);
+  if (isUnread) {
+    const dot = document.createElement("span");
+    dot.className = "alerts-unread-dot";
+    dot.setAttribute("aria-hidden", "true");
+    time.prepend(dot);
+  }
 
   const severityCell = document.createElement("span");
   const severity = document.createElement("span");
@@ -124,8 +186,21 @@ function buildRow(els, alert) {
 
   const message = document.createElement("span");
   message.className = "alerts-message";
-  message.textContent = alert.message || "";
-  message.title = alert.message || "";
+  // Source badge precedes the message text (e.g. "📨 ntfy  message…").
+  const sourceKey = String(alert.source || "").toLowerCase();
+  const badgeInfo = SOURCE_BADGES[sourceKey];
+  if (badgeInfo) {
+    const badge = document.createElement("span");
+    badge.className = `alerts-source-badge alerts-source-${sourceKey}`;
+    badge.textContent = `${badgeInfo.icon} ${badgeInfo.label}`;
+    badge.title = t("views.alerts.sourceTag", { source: badgeInfo.label }, "Source: {source}");
+    message.appendChild(badge);
+  }
+  const msgText = document.createElement("span");
+  msgText.className = "alerts-message-text";
+  msgText.textContent = alert.message || "";
+  msgText.title = alert.message || "";
+  message.appendChild(msgText);
 
   const actions = document.createElement("span");
   actions.className = "alerts-row-actions";
@@ -142,19 +217,54 @@ function buildRow(els, alert) {
       actions.appendChild(btn);
     }
   }
+  // Per-row dismiss (×) — only when the record carries a stable id.
+  if (alert.id) {
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "alerts-dismiss-btn";
+    dismiss.textContent = "×";
+    dismiss.title = t("views.alerts.dismiss", {}, "Dismiss this alert");
+    dismiss.setAttribute("aria-label", t("views.alerts.dismiss", {}, "Dismiss this alert"));
+    dismiss.addEventListener("click", () => dismissAlert(els, alert.id, row));
+    actions.appendChild(dismiss);
+  }
 
   row.append(time, severityCell, type, target, message, actions);
   return row;
 }
 
+/** Apply the current source-filter chip selection client-side (no server hit). */
+function applySourceFilter(els, alerts) {
+  const selected = els.sourceFilter.value;
+  if (!selected || selected === "all") return alerts;
+  return alerts.filter((a) => String(a.source || "").toLowerCase() === selected);
+}
+
+/** Update the toolbar unread count + Mark-all-read button state. */
+function renderUnreadCount(els, alerts) {
+  const lastRead = getLastRead();
+  const unread = alerts.reduce(
+    (n, a) => (Number.isFinite(a.ts) && a.ts > lastRead ? n + 1 : n),
+    0,
+  );
+  els.unreadCount.textContent =
+    unread > 0 ? t("views.alerts.unreadCount", { n: unread }, "{n} unread") : "";
+  els.unreadCount.hidden = unread === 0;
+  els.markReadBtn.disabled = unread === 0;
+}
+
 function render(els, alerts) {
-  els.rows.replaceChildren(...alerts.map((alert) => buildRow(els, alert)));
+  lastAlerts = alerts; // cache for client-side re-filter (source chip changes)
+  const filtered = applySourceFilter(els, alerts);
+  const lastRead = getLastRead();
+  els.rows.replaceChildren(...filtered.map((alert) => buildRow(els, alert, lastRead)));
   els.countLine.textContent =
-    alerts.length === 1
-      ? t("views.alerts.countOne", { n: alerts.length }, "{n} alert shown")
-      : t("views.alerts.countMany", { n: alerts.length }, "{n} alerts shown");
-  els.table.hidden = alerts.length === 0;
-  els.emptyState.style.display = alerts.length === 0 ? "" : "none";
+    filtered.length === 1
+      ? t("views.alerts.countOne", { n: filtered.length }, "{n} alert shown")
+      : t("views.alerts.countMany", { n: filtered.length }, "{n} alerts shown");
+  els.table.hidden = filtered.length === 0;
+  els.emptyState.style.display = filtered.length === 0 ? "" : "none";
+  renderUnreadCount(els, alerts);
 }
 
 /** Human chip label for one mute entry, e.g. "nodeOffline @ hermes-1 — until 14:00". */
@@ -289,6 +399,83 @@ async function reEnableNodeRules(els) {
   }
   if (Object.keys(patch).length === 0) return;
   await patchSettings(els, { alerts: { rules: patch } });
+}
+
+/* ------------------------------------------------------------------ */
+/* Management actions (read state + clear + dismiss)                   */
+/* ------------------------------------------------------------------ */
+
+/** Mark everything read client-side, then restyle rows from the cache. */
+function markAllRead(els) {
+  setLastReadNow();
+  render(els, lastAlerts); // re-render from cache: clears bold/dot + count
+}
+
+/** Clear all alerts server-side (confirmed), then reload from scratch. */
+async function clearAllAlerts(els) {
+  const confirmMsg = t(
+    "views.alerts.clearConfirm",
+    {},
+    "Clear all alerts? This permanently removes the alert history.",
+  );
+  if (typeof window.confirm === "function" && !window.confirm(confirmMsg)) return;
+  try {
+    const { ok, payload } = await fetchJson("/api/fleet/alerts/clear", { method: "POST" });
+    if (!els.rows.isConnected) return;
+    if (!ok || !payload.ok) {
+      showError(
+        els,
+        t(
+          "views.alerts.clearFailed",
+          { message: payload.error || "unknown error" },
+          "Could not clear alerts: {message}",
+        ),
+      );
+      return;
+    }
+    clearError(els);
+    load(els);
+  } catch (error) {
+    showError(
+      els,
+      t("views.alerts.networkError", {}, "Could not reach the alerts API — is the server up?"),
+    );
+  }
+}
+
+/** Dismiss one alert server-side, then drop its row without a full reload. */
+async function dismissAlert(els, id, rowEl) {
+  try {
+    const { ok, payload } = await fetchJson(`/api/fleet/alerts/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    if (!els.rows.isConnected) return;
+    if (!ok || !payload.ok) {
+      showError(
+        els,
+        t(
+          "views.alerts.dismissFailed",
+          { message: payload.error || "unknown error" },
+          "Could not dismiss alert: {message}",
+        ),
+      );
+      return;
+    }
+    clearError(els);
+    // Drop from the cache too, so source-chip re-filters stay consistent.
+    lastAlerts = lastAlerts.filter((a) => a.id !== id);
+    if (rowEl && rowEl.isConnected) rowEl.remove();
+    renderUnreadCount(els, lastAlerts);
+    if (lastAlerts.length === 0) {
+      els.table.hidden = true;
+      els.emptyState.style.display = "";
+    }
+  } catch (error) {
+    showError(
+      els,
+      t("views.alerts.networkError", {}, "Could not reach the alerts API — is the server up?"),
+    );
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -484,9 +671,15 @@ export function init(container) {
     severity: container.querySelector("#alerts-filter-severity"),
     type: container.querySelector("#alerts-filter-type"),
     node: container.querySelector("#alerts-filter-node"),
-    source: container.querySelector("#alerts-filter-source"),
+    since: container.querySelector("#alerts-filter-since"),
+    until: container.querySelector("#alerts-filter-until"),
+    sourceFilter: container.querySelector("#alerts-filter-source-origin"),
+    dataSource: container.querySelector("#alerts-filter-source"),
     limit: container.querySelector("#alerts-filter-limit"),
     refreshBtn: container.querySelector("#alerts-refresh-btn"),
+    markReadBtn: container.querySelector("#alerts-markread-btn"),
+    clearBtn: container.querySelector("#alerts-clear-btn"),
+    unreadCount: container.querySelector("#alerts-unread-count"),
     emptyRefreshBtn: container.querySelector("#alerts-empty-refresh"),
     countLine: container.querySelector("#alerts-count-line"),
     liveBadge: container.querySelector("#alerts-live-badge"),
@@ -521,9 +714,12 @@ export function init(container) {
   activeEls = els;
 
   const reload = () => load(els);
-  for (const el of [els.severity, els.type, els.source, els.limit]) {
+  // These re-query the server (changing the result set).
+  for (const el of [els.severity, els.type, els.dataSource, els.since, els.until, els.limit]) {
     el.addEventListener("change", reload);
   }
+  // Source-origin chip filters the already-loaded set client-side.
+  els.sourceFilter.addEventListener("change", () => render(els, lastAlerts));
   let nodeDebounce = null;
   els.node.addEventListener("input", () => {
     if (nodeDebounce) clearTimeout(nodeDebounce);
@@ -534,6 +730,8 @@ export function init(container) {
     loadSettings(els);
     loadAnalytics(els);
   });
+  els.markReadBtn.addEventListener("click", () => markAllRead(els));
+  els.clearBtn.addEventListener("click", () => clearAllAlerts(els));
   els.emptyRefreshBtn.addEventListener("click", reload);
   els.reEnableBtn.addEventListener("click", () => reEnableNodeRules(els));
 

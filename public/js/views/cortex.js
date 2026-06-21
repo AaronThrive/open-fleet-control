@@ -75,6 +75,25 @@ function formatWhen(value) {
   });
 }
 
+/**
+ * Absolute local "Jun 1, 2026, 21:04" for an ISO/sqlite/epoch timestamp;
+ * falls back to the raw string when unparseable, "" when empty. Used by the
+ * health / mirror / recent-updates panels where the user wants an exact
+ * point in time, not a relative "X ago".
+ */
+function formatAbsolute(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const ms = toEpochMs(value);
+  if (ms === null) return String(value);
+  return new Date(ms).toLocaleString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 /** Coerce an ISO/sqlite/epoch timestamp to epoch-ms (or null). */
 function toEpochMs(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -623,6 +642,346 @@ function setupMemoryBrowser(root, memoryState) {
 }
 
 /* ------------------------------------------------------------------ */
+/* gbrain health badge + Obsidian mirror + recent-updates feed         */
+/* ------------------------------------------------------------------ */
+
+/** Format a "embedded / chunks" pair as "1573/1573 embedded". */
+function embeddedText(embedded, chunks) {
+  const e = Number(embedded);
+  const c = Number(chunks);
+  const eStr = Number.isFinite(e) ? formatTokens(e) : "?";
+  const cStr = Number.isFinite(c) ? formatTokens(c) : "?";
+  return t(
+    "views.cortex.healthEmbedded",
+    { embedded: eStr, chunks: cStr },
+    "{embedded}/{chunks} embedded",
+  );
+}
+
+/**
+ * gbrain health badge: a single prominent status line.
+ *   green  → reachable AND coverage 100% ("healthy")
+ *   amber  → reachable but coverage < 100% (still embedding / partial)
+ *   red    → unreachable
+ * Health is sourced from state.health when present, falling back to the
+ * memory slice's availability so the badge never renders blank.
+ */
+function renderHealth(root, memoryState, health) {
+  const host = root.querySelector("#cx-health");
+  if (!host) return;
+  clearChildren(host);
+
+  const reachable = !!memoryState?.available;
+  const h = health || {};
+  const coverage =
+    h.embeddedCoverage === null || h.embeddedCoverage === undefined
+      ? null
+      : Number(h.embeddedCoverage);
+  const fullyEmbedded =
+    h.healthy === true || (coverage !== null && coverage >= 100);
+
+  let kind = "down";
+  let label = t("views.cortex.healthUnreachable", {}, "gbrain unreachable");
+  if (reachable && fullyEmbedded) {
+    kind = "up";
+    label = t("views.cortex.healthActive", {}, "gbrain active");
+  } else if (reachable) {
+    kind = "warn";
+    label = t("views.cortex.healthDegraded", {}, "gbrain degraded");
+  }
+
+  host.style.display = "";
+  const badge = el("div", `cx-health-badge ${kind}`);
+  badge.appendChild(el("span", "cx-health-dot"));
+  badge.appendChild(el("span", "cx-health-label", label));
+  host.appendChild(badge);
+
+  if (!reachable) {
+    const reason = memoryState?.reason || h.error;
+    if (reason) host.appendChild(el("div", "cx-health-line warn", String(reason)));
+    return;
+  }
+
+  // Stat line: pages · chunks · embedded coverage.
+  const stats = el("div", "cx-health-stats");
+  const pages = h.pageCount ?? memoryState?.pageCount;
+  if (pages !== undefined && pages !== null) {
+    stats.appendChild(buildHealthStat(t("views.cortex.healthPages", {}, "pages"), formatTokens(pages)));
+  }
+  if (h.chunks !== undefined && h.chunks !== null) {
+    stats.appendChild(buildHealthStat(t("views.cortex.healthChunks", {}, "chunks"), formatTokens(h.chunks)));
+  }
+  if (h.embedded !== undefined && h.embedded !== null) {
+    stats.appendChild(
+      buildHealthStat(t("views.cortex.healthEmbeddedLabel", {}, "embedded"), embeddedText(h.embedded, h.chunks)),
+    );
+  }
+  if (stats.childNodes.length > 0) host.appendChild(stats);
+
+  // Headline coverage verdict, e.g. "1573/1573 embedded — healthy".
+  if (coverage !== null || (h.embedded !== undefined && h.embedded !== null)) {
+    const pctStr =
+      coverage !== null
+        ? t("views.cortex.healthCoveragePct", { pct: coverage.toFixed(coverage % 1 === 0 ? 0 : 1) }, "{pct}% coverage")
+        : "";
+    const verdict = fullyEmbedded
+      ? t("views.cortex.healthVerdictOk", {}, "healthy")
+      : t("views.cortex.healthVerdictPartial", {}, "embedding in progress");
+    const line = el("div", `cx-health-line ${fullyEmbedded ? "accent" : "warn"}`);
+    const head = h.embedded !== undefined && h.embedded !== null ? `${embeddedText(h.embedded, h.chunks)} — ` : "";
+    line.textContent = pctStr ? `${head}${verdict} · ${pctStr}` : `${head}${verdict}`;
+    host.appendChild(line);
+  }
+}
+
+function buildHealthStat(label, value) {
+  const cell = el("span", "cx-health-stat");
+  cell.append(`${label} `);
+  cell.appendChild(el("b", null, value));
+  return cell;
+}
+
+/**
+ * Obsidian ↔ gbrain mirror sub-panel: last import / last export (absolute
+ * timestamps), export summary, vault-vs-gbrain page parity, and a loud STALE
+ * warning when the sync has fallen behind.
+ */
+function renderObsidian(root, obsidian, memoryState) {
+  const host = root.querySelector("#cx-obsidian");
+  if (!host) return;
+  clearChildren(host);
+
+  if (!obsidian) {
+    host.style.display = "none";
+    return;
+  }
+  host.style.display = "";
+
+  const title = el("div", "cx-card-title");
+  title.appendChild(el("span", null, t("views.cortex.obsidianTitle", {}, "Obsidian ↔ gbrain mirror")));
+  if (obsidian.stale === true) {
+    title.appendChild(buildBadge(t("views.cortex.obsidianStaleBadge", {}, "stale"), "stale"));
+  } else {
+    title.appendChild(buildBadge(t("views.cortex.obsidianSyncedBadge", {}, "in sync"), "live"));
+  }
+  host.appendChild(title);
+
+  if (obsidian.stale === true) {
+    host.appendChild(
+      el(
+        "div",
+        "cx-mirror-stale",
+        t(
+          "views.cortex.obsidianStaleMsg",
+          {},
+          "STALE — the Obsidian vault and gbrain are out of sync; the nightly mirror has not completed a clean round-trip.",
+        ),
+      ),
+    );
+  }
+
+  const grid = el("div", "cx-mirror-grid");
+  const addRow = (label, value, cls) => {
+    grid.appendChild(el("div", "cx-mirror-key", label));
+    grid.appendChild(el("div", `cx-mirror-val${cls ? ` ${cls}` : ""}`, value));
+  };
+
+  const importWhen = formatAbsolute(obsidian.lastImportAt) || t("views.cortex.never", {}, "never");
+  const importStatus =
+    obsidian.lastImportOk === false
+      ? t("views.cortex.importFailed", {}, " (failed)")
+      : obsidian.lastImportOk === true
+        ? t("views.cortex.importOk", {}, " (ok)")
+        : "";
+  addRow(
+    t("views.cortex.lastImport", {}, "Last import"),
+    `${importWhen}${importStatus}`,
+    obsidian.lastImportOk === false ? "warn" : null,
+  );
+
+  addRow(
+    t("views.cortex.lastExport", {}, "Last export"),
+    formatAbsolute(obsidian.lastExportAt) || t("views.cortex.never", {}, "never"),
+  );
+
+  if (obsidian.lastExportSummary) {
+    addRow(t("views.cortex.exportSummary", {}, "Export summary"), String(obsidian.lastExportSummary));
+  }
+
+  // Page parity: vault pages (approx) vs gbrain pages.
+  const vaultPages = obsidian.vaultPagesApprox;
+  const gbrainPages = memoryState?.pageCount;
+  if (vaultPages !== undefined && vaultPages !== null) {
+    const parityParts = [
+      t("views.cortex.vaultPages", { count: formatTokens(vaultPages) }, "{count} vault (approx)"),
+    ];
+    if (gbrainPages !== undefined && gbrainPages !== null) {
+      parityParts.push(t("views.cortex.gbrainPages", { count: formatTokens(gbrainPages) }, "{count} gbrain"));
+    }
+    const mismatch =
+      gbrainPages !== undefined &&
+      gbrainPages !== null &&
+      Number.isFinite(Number(vaultPages)) &&
+      Number.isFinite(Number(gbrainPages)) &&
+      Number(vaultPages) !== Number(gbrainPages);
+    addRow(
+      t("views.cortex.pageParity", {}, "Page parity"),
+      parityParts.join(" ↔ "),
+      mismatch || obsidian.stale === true ? "warn" : null,
+    );
+  }
+
+  host.appendChild(grid);
+}
+
+/**
+ * "Recent memory updates" feed: a compact newest-first list of the latest
+ * gbrain writes so the user can watch the brain being updated live. Absolute
+ * timestamps only.
+ */
+function renderRecentUpdates(root, recentUpdates) {
+  const host = root.querySelector("#cx-recent");
+  if (!host) return;
+  clearChildren(host);
+
+  const list = Array.isArray(recentUpdates) ? recentUpdates : [];
+  if (list.length === 0) {
+    host.style.display = "none";
+    return;
+  }
+  host.style.display = "";
+
+  const title = el("div", "cx-card-title");
+  title.appendChild(el("span", null, t("views.cortex.recentTitle", {}, "Recent memory updates")));
+  title.appendChild(el("span", "hint", t("views.cortex.recentHint", {}, "newest first")));
+  host.appendChild(title);
+
+  const sorted = [...list].sort((a, b) => (toEpochMs(b?.updatedAt) || 0) - (toEpochMs(a?.updatedAt) || 0));
+  const feed = el("div", "cx-recent-list");
+  for (const entry of sorted) {
+    if (!entry) continue;
+    const row = el("div", "cx-recent-row");
+    const main = el("div", "cx-recent-main");
+    main.appendChild(
+      el("span", "cx-recent-title-text", entry.title || entry.id || t("views.cortex.emptyMemory", {}, "(untitled)")),
+    );
+    if (entry.type) main.appendChild(el("span", "cx-chip", entry.type));
+    row.appendChild(main);
+    row.appendChild(el("span", "cx-recent-time", formatAbsolute(entry.updatedAt) || "—"));
+    feed.appendChild(row);
+  }
+  host.appendChild(feed);
+}
+
+/* ------------------------------------------------------------------ */
+/* Workspace memory stats (absorbed from the former Memory tab)         */
+/* Data source: GET /api/memory → { memory: { totalFiles,              */
+/* totalSizeFormatted, memoryMdSizeFormatted, memoryMdLines,           */
+/* recentFiles:[{name,sizeFormatted,age}] } }. Rendered read-only here  */
+/* so Cortex is the single memory/knowledge tab.                        */
+/* ------------------------------------------------------------------ */
+
+/** Date-stamped files are raw "daily" logs, everything else is "state". */
+function classifyMemoryFile(name) {
+  return /\d{4}-\d{2}-\d{2}/.test(String(name || "")) ? "daily" : "state";
+}
+
+function renderWorkspaceMemory(root, memory) {
+  const host = root.querySelector("#cx-workspace");
+  const errorEl = root.querySelector("#cx-workspace-error");
+  if (!host) return;
+
+  if (!memory) {
+    host.style.display = "none";
+    if (errorEl) {
+      errorEl.style.display = "";
+      errorEl.textContent = t(
+        "views.cortex.workspaceError",
+        {},
+        "Could not reach the workspace memory API (/api/memory).",
+      );
+    }
+    return;
+  }
+  if (errorEl) errorEl.style.display = "none";
+  host.style.display = "";
+  clearChildren(host);
+
+  const title = el("div", "cx-card-title");
+  const totalFiles = Number(memory.totalFiles) || 0;
+  title.appendChild(el("span", null, t("views.cortex.workspaceTitle", {}, "Workspace memory")));
+  title.appendChild(
+    el(
+      "span",
+      "hint",
+      t("views.cortex.workspaceCount", { n: totalFiles }, totalFiles === 1 ? "{n} file" : "{n} files"),
+    ),
+  );
+  host.appendChild(title);
+
+  // Stats strip: MEMORY.md size+lines, file count, total size.
+  const strip = el("div", "cx-ws-strip");
+  const mdLines = Number(memory.memoryMdLines);
+  const mdLineText =
+    Number.isFinite(mdLines) && mdLines > 0
+      ? t("views.cortex.wsMdLines", { n: mdLines }, "· {n} lines")
+      : "";
+  strip.appendChild(
+    buildWsStat(
+      "📜",
+      t("views.cortex.wsMemoryMd", {}, "MEMORY.md"),
+      `${memory.memoryMdSizeFormatted || "—"} ${mdLineText}`.trim(),
+    ),
+  );
+  strip.appendChild(
+    buildWsStat("📅", t("views.cortex.wsFiles", {}, "files"), String(memory.totalFiles ?? "—")),
+  );
+  strip.appendChild(
+    buildWsStat("💾", t("views.cortex.wsTotal", {}, "total"), memory.totalSizeFormatted || "—"),
+  );
+  host.appendChild(strip);
+
+  // Recent files list (newest-first as the server returns them).
+  const files = Array.isArray(memory.recentFiles) ? memory.recentFiles : [];
+  const rows = files.filter((f) => f && f.name);
+  if (rows.length > 0) {
+    host.appendChild(el("div", "cx-ws-recent-title", t("views.cortex.wsRecent", {}, "Recent memory files")));
+    const fileList = el("div", "cx-ws-files");
+    for (const file of rows) {
+      const row = el("div", "cx-ws-file");
+      const type = classifyMemoryFile(file.name);
+      const badge = el("span", `cx-ws-type ${type}`, type === "daily" ? `📅 ${type}` : `📊 ${type}`);
+      row.appendChild(badge);
+      row.appendChild(el("span", "cx-ws-name", file.name));
+      row.appendChild(el("span", "cx-ws-size", file.sizeFormatted || "—"));
+      row.appendChild(el("span", "cx-ws-age", file.age || "—"));
+      fileList.appendChild(row);
+    }
+    host.appendChild(fileList);
+  } else {
+    host.appendChild(el("div", "cx-empty", t("views.cortex.wsEmpty", {}, "No memory files yet.")));
+  }
+}
+
+function buildWsStat(icon, label, value) {
+  const cell = el("span", "cx-ws-stat");
+  cell.append(`${icon} ${label} `);
+  cell.appendChild(el("b", null, value));
+  return cell;
+}
+
+/** Fetch + render the workspace memory stats (separate /api/memory endpoint). */
+async function loadWorkspaceMemory(root) {
+  try {
+    const payload = await fetchJson("/api/memory");
+    renderWorkspaceMemory(root, payload?.memory || null);
+  } catch (error) {
+    if (error.name === "AbortError") return;
+    renderWorkspaceMemory(root, null);
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Entry point                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -637,9 +996,16 @@ export function init(container) {
   const root = container.querySelector("#cortex-view-section");
   if (!root) return;
 
+  // Workspace memory stats live behind a separate endpoint (/api/memory) and
+  // load independently of the cortex state fetch.
+  loadWorkspaceMemory(root);
+
   fetchJson(API_BASE)
     .then((state) => {
       renderAvailability(root, state);
+      renderHealth(root, state.memory, state.health);
+      renderObsidian(root, state.obsidian, state.memory);
+      renderRecentUpdates(root, state.recentUpdates);
       renderEngineStrip(root, state.contextEngine);
       renderGauges(root, state.gauges, state.contextEngine);
       setupMemoryBrowser(root, state.memory);
@@ -661,6 +1027,9 @@ export function init(container) {
           ),
         );
       }
+      renderHealth(root, { available: false, reason: error.message }, null);
+      renderObsidian(root, null, null);
+      renderRecentUpdates(root, null);
       setupMemoryBrowser(root, { available: false, reason: error.message });
     });
 }

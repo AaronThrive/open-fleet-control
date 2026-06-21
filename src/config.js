@@ -349,6 +349,15 @@ const FLEET_DEFAULTS = {
     weekly: { totalUSD: 0, perProvider: {} },
     checkIntervalMs: 900000,
     enforce: { enabled: false },
+    // Per-provider billing mode read by the budgets evaluator (src/budgets.js):
+    // "subscription" providers are excluded from per-token spend totals,
+    // "per-token" providers are metered. Mirrors config.billing.providerBillingModes.
+    providerBillingModes: {
+      codex: "subscription",
+      "claude-code": "subscription",
+      openrouter: "per-token",
+      gemini: "per-token",
+    },
   },
   // Scheduled fleet digest (src/digest.js): compact markdown summary
   // delivered through the alert sinks. ["*"] = every configured sink.
@@ -723,6 +732,15 @@ function loadConfig({ secrets = defaultSecrets, localPath } = {}) {
       ),
       claudePlanName:
         process.env.CLAUDE_PLAN_NAME || fileConfig.billing?.claudePlanName || "Claude Code Max",
+      // How each LLM provider is billed: "subscription" (flat OAuth/plan, excluded
+      // from per-token spend totals) vs "per-token" (metered API spend). Mirrored
+      // into fleet.budgets.providerBillingModes for the budgets evaluator.
+      providerBillingModes: fileConfig.billing?.providerBillingModes || {
+        codex: "subscription",
+        "claude-code": "subscription",
+        openrouter: "per-token",
+        gemini: "per-token",
+      },
     },
   };
 
