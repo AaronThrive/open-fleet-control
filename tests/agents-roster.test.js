@@ -369,7 +369,7 @@ describe("federation aggregation", () => {
   const hermesAgent = {
     id: "main",
     name: "Hermes",
-    model: "openai-codex/gpt-5.5",
+    model: "openai/gpt-5.5",
     sessionCount: 4,
     lastActiveAt: NOW - 2000,
     active: true,
@@ -522,7 +522,7 @@ describe("agents source config", () => {
     {
       id: "main",
       name: "Hermes",
-      model: "openai-codex/gpt-5.5",
+      model: "openai/gpt-5.5",
       workspace: "/home/user/.hermes/workspace",
       subagentsMax: null,
       sessionCount: 3,

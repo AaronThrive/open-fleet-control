@@ -27,6 +27,15 @@ const DEFAULT_BILLING_MODE = BILLING_PER_TOKEN;
 function modelToProvider(model) {
   const id = String(model || "").toLowerCase();
   if (!id || id === "unknown") return "unknown";
+  // Codex-via-OAuth runtime. The 2026 provider migration renamed model refs from
+  // "codex/gpt-5.5" to "openai/gpt-5.5" (still routed through the Codex OAuth
+  // backend, NOT the metered OpenAI API). Detect the Codex runtime BEFORE the
+  // generic "vendor/model" → openrouter branch so this OAuth usage keeps
+  // mapping to the subscription-billed "codex" provider. We strip an optional
+  // "codex/" or "openai/" vendor prefix; any remaining slug is a genuine
+  // OpenRouter route and stays per-token below.
+  const bare = id.replace(/^(?:codex|openai)\//, "");
+  if (bare.includes("codex") || bare === "gpt-5.5" || bare.startsWith("gpt-5.5-")) return "codex";
   // OpenRouter-style "vendor/model" slugs → the vendor segment is the route,
   // but the marginal cost is OpenRouter's, so bill under "openrouter".
   if (id.includes("/")) return "openrouter";
