@@ -70,24 +70,31 @@
     const textKey = el.getAttribute("data-i18n");
     if (textKey) {
       const translatedText = t(textKey);
-      if (el.textContent !== translatedText) {
+      // A missing key makes t() return the key itself. In that case keep the
+      // element's baked-in English text rather than clobbering it with a raw
+      // "views.x.y" code label (so new views render correctly before their keys
+      // are added to the locale files).
+      if (translatedText !== textKey && el.textContent !== translatedText) {
         el.textContent = translatedText;
       }
     }
 
     const titleKey = el.getAttribute("data-i18n-title");
     if (titleKey) {
-      setAttrIfChanged(el, "title", t(titleKey));
+      const v = t(titleKey);
+      if (v !== titleKey) setAttrIfChanged(el, "title", v);
     }
 
     const placeholderKey = el.getAttribute("data-i18n-placeholder");
     if (placeholderKey) {
-      setAttrIfChanged(el, "placeholder", t(placeholderKey));
+      const v = t(placeholderKey);
+      if (v !== placeholderKey) setAttrIfChanged(el, "placeholder", v);
     }
 
     const ariaLabelKey = el.getAttribute("data-i18n-aria-label");
     if (ariaLabelKey) {
-      setAttrIfChanged(el, "aria-label", t(ariaLabelKey));
+      const v = t(ariaLabelKey);
+      if (v !== ariaLabelKey) setAttrIfChanged(el, "aria-label", v);
     }
   }
 
