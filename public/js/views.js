@@ -17,15 +17,14 @@
     "federation",
     "fleet-chat",
     "kanban",
-    "briefs",
+    "playbooks",
+    "digests",
     "cortex",
     "evolution",
     "logs",
     "alerts",
     "sessions",
     "cron",
-    "memory",
-    "llm-usage",
     "tokens",
     "settings",
     "docker",
@@ -192,6 +191,13 @@
 
     // Sidebar partial loads asynchronously; re-apply active state once it lands
     window.addEventListener("sidebar:loaded", () => updateActiveNav(currentView));
+
+    // Default landing is Mesh — the old Overview tab was removed and its system
+    // vitals + "clean stale sessions" action now live on the Mesh self-card.
+    // Deep links like /#view-cortex still win (parseViewFromHash returns them).
+    if (!parseViewFromHash()) {
+      window.location.hash = "#view-mesh";
+    }
 
     // Handle deep links like /#view-mesh on initial page load
     handleHashChange();

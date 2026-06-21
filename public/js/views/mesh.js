@@ -74,10 +74,12 @@ export function init(containerEl) {
     emptyCta: root.querySelector("#mesh-empty-cta"),
     discoverBtn: root.querySelector("#mesh-discover-btn"),
     peerList: root.querySelector("#mesh-peer-list"),
+    pruneBtn: root.querySelector("#mesh-prune-btn"),
   };
 
   refs.discoverBtn?.addEventListener("click", () => runDiscovery());
   refs.emptyCta?.addEventListener("click", () => runDiscovery());
+  refs.pruneBtn?.addEventListener("click", () => pruneStaleSessions());
 
   refreshAll({ initial: true });
 
@@ -271,6 +273,65 @@ function renderSelfVitals(rawVitals) {
   }
   refs.selfVitals.hidden = false;
   refs.selfVitals.replaceChildren(...section.childNodes);
+}
+
+// --- Self quick-action: clean stale sessions (migrated from Overview) --------
+
+/**
+ * Prune stale agent-session entries on this host. Confirm first, then call the
+ * legacy action endpoint (GET /api/action?action=prune-stale, which returns a
+ * { success, output, error } body — not the fleet JSON envelope), then refresh
+ * so the self vitals reflect any reclaimed resources.
+ */
+async function pruneStaleSessions() {
+  if (!refs || !refs.pruneBtn) return;
+  const confirmText = t(
+    "views.mesh.confirmPruneStale",
+    {},
+    "Clean stale session entries on this host? This removes orphaned/finished session records.",
+  );
+  if (!window.confirm(confirmText)) return;
+
+  const btn = refs.pruneBtn;
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = t("views.mesh.pruning", {}, "Cleaning…");
+
+  try {
+    const response = await fetch("/api/action?action=prune-stale");
+    let data = null;
+    try {
+      data = await response.json();
+    } catch (err) {
+      /* non-JSON body */
+    }
+    const ok = response.ok && data && data.success;
+    if (ok) {
+      window.alert(
+        t(
+          "views.mesh.pruneDone",
+          { output: String(data.output || "Done") },
+          "Stale sessions cleaned: {output}",
+        ),
+      );
+    } else {
+      const detail = (data && (data.error || data.output)) || `HTTP ${response.status}`;
+      window.alert(
+        t("views.mesh.pruneFailed", { message: String(detail) }, "Cleanup failed: {message}"),
+      );
+    }
+  } catch (err) {
+    window.alert(
+      t("views.mesh.pruneFailed", { message: err.message }, "Cleanup failed: {message}"),
+    );
+  } finally {
+    if (refs && refs.pruneBtn) {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+    // Refresh vitals/topology regardless of outcome (best-effort).
+    if (isActive()) refreshAll({ initial: false });
+  }
 }
 
 // --- Rendering: vitals ----------------------------------------------------------

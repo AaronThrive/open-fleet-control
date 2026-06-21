@@ -83,6 +83,15 @@ function parseSinceMs(since) {
   return Number.isFinite(ms) ? ms : null;
 }
 
+/** Epoch ms for an `until` filter (number, epoch-ms string, or ISO string). */
+function parseUntilMs(until) {
+  if (until === undefined || until === null || until === "") return null;
+  if (typeof until === "number") return Number.isFinite(until) ? until : null;
+  const text = String(until);
+  const ms = /^\d+$/.test(text) ? Number(text) : Date.parse(text);
+  return Number.isFinite(ms) ? ms : null;
+}
+
 /**
  * True when the alert matches an active mute entry. Entries must target at
  * least one of rule/node (empty catch-alls are ignored); `until` makes a
@@ -364,6 +373,7 @@ function createSinkDispatcher({
  * @param {number} [options.historyMaxBytes] - History rotation threshold (tests)
  * @param {number} [options.historyKeepFiles] - Rotated history files kept (tests)
  * @returns {{fire: function, getRecent: function, query: function,
+ *            clear: function, dismiss: function,
  *            getMutedCount: function, analytics: function}}
  */
 function createAlerts({
@@ -460,20 +470,22 @@ function createAlerts({
    * filtered by type/node/severity/since (since: epoch ms or ISO string).
    *
    * @param {number} [limit=50]
-   * @param {{type?: string, node?: string, severity?: string, since?: string|number}} [filters]
+   * @param {{type?: string, node?: string, severity?: string, since?: string|number, until?: string|number}} [filters]
    * @returns {Array<object>}
    */
   function getRecent(limit = DEFAULT_RECENT_LIMIT, filters = {}) {
     const parsed = Number(limit);
     const effective =
       Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_RECENT_LIMIT;
-    const { type, node, severity, since } = filters || {};
+    const { type, node, severity, since, until } = filters || {};
     const sinceMs = parseSinceMs(since);
+    const untilMs = parseUntilMs(until);
     const matched = recentAlerts.filter((alert) => {
       if (type && alert.type !== type) return false;
       if (node && alert.node !== node) return false;
       if (severity && alert.severity !== severity) return false;
       if (sinceMs !== null && alert.ts < sinceMs) return false;
+      if (untilMs !== null && alert.ts > untilMs) return false;
       return true;
     });
     return matched.slice(-effective).reverse();
@@ -483,12 +495,19 @@ function createAlerts({
    * Query the persistent alert history (logs/alerts.jsonl), newest first.
    * Returns [] when no logsDir was configured.
    *
-   * @param {{type?: string, node?: string, severity?: string, since?: string|number, limit?: number}} [filters]
+   * The history store only understands a `since` lower bound; the `until`
+   * upper bound is applied here (mirrors getRecent's `ts <= until` filter).
+   *
+   * @param {{type?: string, node?: string, severity?: string, since?: string|number, until?: string|number, limit?: number}} [filters]
    * @returns {Array<object>}
    */
   function query(filters = {}) {
     if (!history) return [];
-    return history.query(filters);
+    const { until, ...rest } = filters || {};
+    const untilMs = parseUntilMs(until);
+    const results = history.query(rest);
+    if (untilMs === null) return results;
+    return results.filter((alert) => alert.ts <= untilMs);
   }
 
   /**
@@ -502,6 +521,35 @@ function createAlerts({
     recentAlerts = [...recentAlerts, alert].slice(-RING_BUFFER_SIZE);
     if (history) history.append(alert);
     return alert;
+  }
+
+  /**
+   * Clear all alerts: empty the in-memory ring buffer AND archive+truncate
+   * the persistent history file (logs/alerts.jsonl is renamed to a timestamped
+   * `.cleared` backup via the history module, then started fresh on the next
+   * append). The on-disk archive is best-effort; the ring is always emptied.
+   *
+   * @returns {{cleared: number}} count of ring entries removed
+   */
+  function clear() {
+    const cleared = recentAlerts.length;
+    recentAlerts = [];
+    if (history) history.clear();
+    return { cleared };
+  }
+
+  /**
+   * Dismiss a single alert from the in-memory ring buffer by id. The
+   * persistent history is intentionally left untouched (it is an append-only
+   * audit trail). Returns whether an entry was actually removed.
+   *
+   * @param {string} id - the alert id to remove
+   * @returns {{ok: boolean, dismissed: boolean}}
+   */
+  function dismiss(id) {
+    const before = recentAlerts.length;
+    recentAlerts = recentAlerts.filter((alert) => alert.id !== id);
+    return { ok: true, dismissed: recentAlerts.length < before };
   }
 
   /** Number of alerts skipped by mute entries since this engine was built. */
@@ -522,7 +570,7 @@ function createAlerts({
     return history.analytics(options);
   }
 
-  return { fire, record, getRecent, query, getMutedCount, analytics };
+  return { fire, record, getRecent, query, clear, dismiss, getMutedCount, analytics };
 }
 
 // ---------------------------------------------------------------------------

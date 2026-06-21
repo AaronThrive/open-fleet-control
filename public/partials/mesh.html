@@ -87,6 +87,31 @@
     color: var(--accent-2);
     flex-shrink: 0;
   }
+  #mesh-view-section .mesh-self-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+  }
+  #mesh-view-section .mesh-prune-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s ease;
+  }
+  #mesh-view-section .mesh-prune-btn:hover:not(:disabled) {
+    border-color: rgba(var(--accent-rgb), 0.6);
+    color: var(--accent);
+  }
+  #mesh-view-section .mesh-prune-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
 
   /* Costs strip */
   #mesh-view-section .mesh-costs {
@@ -462,8 +487,21 @@
         <div class="mesh-self-meta">
           <div class="mesh-self-hostname" id="mesh-self-hostname"></div>
           <div class="mesh-self-fqdn" id="mesh-self-fqdn"></div>
+          <!-- System vitals + quick-action (migrated from the removed Overview tab) -->
+          <div class="mesh-self-actions">
+            <button
+              class="mesh-prune-btn"
+              id="mesh-prune-btn"
+              type="button"
+              title="Remove stale agent session entries on this host"
+              data-i18n-title="views.mesh.pruneTitle"
+              data-i18n="views.mesh.pruneStale"
+            >
+              🧹 Clean stale sessions
+            </button>
+          </div>
         </div>
-        <!-- Own host vitals (filled by mesh.js from local /api/state) -->
+        <!-- Own host vitals (CPU / Memory / Disk; filled by mesh.js from local /api/state) -->
         <div class="mesh-self-vitals" id="mesh-self-vitals" hidden></div>
         <div class="mesh-self-tag" data-i18n="views.mesh.selfTag">This dashboard</div>
       </div>

@@ -479,6 +479,221 @@
       margin-bottom: 6px;
       word-break: break-word;
     }
+
+    /* gbrain health badge ----------------------------------------------- */
+    #cortex-view-section .cx-health {
+      border: 1px solid var(--cx-border);
+      border-radius: 12px;
+      background: var(--cx-card);
+      padding: 14px 16px;
+      margin-bottom: 16px;
+    }
+    #cortex-view-section .cx-health-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 0.86rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    #cortex-view-section .cx-health-badge.up {
+      border: 1px solid rgba(0, 255, 102, 0.45);
+      color: var(--cx-accent);
+      background: rgba(0, 255, 102, 0.08);
+    }
+    #cortex-view-section .cx-health-badge.warn {
+      border: 1px solid rgba(227, 179, 65, 0.5);
+      color: #e3b341;
+      background: rgba(227, 179, 65, 0.08);
+    }
+    #cortex-view-section .cx-health-badge.down {
+      border: 1px solid rgba(248, 81, 73, 0.5);
+      color: #f8a3a0;
+      background: rgba(248, 81, 73, 0.08);
+    }
+    #cortex-view-section .cx-health-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: currentColor;
+      flex: none;
+      box-shadow: 0 0 8px currentColor;
+    }
+    #cortex-view-section .cx-health-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 18px;
+      margin-top: 12px;
+      font-size: 0.76rem;
+      color: var(--cx-muted);
+      font-variant-numeric: tabular-nums;
+    }
+    #cortex-view-section .cx-health-stat b {
+      color: var(--text, #fff);
+      font-weight: 600;
+    }
+    #cortex-view-section .cx-health-line {
+      font-size: 0.78rem;
+      color: var(--cx-muted);
+      margin-top: 9px;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+    #cortex-view-section .cx-health-line.accent {
+      color: var(--cx-accent);
+      font-weight: 600;
+    }
+    #cortex-view-section .cx-health-line.warn {
+      color: #e3b341;
+      font-weight: 600;
+    }
+
+    /* Obsidian ↔ gbrain mirror panel ------------------------------------ */
+    #cortex-view-section .cx-mirror-stale {
+      border: 1px solid rgba(248, 81, 73, 0.5);
+      background: rgba(248, 81, 73, 0.08);
+      color: #f8a3a0;
+      border-radius: 8px;
+      padding: 9px 12px;
+      font-size: 0.76rem;
+      font-weight: 600;
+      line-height: 1.45;
+      margin-bottom: 12px;
+    }
+    #cortex-view-section .cx-mirror-grid {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: 6px 16px;
+      font-size: 0.78rem;
+    }
+    #cortex-view-section .cx-mirror-key {
+      color: var(--cx-muted);
+      text-transform: uppercase;
+      font-size: 0.66rem;
+      letter-spacing: 0.05em;
+      align-self: center;
+    }
+    #cortex-view-section .cx-mirror-val {
+      color: var(--text, #fff);
+      word-break: break-word;
+      font-variant-numeric: tabular-nums;
+    }
+    #cortex-view-section .cx-mirror-val.warn {
+      color: #e3b341;
+    }
+
+    /* Recent gbrain writes feed ----------------------------------------- */
+    #cortex-view-section .cx-recent-list {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    #cortex-view-section .cx-recent-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 4px;
+      border-bottom: 1px solid var(--cx-border);
+    }
+    #cortex-view-section .cx-recent-row:last-child {
+      border-bottom: none;
+    }
+    #cortex-view-section .cx-recent-main {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      flex: 1;
+    }
+    #cortex-view-section .cx-recent-title-text {
+      font-size: 0.8rem;
+      color: var(--text, #fff);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #cortex-view-section .cx-recent-time {
+      flex: none;
+      font-size: 0.72rem;
+      color: var(--cx-muted);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    /* Workspace memory stats (absorbed Memory tab) ---------------------- */
+    #cortex-view-section .memory-view-error {
+      color: #f8a3a0;
+      font-size: 0.78rem;
+      margin-bottom: 8px;
+    }
+    #cortex-view-section .cx-ws-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 18px;
+      font-size: 0.78rem;
+      color: var(--cx-muted);
+      margin-bottom: 4px;
+    }
+    #cortex-view-section .cx-ws-stat b {
+      color: var(--text, #fff);
+      font-weight: 700;
+    }
+    #cortex-view-section .cx-ws-recent-title {
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--cx-muted);
+      margin: 14px 0 8px;
+    }
+    #cortex-view-section .cx-ws-files {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    #cortex-view-section .cx-ws-file {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 4px;
+      border-bottom: 1px solid var(--cx-border);
+      font-size: 0.78rem;
+    }
+    #cortex-view-section .cx-ws-file:last-child {
+      border-bottom: none;
+    }
+    #cortex-view-section .cx-ws-type {
+      flex: none;
+      font-size: 0.68rem;
+      padding: 2px 8px;
+      border-radius: 10px;
+      white-space: nowrap;
+    }
+    #cortex-view-section .cx-ws-type.daily {
+      color: var(--cx-accent);
+      background: rgba(0, 255, 102, 0.1);
+    }
+    #cortex-view-section .cx-ws-type.state {
+      color: var(--cx-accent-2);
+      background: rgba(13, 245, 227, 0.1);
+    }
+    #cortex-view-section .cx-ws-name {
+      flex: 1;
+      min-width: 0;
+      color: var(--text, #fff);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #cortex-view-section .cx-ws-size,
+    #cortex-view-section .cx-ws-age {
+      flex: none;
+      color: var(--cx-muted);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
   </style>
 
   <section class="view-panel">
@@ -488,7 +703,8 @@
         <span data-i18n="views.cortex.title">Cortex</span>
       </div>
       <div class="view-subtitle" data-i18n="views.cortex.subtitle">
-        Shared knowledge base the whole fleet can read and write
+        Shared knowledge base the whole fleet can read and write — gbrain health,
+        Obsidian mirror, and workspace memory
       </div>
     </div>
 
@@ -510,6 +726,9 @@
       </span>
     </div>
 
+    <!-- gbrain health badge (status + page/chunk/embedded-coverage stats) -->
+    <div class="cx-health" id="cx-health" style="display: none"></div>
+
     <!-- Active context engine strip -->
     <div class="cx-engine-strip" id="cx-engine-strip" style="display: none"></div>
 
@@ -521,6 +740,18 @@
     </div>
 
     <div class="cx-grid">
+      <!-- Obsidian ↔ gbrain mirror health sub-panel -->
+      <div class="cx-card" id="cx-obsidian" style="display: none"></div>
+
+      <!-- Recent gbrain writes feed -->
+      <div class="cx-card" id="cx-recent" style="display: none"></div>
+
+      <!-- Workspace memory stats (absorbed Memory tab; data from /api/memory) -->
+      <div class="cx-card" id="cx-workspace-card">
+        <div class="memory-view-error" id="cx-workspace-error" style="display: none"></div>
+        <div id="cx-workspace"></div>
+      </div>
+
       <!-- Memory browser (read-only gbrain page browser) -->
       <div class="cx-card" id="cx-memory-card">
         <div class="cx-card-title">
