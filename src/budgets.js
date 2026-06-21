@@ -35,10 +35,14 @@
  *
  * Spend semantics (documented decision): the "total" scope counts REAL API
  * spend only — Nine-Router per-provider cost + the OpenRouter window delta.
- * claude-code estimated cost is excluded from totals (primary usage is OAuth
- * subscriptions with near-zero marginal $) but is available as an explicit
- * perProvider scope ("claude-code"). When no API spend signal exists at all,
- * the total falls back to tokensEstUSD.
+ * Subscription-billed providers (paid via a flat monthly OAuth/subscription
+ * plan with near-zero marginal $) are EXCLUDED from totals but remain
+ * available as explicit perProvider scopes. claude-code is always treated as
+ * subscription; additional subscription providers come from
+ * fleet.budgets.providerBillingModes (a `{ provider: "subscription" |
+ * "per-token" }` map mirrored from config.billing.providerBillingModes).
+ * When no API spend signal exists at all, the total falls back to
+ * tokensEstUSD.
  *
  * Periods are calendar-based in UTC: daily = YYYY-MM-DD, weekly = ISO week
  * (GGGG-Www). onBreach receives:
@@ -69,6 +73,28 @@ function normalizePeriod(raw) {
     totalUSD: Number.isFinite(totalUSD) && totalUSD > 0 ? totalUSD : 0,
     perProvider,
   };
+}
+
+// claude-code is ALWAYS subscription-billed (OAuth/Max plan) — preserved as a
+// hard default so existing behavior holds even with no config.
+const DEFAULT_SUBSCRIPTION_PROVIDERS = ["claude-code"];
+
+/**
+ * Normalize a providerBillingModes map into the SET of provider names that are
+ * subscription-billed (and therefore excluded from spend totals). claude-code
+ * is always included. Any provider explicitly marked "per-token" is removed
+ * even if it was a default.
+ */
+function normalizeSubscriptionProviders(raw) {
+  const set = new Set(DEFAULT_SUBSCRIPTION_PROVIDERS);
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const [provider, mode] of Object.entries(raw)) {
+      if (!provider) continue;
+      if (mode === "subscription") set.add(provider);
+      else if (mode === "per-token") set.delete(provider);
+    }
+  }
+  return set;
 }
 
 /** Normalize the full fleet.budgets config section to safe values. */
@@ -173,6 +199,13 @@ function createBudgets({
   if (typeof onBreach !== "function") throw new TypeError("createBudgets requires onBreach");
 
   let cfg = normalizeBudgetsConfig(config);
+  // Set of subscription-billed providers (excluded from spend totals). Derived
+  // from the raw config's providerBillingModes map so the normalized config
+  // shape stays unchanged; claude-code is always included. Refreshed by
+  // applyConfig().
+  let subscriptionProviders = normalizeSubscriptionProviders(
+    config && config.providerBillingModes,
+  );
   let timer = null;
   let evaluating = null;
   let warnedNoProvider = false;
@@ -288,9 +321,13 @@ function createBudgets({
       byProvider["claude-code"] = usage.claudeCodeUSD;
     }
 
+    // Exclude every subscription-billed provider from the total (flat plan,
+    // near-zero marginal $). claude-code is always in this set; others come
+    // from config.providerBillingModes. Excluded providers still appear in
+    // byProvider so per-provider scopes/gauges can show them.
     let totalUSD = 0;
     for (const [provider, usd] of Object.entries(byProvider)) {
-      if (provider !== "claude-code") totalUSD += usd;
+      if (!subscriptionProviders.has(provider)) totalUSD += usd;
     }
     if (!hasApiSignal && Number.isFinite(usage.tokensEstUSD)) {
       totalUSD = usage.tokensEstUSD; // est-cost fallback
@@ -565,6 +602,9 @@ function createBudgets({
   function applyConfig(newConfig) {
     stop();
     cfg = normalizeBudgetsConfig(newConfig);
+    subscriptionProviders = normalizeSubscriptionProviders(
+      newConfig && newConfig.providerBillingModes,
+    );
     if (cfg.enabled) start();
   }
 
@@ -745,6 +785,7 @@ module.exports = {
   createBudgets,
   createUsageProvider,
   normalizeBudgetsConfig,
+  normalizeSubscriptionProviders,
   // exported for tests
   dailyKey,
   weeklyKey,

@@ -245,6 +245,14 @@ const FLEET_DEFAULTS = {
       ntfy: { enabled: false, server: "", topic: "" },
       webhooks: [],
     },
+    // Ingestion: alerts INTO the dashboard (not out). The ntfy poller pulls every
+    // alert published to the ntfy topic (reuses sinks.ntfy server/topic); the
+    // cron-log poller logs every OpenClaw-container cron RUN. Both feed the unified
+    // Alerts hub tagged source:"ntfy"/"cron". Disabled by default.
+    ingest: {
+      ntfy: { enabled: false, intervalMs: 30000 },
+      cron: { enabled: false, intervalMs: 120000 },
+    },
   },
   validationGate: { default: true },
   evolution: {

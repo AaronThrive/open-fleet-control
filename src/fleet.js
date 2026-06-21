@@ -28,6 +28,8 @@ const { createAlerts, createNodeAlertTracker, createSinkDispatcher } = require("
 const { createRateLimiter } = require("./rate-limit");
 const { createBudgets } = require("./budgets");
 const { createDigest } = require("./digest");
+const { createNtfyIngest } = require("./ntfy-ingest");
+const { createCronLog } = require("./cron-log");
 const { defaultSecrets } = require("./secrets");
 
 const CORTEX_SUMMARY_TTL_MS = 60000;
@@ -164,12 +166,37 @@ function createFleetRuntime({ config, broadcast }) {
           task: event.task || null,
           message: event.message || "",
           ts: Date.now(),
+          source: event.source || "ofc",
         });
       }
       return result;
     } catch (e) {
       console.error("[Fleet] Alert fire failed:", e.message);
       return { fired: false, reason: e.message };
+    }
+  }
+
+  /**
+   * Record an already-fired EXTERNAL event (ntfy ingest, cron run log) straight
+   * into the alert ring + history (no rule-gating / dedupe / sink re-dispatch),
+   * then broadcast fleet.alert so the UI updates live. See alerts.record().
+   */
+  function recordAlert(event) {
+    try {
+      const alert = alerts.record(event);
+      emit("fleet.alert", {
+        type: alert.type,
+        severity: alert.severity,
+        node: alert.node,
+        task: alert.task,
+        message: alert.message,
+        ts: alert.ts,
+        source: alert.source,
+      });
+      return alert;
+    } catch (e) {
+      console.error("[Fleet] Alert record failed:", e.message);
+      return null;
     }
   }
 
@@ -345,6 +372,7 @@ function createFleetRuntime({ config, broadcast }) {
   const digest = createDigest({
     config: config.digest,
     stateFile: path.join(stateDir, "digest.json"),
+    digestsDir: path.join(stateDir, "digests"),
     sources: {
       getBudgetStatus: () => budgets.getStatus(),
       getBoard: () => kanban.getBoard(),
@@ -379,6 +407,44 @@ function createFleetRuntime({ config, broadcast }) {
     console.log("[Fleet] Digest scheduler reconfigured from updated settings");
   }
 
+  // --- Alert ingestion pollers → unified hub (ntfy topic + OpenClaw cron runs) ---
+  // Both feed recordAlert() (non-gated log path) so every external alert + cron
+  // run shows in the Alerts view tagged source:"ntfy"/"cron". Disabled by default.
+  const ingestCfg = (config.alerts && config.alerts.ingest) || {};
+  const ntfySink = (config.alerts && config.alerts.sinks && config.alerts.sinks.ntfy) || {};
+  const ntfyIngestEnabled = !!(ingestCfg.ntfy && ingestCfg.ntfy.enabled && ntfySink.topic);
+  const cronIngestEnabled = !!(ingestCfg.cron && ingestCfg.cron.enabled);
+  // No-op stand-in when a poller is disabled. IMPORTANT: createNtfyIngest throws
+  // on an empty topic by design, so we must NOT construct it unless it's actually
+  // enabled with a real topic — otherwise the server crashes on boot under the
+  // default (disabled / empty-topic) config.
+  const NOOP_POLLER = { start() {}, stop() {}, getState: () => ({ running: false }) };
+  const ntfyIngest = ntfyIngestEnabled
+    ? createNtfyIngest({
+        server: ntfySink.server || "https://ntfy.sh",
+        topic: ntfySink.topic,
+        intervalMs: (ingestCfg.ntfy && ingestCfg.ntfy.intervalMs) || 30000,
+        stateFile: path.join(stateDir, "ntfy-ingest.json"),
+        onAlert: (rec) => recordAlert(rec),
+      })
+    : NOOP_POLLER;
+  const cronLog = cronIngestEnabled
+    ? createCronLog({
+        intervalMs: (ingestCfg.cron && ingestCfg.cron.intervalMs) || 120000,
+        stateFile: path.join(stateDir, "cron-runs-seen.json"),
+        onRun: (e) =>
+          recordAlert({
+            source: "cron",
+            type: "cron",
+            severity: e.status === "error" ? "warn" : "info",
+            node: null,
+            task: e.job || null,
+            message: `${e.job || "cron"} ${e.status}${e.error ? ": " + e.error : ""}`,
+            ts: e.ts,
+          }),
+      })
+    : NOOP_POLLER;
+
   // ---------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------
@@ -391,6 +457,8 @@ function createFleetRuntime({ config, broadcast }) {
     watchdog.start();
     budgets.start();
     digest.start();
+    if (ntfyIngestEnabled) ntfyIngest.start();
+    if (cronIngestEnabled) cronLog.start();
     if (!boardWatcher) boardWatcher = kanban.watch();
   }
 
@@ -400,6 +468,8 @@ function createFleetRuntime({ config, broadcast }) {
     watchdog.stop();
     budgets.stop();
     digest.stop();
+    ntfyIngest.stop();
+    cronLog.stop();
     if (boardWatcher) {
       boardWatcher.close();
       boardWatcher = null;

@@ -91,6 +91,11 @@ describe("cron module", () => {
     const NO_HERMES = path.join(os.tmpdir(), "nonexistent-hermes", "jobs.json");
     const hostname = os.hostname();
 
+    // Host crontab is now a third cron source. These tests assert on the
+    // openclaw/hermes sources only, so inject an empty host-crontab reader to
+    // keep them deterministic regardless of the test host's real crontab.
+    const NO_HOST_CRON = () => "";
+
     const OPENCLAW_JOB = {
       id: "job-1",
       name: "Morning Briefing",
@@ -128,7 +133,7 @@ describe("cron module", () => {
 
     beforeEach(() => {
       tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-test-"));
-      _resetForTesting();
+      _resetForTesting({ hostCrontabReader: NO_HOST_CRON });
     });
 
     afterEach(() => {
@@ -157,6 +162,7 @@ describe("cron module", () => {
     it("uses the CLI source when the legacy file is absent (cached, non-blocking)", async () => {
       let cliCalls = 0;
       _resetForTesting({
+        hostCrontabReader: NO_HOST_CRON,
         cliRunner: async () => {
           cliCalls += 1;
           return JSON.stringify({ jobs: [OPENCLAW_JOB] });
@@ -182,6 +188,7 @@ describe("cron module", () => {
 
     it("survives CLI failures and keeps serving (empty) data", async () => {
       _resetForTesting({
+        hostCrontabReader: NO_HOST_CRON,
         cliRunner: async () => {
           throw new Error("openclaw not found");
         },
@@ -248,6 +255,7 @@ describe("cron module", () => {
       let cliCalls = 0;
       const enabledById = { "job-1": true };
       _resetForTesting({
+        hostCrontabReader: NO_HOST_CRON,
         cliRunner: async () => {
           cliCalls += 1;
           return JSON.stringify({ jobs: [{ ...OPENCLAW_JOB, enabled: enabledById["job-1"] }] });

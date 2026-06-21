@@ -17,11 +17,9 @@ const state = {
   tokenStats: {},
   statusCounts: { all: 0, live: 0, recent: 0, idle: 0 },
   capacity: { main: { active: 0, max: 12 }, subagent: { active: 0, max: 24 } },
-  operators: { operators: [], roles: {} },
   llmUsage: null,
   cron: [],
   memory: null,
-  cerebro: null,
   subagents: [],
   lastUpdated: null,
   connected: false,
@@ -94,11 +92,9 @@ function handleStateUpdate(data) {
   if (data.tokenStats) state.tokenStats = data.tokenStats;
   if (data.statusCounts) state.statusCounts = data.statusCounts;
   if (data.capacity) state.capacity = data.capacity;
-  if (data.operators) state.operators = data.operators;
   if (data.llmUsage) state.llmUsage = data.llmUsage;
   if (data.cron) state.cron = data.cron;
   if (data.memory) state.memory = data.memory;
-  if (data.cerebro) state.cerebro = data.cerebro;
   if (data.subagents) state.subagents = data.subagents;
 
   state.lastUpdated = new Date();
@@ -119,8 +115,6 @@ function renderAll() {
   renderSessions();
   renderCron();
   renderMemory();
-  renderCerebro();
-  renderOperators();
   updateTimestamp();
 }
 
@@ -217,14 +211,6 @@ function renderCron() {
 }
 
 function renderMemory() {
-  // Placeholder - will be extracted to component
-}
-
-function renderCerebro() {
-  // Placeholder - will be extracted to component
-}
-
-function renderOperators() {
   // Placeholder - will be extracted to component
 }
 

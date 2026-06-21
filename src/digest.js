@@ -42,6 +42,8 @@
 const fs = require("fs");
 const path = require("path");
 
+const { createDigestsStore } = require("./digests-store");
+
 const TICK_MS = 60000;
 const HOUR_MS = 3600000;
 const DAY_MS = 86400000;
@@ -231,6 +233,9 @@ function composeConsumerLines(consumers) {
  * @param {object} options
  * @param {object} [options.config] - fleet.digest section (see header)
  * @param {string} [options.stateFile] - persisted {lastSentAt} path
+ * @param {string} [options.digestsDir] - directory to persist composed digests
+ *   as browsable *.md files (the "Digests" tab). When omitted, persistence is
+ *   skipped silently and send behavior is unchanged.
  * @param {object} [options.sources] - injected data sources (see header)
  * @param {function} options.deliver - (alertLike, sinkNames) => Promise<{dispatched, delivered, suppressed?}>
  * @param {function} [options.nowFn=Date.now]
@@ -240,6 +245,7 @@ function composeConsumerLines(consumers) {
 function createDigest({
   config,
   stateFile = null,
+  digestsDir = null,
   sources = {},
   deliver,
   nowFn = Date.now,
@@ -251,6 +257,13 @@ function createDigest({
   let timer = null;
   let sending = null;
   let state = loadState(); // { lastSentAt: number|null }
+
+  // Optional persistence: when digestsDir is set, every sent digest is also
+  // written as a browsable *.md file. Persistence failures never break sends.
+  const digestsStore =
+    typeof digestsDir === "string" && digestsDir.length > 0
+      ? createDigestsStore({ digestsDir })
+      : null;
 
   function loadState() {
     const empty = { lastSentAt: null };
@@ -371,6 +384,20 @@ function createDigest({
     } catch (e) {
       log.error(`[Digest] Delivery failed: ${e.message}`);
       return { sent: false, scheduled, error: e.message, title: digest.title };
+    }
+    // Persist the composed digest for the "Digests" tab. Guarded: a failure
+    // here must never break a successful send.
+    if (digestsStore) {
+      try {
+        digestsStore.write({
+          title: digest.title,
+          markdown: digest.markdown,
+          schedule: cfg.schedule,
+          generatedAt: digest.generatedAt,
+        });
+      } catch (e) {
+        log.warn(`[Digest] Failed to persist digest: ${e.message}`);
+      }
     }
     if (scheduled) {
       state = { ...state, lastSentAt: now };

@@ -244,13 +244,18 @@ describe("cortex facade", () => {
         id: "a",
         title: "Alpha",
         type: "note",
-        updatedAt: "Thu Jun 11",
+        // Year-less gbrain dates are normalized to a full ISO timestamp.
+        updatedAt: new Date(
+          Date.parse(`Thu Jun 11 ${new Date().getFullYear()}`),
+        ).toISOString(),
       });
-      // list must NOT pass a --limit cap (whole brain).
+      // list requests the MAX gbrain returns via TSV (--limit 100); the true
+      // total rides on stats() separately. (The availability probe uses
+      // --limit 1 --json, so match the listing call specifically.)
       const listCall = options.gbrain.execFn.calls.find(
-        (c) => c.args[0] === "list" && !c.args.includes("--limit"),
+        (c) => c.args[0] === "list" && c.args.includes("100"),
       );
-      assert.deepStrictEqual(listCall.args, ["list", "--json"]);
+      assert.deepStrictEqual(listCall.args, ["list", "--limit", "100"]);
 
       const search = await cortex.searchMemory("brav");
       assert.strictEqual(search.total, 1);
