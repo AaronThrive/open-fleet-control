@@ -575,6 +575,43 @@ const usageSources = createUsageSources({
 // usageAvailable:false — the guardrails would never see actual spend.
 fleet.setUsageProvider(createUsageProvider({ usageSources }));
 
+// Subscription / rate-limit alerting source (src/subscription-limit-watcher.js):
+// flatten the Headroom subscription windows (Claude 5h / 7d / Sonnet sub-limit)
+// into plan-utilization rows so the watcher can alert near plan caps. The
+// `stale` flag is propagated truthfully — when the Headroom snapshot is stale
+// (see the known container-mount issue keeping it frozen) the watcher SKIPS the
+// window rather than firing a false critical off old data. No-op unless
+// fleet.subscriptionLimits.enabled is true.
+fleet.setSubscriptionWindowsProvider(async () => {
+  const headroom = usageSources.sources && usageSources.sources.headroom;
+  if (!headroom || !headroom.available || typeof headroom.getSubscription !== "function") {
+    return [];
+  }
+  let sub;
+  try {
+    sub = await headroom.getSubscription();
+  } catch {
+    return [];
+  }
+  if (!sub || !sub.available) return [];
+  const stale = !!sub.stale;
+  const windows = [
+    ["claude", "5h", sub.fiveHour],
+    ["claude", "7d", sub.sevenDay],
+    ["claude", "7d-sonnet", sub.sevenDaySonnet],
+  ];
+  return windows
+    .filter(([, , w]) => w && Number.isFinite(w.utilizationPct))
+    .map(([provider, window, w]) => ({
+      provider,
+      window,
+      utilizationPct: w.utilizationPct,
+      capPct: 100,
+      resetsAt: w.resetsAt || null,
+      stale,
+    }));
+});
+
 // Fleet digest sources that live outside the fleet runtime: cron job status
 // (openclaw CLI dual-source read) and the top-token-consumer rollup over the
 // usage adapters.

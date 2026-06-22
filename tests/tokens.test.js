@@ -13,6 +13,9 @@ const {
   refreshTokenUsageAsync,
   getDailyTokenUsage,
   getCostBreakdown,
+  getBillingPlans,
+  totalPlanCost,
+  aggregatePlanCosts,
 } = require("../src/tokens");
 
 describe("tokens module", () => {
@@ -164,6 +167,64 @@ describe("tokens module", () => {
     });
   });
 
+  describe("getBillingPlans() / totalPlanCost()", () => {
+    it("defaults to Claude + Codex plans at $200 each", () => {
+      const plans = getBillingPlans({});
+      assert.strictEqual(plans.length, 2);
+      const claude = plans.find((p) => p.id === "claude");
+      const codex = plans.find((p) => p.id === "codex");
+      assert.strictEqual(claude.planCost, 200);
+      assert.deepStrictEqual(claude.providers, ["claude-code"]);
+      assert.strictEqual(codex.planCost, 200);
+      assert.deepStrictEqual(codex.providers, ["codex"]);
+      assert.strictEqual(totalPlanCost(plans), 400);
+    });
+
+    it("maps the legacy claudePlanCost/Name into the claude plan", () => {
+      const plans = getBillingPlans({
+        billing: { claudePlanCost: 150, claudePlanName: "Claude Max 20x", codexPlanCost: 250 },
+      });
+      const claude = plans.find((p) => p.id === "claude");
+      const codex = plans.find((p) => p.id === "codex");
+      assert.strictEqual(claude.planCost, 150);
+      assert.strictEqual(claude.label, "Claude Max 20x");
+      assert.strictEqual(codex.planCost, 250);
+    });
+
+    it("honors an explicit billing.plans array", () => {
+      const plans = getBillingPlans({
+        billing: {
+          plans: [{ id: "team", label: "Team", planCost: 99, providers: ["claude-code", "codex"] }],
+        },
+      });
+      assert.strictEqual(plans.length, 1);
+      assert.strictEqual(plans[0].planCost, 99);
+      assert.deepStrictEqual(plans[0].providers, ["claude-code", "codex"]);
+    });
+  });
+
+  describe("aggregatePlanCosts()", () => {
+    it("attributes Codex usage to the codex plan and Claude usage to the claude plan", () => {
+      const map = {};
+      addUsageToModelMap(map, "claude-opus-4", { input: 1_000_000, output: 0 });
+      addUsageToModelMap(map, "openai/gpt-5.5", { input: 1_000_000, output: 0 });
+      const plans = getBillingPlans({});
+      // Both providers billed via flat subscription (zero marginal $).
+      const providerBillingModes = { "claude-code": "subscription", codex: "subscription" };
+      const lines = aggregatePlanCosts(map, plans, TOKEN_RATES, providerBillingModes);
+      const claude = lines.find((l) => l.id === "claude");
+      const codex = lines.find((l) => l.id === "codex");
+      // claude-opus-4 → claude-code provider; gpt-5.5 → codex provider
+      assert.ok(claude.models.includes("claude-opus-4"));
+      assert.ok(codex.models.includes("openai/gpt-5.5"));
+      // Subscription-billed → $0 marginal, positive hypothetical projection.
+      assert.strictEqual(claude.marginalCost, 0);
+      assert.strictEqual(codex.marginalCost, 0);
+      assert.ok(claude.hypotheticalCost > 0);
+      assert.ok(codex.hypotheticalCost > 0);
+    });
+  });
+
   describe("per-model usage refresh + cost breakdown (temp sessions dir)", () => {
     it("aggregates byModel per window and exposes it via getCostBreakdown", async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ofc-tokens-test-"));
@@ -228,6 +289,28 @@ describe("tokens module", () => {
         const gpt7 = by7.find((m) => m.model === "gpt-5.5");
         assert.ok(gpt7.estCost > 0);
         assert.strictEqual(gpt7.cost, gpt7.estCost, "estimates when no reported cost");
+
+        // C1: the 30d window exists and contains all four entries' usage.
+        assert.ok(breakdown.windows["30d"], "30d window present");
+        assert.strictEqual(usage.windows["30d"].byModel["gpt-5.5"].input, 10_400);
+        const by30 = breakdown.windows["30d"].byModel;
+        assert.strictEqual(by30.length, 2);
+
+        // B1: each window carries per-plan flat-fee lines (Claude + Codex).
+        const plans30 = breakdown.windows["30d"].plans;
+        assert.ok(Array.isArray(plans30));
+        const claudePlan = plans30.find((p) => p.id === "claude");
+        const codexPlan = plans30.find((p) => p.id === "codex");
+        assert.ok(claudePlan, "claude plan line present");
+        assert.ok(codexPlan, "codex plan line present");
+        assert.strictEqual(claudePlan.planCost, 200);
+        assert.strictEqual(codexPlan.planCost, 200);
+        // claude-opus-4 usage → claude plan; gpt-5.5 usage → codex plan.
+        assert.ok(claudePlan.models.includes("claude-opus-4"));
+        assert.ok(codexPlan.models.includes("gpt-5.5"));
+        // Top-level breakdown exposes plans + summed planCost.
+        assert.strictEqual(breakdown.planCost, 400);
+        assert.ok(Array.isArray(breakdown.plans));
       } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       }

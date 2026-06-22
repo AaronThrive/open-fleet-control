@@ -650,6 +650,26 @@ describe("settings module", () => {
       });
     });
 
+    it("treats a per-provider value of 0 (or empty) as removal, not an error", () => {
+      writeConfig({
+        fleet: {
+          budgets: {
+            enabled: true,
+            daily: { totalUSD: 10, perProvider: { kimi: 5, openrouter: 2 } },
+          },
+        },
+      });
+      const settings = createSettings({ configPath });
+      // 0 removes kimi; empty string removes openrouter; positive keeps/sets.
+      const { applied } = settings.update({
+        budgets: { daily: { perProvider: { kimi: 0, openrouter: "", anthropic: 3 } } },
+      });
+      assert.deepStrictEqual(applied.budgets.daily, {
+        totalUSD: 10,
+        perProvider: { anthropic: 3 }, // kimi + openrouter removed
+      });
+    });
+
     it("rejects malformed budgets patches", () => {
       const settings = createSettings({ configPath });
       const bad = [
@@ -660,7 +680,7 @@ describe("settings module", () => {
         { budgets: { daily: { totalUSD: -1 } } },
         { budgets: { daily: { totalUSD: "10" } } },
         { budgets: { daily: { totalUSD: Infinity } } },
-        { budgets: { daily: { perProvider: { kimi: 0 } } } },
+        { budgets: { daily: { perProvider: { kimi: -1 } } } },
         { budgets: { daily: { perProvider: { "bad\nname": 5 } } } },
         { budgets: { daily: { perProvider: 5 } } },
         { budgets: { weekly: { totalUSD: 1000001 } } },

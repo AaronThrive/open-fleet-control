@@ -45,11 +45,12 @@ const SOURCES_POLL_MS = 45000;
 const SSE_FRESH_MS = 20000;
 const DAY_MS = 86400000;
 const DAILY_DAYS = 14;
-const WINDOW_ORDER = ["24h", "3d", "7d"];
+const WINDOW_ORDER = ["24h", "3d", "7d", "30d"];
 const WINDOW_LABELS = {
   "24h": "Last 24 hours",
   "3d": "Last 3 days",
   "7d": "Last 7 days",
+  "30d": "Last 30 days",
 };
 
 // Keys of /api/llm-usage handled by dedicated gauges / sections above;
@@ -160,6 +161,72 @@ export function costSummaryFrom(data, windowKey) {
   };
 }
 
+/**
+ * Pure extractor of the per-plan flat-fee subscription lines for a window
+ * (exported for tests). Reads windows[k].plans (the new per-plan breakdown),
+ * falling back to the top-level `plans` array. Each line:
+ *   { id, label, planCost, hypotheticalMonthly, marginalMonthly,
+ *     actualMonthlySpend, requests }
+ */
+export function planLinesFrom(data, windowKey) {
+  const win = data?.windows?.[windowKey];
+  const source = Array.isArray(win?.plans)
+    ? win.plans
+    : Array.isArray(data?.plans)
+      ? data.plans
+      : [];
+  const num = (value) => (Number.isFinite(Number(value)) ? Number(value) : 0);
+  return source.map((plan) => ({
+    id: String(plan.id ?? ""),
+    label: String(plan.label ?? plan.id ?? "Subscription plan"),
+    planCost: num(plan.planCost),
+    hypotheticalMonthly: num(plan.hypotheticalMonthly ?? plan.hypotheticalCost),
+    marginalMonthly: num(plan.marginalMonthly ?? plan.marginalCost),
+    actualMonthlySpend: num(plan.actualMonthlySpend),
+    requests: num(plan.requests),
+  }));
+}
+
+function renderPlanLines(els) {
+  if (!els.planLines || !els.planCards) return;
+  const lines = planLinesFrom(currentData, selectedCostWindow);
+  if (lines.length === 0) {
+    els.planLines.hidden = true;
+    els.planCards.replaceChildren();
+    return;
+  }
+  els.planLines.hidden = false;
+  const cards = lines.map((line) => {
+    const card = el("div", "tokens-cost-card");
+    card.appendChild(el("span", "tcc-label", line.label));
+    card.appendChild(el("span", "tcc-value", formatCost(line.planCost)));
+    // Same margin model Claude has: flat plan cost, ~$0 marginal, with the
+    // hypothetical "if billed per-token" projection shown for context.
+    const sub =
+      line.marginalMonthly > 0
+        ? t(
+            "views.tokens.planLineMarginal",
+            { amount: formatCost(line.marginalMonthly) },
+            "+ {amount}/mo marginal",
+          )
+        : t("views.tokens.planLineFlat", {}, "flat fee — $0 marginal token cost");
+    card.appendChild(el("span", "tcc-sub", sub));
+    card.appendChild(
+      el(
+        "span",
+        "tcc-sub",
+        t(
+          "views.tokens.planLineHypothetical",
+          { amount: formatCost(line.hypotheticalMonthly) },
+          "≈ {amount}/mo if billed per-token",
+        ),
+      ),
+    );
+    return card;
+  });
+  els.planCards.replaceChildren(...cards);
+}
+
 function renderCostSummary(els) {
   const s = costSummaryFrom(currentData, selectedCostWindow);
   // Marginal: real incremental spend in the window + its monthly equivalent.
@@ -185,8 +252,7 @@ function renderCostSummary(els) {
   setText(
     els,
     "planName",
-    s.planName ||
-      t("views.tokens.planNameUnknown", {}, "No flat subscription plan configured"),
+    s.planName || t("views.tokens.planNameUnknown", {}, "No flat subscription plan configured"),
   );
 
   // Actual monthly = plan + marginal.
@@ -194,6 +260,9 @@ function renderCostSummary(els) {
 
   // Hypothetical "if billed per-token" — explicitly NOT spend.
   setText(els, "hypothetical", formatCost(s.hypotheticalMonthly || s.hypotheticalCost));
+
+  // Per-plan flat-fee subscription lines (Claude + Codex, each its own line).
+  renderPlanLines(els);
 }
 
 /* ------------------------------------------------------------------ */
@@ -399,7 +468,10 @@ function buildModelsList(host) {
       detailGrid([
         [t("views.tokens.detailProvider", {}, "Provider"), row.provider || "—"],
         [t("views.tokens.detailBilling", {}, "Billing mode"), row.billingMode],
-        [t("views.tokens.detailMarginal", {}, "Marginal (real) cost"), formatCost(row.marginalCost)],
+        [
+          t("views.tokens.detailMarginal", {}, "Marginal (real) cost"),
+          formatCost(row.marginalCost),
+        ],
         [
           t("views.tokens.detailHypothetical", {}, "Hypothetical (if per-token)"),
           formatCost(row.hypotheticalCost),
@@ -624,7 +696,11 @@ function buildSourcesList(host) {
 function setGauge(els, prefix, usedPct, remainingPct, reset) {
   const used = Number.isFinite(usedPct) ? usedPct : 0;
   setText(els, `${prefix}Pct`, `${used}%`);
-  setText(els, `${prefix}Remaining`, `${Number.isFinite(remainingPct) ? remainingPct : 100 - used}%`);
+  setText(
+    els,
+    `${prefix}Remaining`,
+    `${Number.isFinite(remainingPct) ? remainingPct : 100 - used}%`,
+  );
   setText(els, `${prefix}Reset`, reset || "-");
   const bar = els[`${prefix}Bar`];
   if (bar) {
@@ -790,11 +866,16 @@ function renderExtraSources(els, data) {
       card.appendChild(row);
     } else {
       const entries = Object.entries(value).slice(0, 10);
-      const pctEntry = entries.find(([k, v]) => /pct|percent/i.test(k) && Number.isFinite(Number(v)));
+      const pctEntry = entries.find(
+        ([k, v]) => /pct|percent/i.test(k) && Number.isFinite(Number(v)),
+      );
       if (pctEntry) {
         const used = Math.min(100, Math.max(0, Number(pctEntry[1])));
         const barWrap = el("div", "vital-bar");
-        const bar = el("div", "vital-bar-fill " + (used > 80 ? "red" : used > 50 ? "yellow" : "green"));
+        const bar = el(
+          "div",
+          "vital-bar-fill " + (used > 80 ? "red" : used > 50 ? "yellow" : "green"),
+        );
         bar.style.width = `${used}%`;
         barWrap.appendChild(bar);
         card.appendChild(barWrap);
@@ -985,7 +1066,11 @@ function renderCodexActivity(els, data) {
 
   const liveCount = data.live?.count || 0;
   els.cxLive.hidden = liveCount === 0;
-  els.cxLive.textContent = t("views.llmUsage.liveProcs", { count: liveCount }, "● {count} processes");
+  els.cxLive.textContent = t(
+    "views.llmUsage.liveProcs",
+    { count: liveCount },
+    "● {count} processes",
+  );
   setText(els, "cxProcs", `${liveCount}`);
   setText(els, "cxEntries", fmtNum(data.activity?.entries));
   setText(els, "cxSessions", fmtNum(data.activity?.sessions));
@@ -1066,7 +1151,11 @@ function renderOpenRouter(els, data) {
     const chip = el("div", "lvx-token-chip");
     const isMoney = /usd|cost|credit|spend|limit/i.test(key);
     chip.appendChild(
-      el("span", "chip-value", isMoney && Number.isFinite(Number(value)) ? fmtUsd(value) : fmtNum(value)),
+      el(
+        "span",
+        "chip-value",
+        isMoney && Number.isFinite(Number(value)) ? fmtUsd(value) : fmtNum(value),
+      ),
     );
     chip.appendChild(el("span", "chip-label", key));
     chips.push(chip);
@@ -1128,7 +1217,11 @@ function renderBudgets(els, data) {
     let elapsedText =
       period === "daily"
         ? t("views.llmUsage.budgetDayElapsed", { pct: slice.elapsedPct }, "{pct}% of day elapsed")
-        : t("views.llmUsage.budgetWeekElapsed", { pct: slice.elapsedPct }, "{pct}% of week elapsed");
+        : t(
+            "views.llmUsage.budgetWeekElapsed",
+            { pct: slice.elapsedPct },
+            "{pct}% of week elapsed",
+          );
     if (slice.usageAvailable === false) {
       elapsedText += ` · ${t("views.llmUsage.budgetNoUsage", {}, "no usage data yet")}`;
     }
@@ -1279,6 +1372,8 @@ export function init(container) {
     planName: container.querySelector("#tokens-plan-name"),
     actualMonthly: container.querySelector("#tokens-actual-monthly"),
     hypothetical: container.querySelector("#tokens-hypothetical"),
+    planLines: container.querySelector("#tokens-plan-lines"),
+    planCards: container.querySelector("#tokens-plan-cards"),
     // Token breakdown lists
     windowsHost: container.querySelector("#tokens-windows-list"),
     tabs: container.querySelector("#tokens-window-tabs"),
