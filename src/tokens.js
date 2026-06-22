@@ -2,13 +2,37 @@ const fs = require("fs");
 const path = require("path");
 const { formatNumber, formatTokens } = require("./utils");
 
-// Claude Opus 4 pricing (per 1M tokens)
+// Claude Opus 4 pricing (per 1M tokens). This is the DEFAULT rate table used
+// when a model has no provider-specific entry in PROVIDER_TOKEN_RATES below.
 const TOKEN_RATES = {
   input: 15.0, // $15/1M input tokens
   output: 75.0, // $75/1M output tokens
   cacheRead: 1.5, // $1.50/1M (90% discount from input)
   cacheWrite: 18.75, // $18.75/1M (25% premium on input)
 };
+
+// Per-provider per-token reference rates (per 1M tokens). Used so a model's
+// hypothetical "if billed per-token" projection reflects ITS OWN list price
+// instead of pricing everything at Opus rates. Keyed by the coarse provider
+// id from modelToProvider(). Codex/gpt-5.5 tokens are priced at the GPT-5.5
+// list price; Claude/Opus tokens at the Opus rate. Providers absent from this
+// map fall back to TOKEN_RATES (Opus). These are sensible, overridable list
+// prices — NOT secrets.
+const PROVIDER_TOKEN_RATES = {
+  // Anthropic Claude (Opus 4) — same as the default table.
+  "claude-code": { input: 15.0, output: 75.0, cacheRead: 1.5, cacheWrite: 18.75 },
+  // OpenAI Codex runtime (GPT-5.5). List price per 1M tokens; cache reads at the
+  // standard cached-input discount, cache writes at the input rate.
+  codex: { input: 1.25, output: 10.0, cacheRead: 0.125, cacheWrite: 1.25 },
+};
+
+// Resolve the per-token rate table for a model. Looks up the model's coarse
+// provider in PROVIDER_TOKEN_RATES; falls back to the supplied default table
+// (TOKEN_RATES / Opus) when the provider has no specific entry.
+function ratesForModel(model, defaultRates = TOKEN_RATES) {
+  const provider = modelToProvider(model);
+  return PROVIDER_TOKEN_RATES[provider] || defaultRates;
+}
 
 // Billing-mode constants. "subscription" providers are paid via a flat
 // monthly OAuth/subscription plan (Codex OAuth, Claude Code Max, …) and have
@@ -90,6 +114,27 @@ function totalPlanCost(plans) {
   return plans.reduce((sum, plan) => sum + (Number(plan.planCost) || 0), 0);
 }
 
+// Neutral descriptor for the SUMMED flat-plan card. The summed card spans every
+// configured plan, so a single plan's label misrepresents it. Derive a short
+// human label from the plan ids/labels:
+//   - one plan  → that plan's label
+//   - 2-3 plans → short names joined ("Claude + Codex")
+//   - 4+ plans  → "<n> subscription plans"
+// Falls back to "Subscription plans" when no plans are configured.
+function describePlanSet(plans) {
+  const list = Array.isArray(plans) ? plans.filter(Boolean) : [];
+  if (list.length === 0) return "Subscription plans";
+  if (list.length === 1) return String(list[0].label || list[0].id || "Subscription plan");
+  if (list.length > 3) return `${list.length} subscription plans`;
+  // Prefer the short id (Capitalized) over the verbose label for the join.
+  const shortName = (plan) => {
+    const id = String(plan.id || "").trim();
+    if (id) return id.charAt(0).toUpperCase() + id.slice(1);
+    return String(plan.label || "Plan");
+  };
+  return list.map(shortName).join(" + ");
+}
+
 // Map a raw model id (e.g. "gpt-5.3-codex", "claude-opus-4", "anthropic/…")
 // to a coarse provider key matching the keys used in
 // config.billing.providerBillingModes. Heuristic + backward-compatible:
@@ -169,15 +214,122 @@ function addUsageToModelMap(modelMap, model, usage) {
   addUsageToBucket(modelMap[key], usage);
 }
 
-// Async token usage refresh - runs in background, doesn't block
-async function refreshTokenUsageAsync(getOpenClawDir) {
+// Recursively collect Claude Code transcript (.jsonl) files under a projects
+// dir (project dir -> subagents/ -> nested transcripts). Mirrors the scan in
+// src/usage-sources/claude-code.js so Opus / Claude Code usage is ingested
+// into the same per-model byModel map as the OpenClaw session store.
+const CLAUDE_PROJECTS_SCAN_DEPTH = 4;
+async function collectClaudeCodeFiles(dir, depth, out) {
+  if (depth > CLAUDE_PROJECTS_SCAN_DEPTH) return;
+  let entries;
+  try {
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch (e) {
+    return; // unreadable / missing directory — skip silently
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      await collectClaudeCodeFiles(full, depth + 1, out);
+    } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+      out.push(full);
+    }
+  }
+}
+
+// Normalize a Claude Code assistant `message.usage` block (snake_case token
+// keys) into the camelCase shape addUsageToBucket expects. Claude Code never
+// reports a per-message dollar cost, so `cost` is omitted (estimated later at
+// the per-model rate).
+function claudeCodeUsageToBucketUsage(usage) {
+  return {
+    input: Number(usage.input_tokens) || 0,
+    output: Number(usage.output_tokens) || 0,
+    cacheRead: Number(usage.cache_read_input_tokens) || 0,
+    cacheWrite: Number(usage.cache_creation_input_tokens) || 0,
+  };
+}
+
+// Ingest Claude Code transcripts into the four time-windowed buckets + per-model
+// maps, mirroring the OpenClaw-session ingestion below. Reads the assistant
+// `message.model` (e.g. "claude-opus-4-...") so Opus shows up in the per-model
+// breakdown and the model filter. Mutates the passed accumulators; never throws.
+async function ingestClaudeCodeUsage(projectsDir, windows, byModels, thresholds) {
+  const files = [];
+  await collectClaudeCodeFiles(projectsDir, 0, files);
+  if (files.length === 0) return;
+
+  const { oneDayAgo, threeDaysAgo, sevenDaysAgo, thirtyDaysAgo } = thresholds;
+  const batchSize = 50;
+  for (let i = 0; i < files.length; i += batchSize) {
+    const batch = files.slice(i, i + batchSize);
+    await Promise.all(
+      batch.map(async (filePath) => {
+        try {
+          const stat = await fs.promises.stat(filePath);
+          if (stat.mtimeMs < thirtyDaysAgo) return;
+          const content = await fs.promises.readFile(filePath, "utf8");
+          for (const line of content.split("\n")) {
+            if (!line.trim()) continue;
+            let entry;
+            try {
+              entry = JSON.parse(line);
+            } catch (e) {
+              continue; // malformed line — skip
+            }
+            if (entry.type !== "assistant" || !entry.message?.usage) continue;
+            const model = entry.message.model;
+            if (!model || model === "<synthetic>") continue;
+            const entryTime = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
+            if (!Number.isFinite(entryTime) || entryTime < thirtyDaysAgo) continue;
+            const u = claudeCodeUsageToBucketUsage(entry.message.usage);
+            if (entryTime >= oneDayAgo) {
+              addUsageToBucket(windows.usage24h, u);
+              addUsageToModelMap(byModels.byModel24h, model, u);
+            }
+            if (entryTime >= threeDaysAgo) {
+              addUsageToBucket(windows.usage3d, u);
+              addUsageToModelMap(byModels.byModel3d, model, u);
+            }
+            if (entryTime >= sevenDaysAgo) {
+              addUsageToBucket(windows.usage7d, u);
+              addUsageToModelMap(byModels.byModel7d, model, u);
+            }
+            addUsageToBucket(windows.usage30d, u);
+            addUsageToModelMap(byModels.byModel30d, model, u);
+          }
+        } catch (e) {
+          // unreadable file — skip
+        }
+      }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+// Async token usage refresh - runs in background, doesn't block.
+//
+// Ingests usage from TWO sources into one per-model byModel map so the model
+// filter, per-model table, and per-token cost cover BOTH runtimes:
+//   1. OpenClaw session store (~/.openclaw/agents/main/sessions/*.jsonl) —
+//      Codex/gpt-5.5 turns routed through the OpenClaw gateway.
+//   2. Claude Code transcripts (~/.claude/projects/**/*.jsonl) — local Claude
+//      Code / Opus terminal sessions (getClaudeProjectsDir, default
+//      ~/.claude/projects).
+async function refreshTokenUsageAsync(getOpenClawDir, getClaudeProjectsDir) {
   if (tokenUsageCache.refreshing) return;
   tokenUsageCache.refreshing = true;
 
   try {
     const sessionsDir = path.join(getOpenClawDir(), "agents", "main", "sessions");
-    const files = await fs.promises.readdir(sessionsDir);
-    const jsonlFiles = files.filter((f) => f.endsWith(".jsonl"));
+    let jsonlFiles = [];
+    try {
+      const files = await fs.promises.readdir(sessionsDir);
+      jsonlFiles = files.filter((f) => f.endsWith(".jsonl"));
+    } catch (e) {
+      // No OpenClaw session store — Claude Code ingestion below can still run.
+      jsonlFiles = [];
+    }
 
     const now = Date.now();
     const oneDayAgo = now - 24 * 60 * 60 * 1000;
@@ -257,6 +409,19 @@ async function refreshTokenUsageAsync(getOpenClawDir) {
       // Yield to event loop between batches
       await new Promise((resolve) => setImmediate(resolve));
     }
+
+    // Also ingest Claude Code / Opus transcripts so Opus appears in the model
+    // filter + per-model table alongside the OpenClaw (Codex) usage above.
+    const claudeProjectsDir =
+      typeof getClaudeProjectsDir === "function"
+        ? getClaudeProjectsDir()
+        : path.join(require("os").homedir(), ".claude", "projects");
+    await ingestClaudeCodeUsage(
+      claudeProjectsDir,
+      { usage24h, usage3d, usage7d, usage30d },
+      { byModel24h, byModel3d, byModel7d, byModel30d },
+      { oneDayAgo, threeDaysAgo, sevenDaysAgo, thirtyDaysAgo },
+    );
 
     // Helper to finalize bucket with computed fields
     const finalizeBucket = (bucket, byModel) => ({
@@ -480,7 +645,9 @@ function aggregatePlanCosts(
 function summarizeModelUsage(byModel = {}, rates = TOKEN_RATES, providerBillingModes = {}) {
   return Object.entries(byModel)
     .map(([model, bucket]) => {
-      const estCost = calculateCostForBucket(bucket, rates).totalCost;
+      // Price each model at ITS OWN per-token rate (Codex/gpt-5.5 at the GPT
+      // list price, Claude/Opus at the Opus rate) rather than Opus-for-all.
+      const estCost = calculateCostForBucket(bucket, ratesForModel(model, rates)).totalCost;
       const reportedCost = bucket.cost || 0;
       const hypotheticalCost = reportedCost > 0 ? reportedCost : estCost;
       const provider = modelToProvider(model);
@@ -536,8 +703,12 @@ function getCostBreakdown(config, getSessions, getOpenClawDir) {
   // actualMonthlySpend = planCost + marginal).
   const plans = getBillingPlans(config);
   const planCost = totalPlanCost(plans);
-  // Backward-compatible single plan name: the first (Claude) plan's label.
-  const planName = plans[0]?.label || DEFAULT_CLAUDE_PLAN_NAME;
+  // The summed "Flat plan cost" card covers EVERY configured plan, so a single
+  // plan's label (the old "Claude Code Max") is misleading when the sum spans
+  // Claude + Codex. Use a neutral descriptor: the plan provider names joined
+  // (e.g. "Claude + Codex"), or the plan count when there are many. The
+  // per-plan breakdown lines (`plans`) carry each plan's real label.
+  const planName = describePlanSet(plans);
 
   // Calculate moving averages for each window
   const windowConfigs = {
@@ -581,6 +752,10 @@ function getCostBreakdown(config, getSessions, getOpenClawDir) {
       const savings = hypotheticalMonthly - actualMonthlySpend;
       return {
         ...line,
+        // `days` is the basis the monthly figures were extrapolated from, so the
+        // UI can say "≈ $X/mo at the {window} burn rate". hypotheticalMonthly is
+        // a RATE projection (cumulative / days * 30), not a cumulative total.
+        days: windowConfig.days,
         hypotheticalMonthly,
         marginalMonthly,
         actualMonthlySpend,
@@ -902,6 +1077,9 @@ function startTokenUsageRefresh(getOpenClawDir) {
 
 module.exports = {
   TOKEN_RATES,
+  PROVIDER_TOKEN_RATES,
+  ratesForModel,
+  describePlanSet,
   BILLING_SUBSCRIPTION,
   BILLING_PER_TOKEN,
   DEFAULT_BILLING_MODE,

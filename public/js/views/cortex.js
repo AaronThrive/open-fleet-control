@@ -26,6 +26,33 @@ let searchTimer = null;
 // Shared detail-list instance for the memory browser (rebuilt on every init).
 let memoryList = null;
 
+// Engine ("gauge") date-window selection. Rebuilt on every init so a fresh
+// visit always starts on the lifetime ("all") view. Either a named rolling
+// window or an explicit { from, to } range drives the /api/fleet/cortex query.
+let engineWindow = "all";
+let engineRange = { from: null, to: null };
+
+/** Recognized rolling windows for the engine gauge filter. */
+const ENGINE_WINDOWS = ["24h", "7d", "30d", "all"];
+
+/**
+ * Build the cortex state URL for the current engine-window selection. An
+ * explicit from/to range takes precedence over the named window; the "all"
+ * window (and an empty range) yields the bare endpoint — the lifetime default
+ * — so nothing is appended and the original request shape is preserved.
+ */
+function cortexStateUrl() {
+  const params = new URLSearchParams();
+  if (engineRange.from || engineRange.to) {
+    if (engineRange.from) params.set("from", engineRange.from);
+    if (engineRange.to) params.set("to", engineRange.to);
+  } else if (engineWindow && engineWindow !== "all") {
+    params.set("window", engineWindow);
+  }
+  const qs = params.toString();
+  return qs ? `${API_BASE}?${qs}` : API_BASE;
+}
+
 /* ------------------------------------------------------------------ */
 /* Formatting helpers                                                  */
 /* ------------------------------------------------------------------ */
@@ -339,14 +366,17 @@ function buildLcmCard(gauge, activeEngine) {
   );
 
   if (d.stale === true) {
+    // Idle is the genuine, expected state here (lossless-claw does not hold the
+    // context-engine slot). Show the absolute date plainly and frame the
+    // figures as a historical snapshot — informative, not an error.
     card.appendChild(
       el(
         "div",
-        "cx-eng-line warn",
+        "cx-eng-line",
         t(
           "views.cortex.lcmStaleMsg",
-          { when: formatWhen(d.lastActivity) || "?" },
-          "no compaction since {when} — engine idle, numbers are historical",
+          { when: formatAbsolute(d.lastActivity) || "an earlier date" },
+          "Idle since {when} — these totals are a historical snapshot, not live activity.",
         ),
       ),
     );
@@ -1045,37 +1075,66 @@ async function loadWorkspaceMemory(root) {
 /* Entry point                                                         */
 /* ------------------------------------------------------------------ */
 
-export function init(container) {
-  // Idempotency: cancel anything left over from a previous visit.
-  if (abortController) abortController.abort();
-  abortController = new AbortController();
-  clearTimeout(searchTimer);
-  // The view loader replaces the DOM wholesale; drop the stale list handle.
-  memoryList = null;
+/** Short human label for the active engine window (status line + a11y). */
+function engineWindowLabel() {
+  if (engineRange.from || engineRange.to) {
+    const from = engineRange.from || "…";
+    const to = engineRange.to || t("views.cortex.engineWindowNow", {}, "now");
+    return t(
+      "views.cortex.engineWindowRangeStatus",
+      { from, to },
+      "Showing engine totals from {from} to {to}",
+    );
+  }
+  if (engineWindow && engineWindow !== "all") {
+    return t(
+      "views.cortex.engineWindowRollingStatus",
+      { window: engineWindow },
+      "Showing engine totals for the last {window}",
+    );
+  }
+  return t("views.cortex.engineWindowAllStatus", {}, "Showing lifetime engine totals");
+}
 
-  const root = container.querySelector("#cortex-view-section");
-  if (!root) return;
+function setEngineWindowStatus(root) {
+  const status = root.querySelector("#cx-window-status");
+  if (status) status.textContent = engineWindowLabel();
+}
 
-  // Workspace memory stats live behind a separate endpoint (/api/memory) and
-  // load independently of the cortex state fetch.
-  loadWorkspaceMemory(root);
+/**
+ * Fetch the cortex state for the current engine-window selection and (re)render
+ * the date-dependent regions: availability dots, the active-engine strip, and
+ * the gauge cards. On the first load it also renders the date-agnostic regions
+ * (health, Obsidian mirror, recent updates, memory browser) — those never
+ * change with the window, so subsequent window switches leave them untouched.
+ */
+function loadCortexState(root, isFirstLoad) {
+  setEngineWindowStatus(root);
+  const gaugesHost = root.querySelector("#cx-gauges");
+  if (gaugesHost && !isFirstLoad) {
+    clearChildren(gaugesHost);
+    gaugesHost.appendChild(
+      el("div", "cx-loading", t("views.cortex.loadingGauges", {}, "Loading compression gauges…")),
+    );
+  }
 
-  fetchJson(API_BASE)
+  return fetchJson(cortexStateUrl())
     .then((state) => {
       renderAvailability(root, state);
-      renderHealth(root, state.memory, state.health);
-      renderObsidian(root, state.obsidian, state.memory);
-      renderRecentUpdates(root, state.recentUpdates);
       renderEngineStrip(root, state.contextEngine);
       renderGauges(root, state.gauges, state.contextEngine);
-      setupMemoryBrowser(root, state.memory);
+      if (isFirstLoad) {
+        renderHealth(root, state.memory, state.health);
+        renderObsidian(root, state.obsidian, state.memory);
+        renderRecentUpdates(root, state.recentUpdates);
+        setupMemoryBrowser(root, state.memory);
+      }
     })
     .catch((error) => {
       if (error.name === "AbortError") return;
-      const gauges = root.querySelector("#cx-gauges");
-      if (gauges) {
-        clearChildren(gauges);
-        gauges.appendChild(
+      if (gaugesHost) {
+        clearChildren(gaugesHost);
+        gaugesHost.appendChild(
           el(
             "div",
             "cx-empty",
@@ -1087,9 +1146,102 @@ export function init(container) {
           ),
         );
       }
-      renderHealth(root, { available: false, reason: error.message }, null);
-      renderObsidian(root, null, null);
-      renderRecentUpdates(root, null);
-      setupMemoryBrowser(root, { available: false, reason: error.message });
+      if (isFirstLoad) {
+        renderHealth(root, { available: false, reason: error.message }, null);
+        renderObsidian(root, null, null);
+        renderRecentUpdates(root, null);
+        setupMemoryBrowser(root, { available: false, reason: error.message });
+      }
     });
+}
+
+/**
+ * Wire the engine date-window control: the rolling-window buttons and the
+ * explicit from/to range. Selecting a window or applying a range re-fetches
+ * only the gauge-bearing state (loadCortexState) and re-renders the engine
+ * region in place; the rest of the view stays put.
+ */
+function setupEngineWindow(root) {
+  const tabs = root.querySelector("#cx-window-tabs");
+  const fromInput = root.querySelector("#cx-window-from");
+  const toInput = root.querySelector("#cx-window-to");
+  const applyBtn = root.querySelector("#cx-window-apply");
+  const clearBtn = root.querySelector("#cx-window-clear");
+
+  const markActiveWindow = (value) => {
+    if (!tabs) return;
+    tabs
+      .querySelectorAll(".filter-btn")
+      .forEach((btn) => btn.classList.toggle("active", btn.dataset.window === value));
+  };
+
+  if (tabs) {
+    tabs.querySelectorAll(".filter-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const value = btn.dataset.window;
+        if (!ENGINE_WINDOWS.includes(value)) return;
+        // A named window supersedes any explicit range; clear the date inputs.
+        engineWindow = value;
+        engineRange = { from: null, to: null };
+        if (fromInput) fromInput.value = "";
+        if (toInput) toInput.value = "";
+        markActiveWindow(value);
+        loadCortexState(root, false);
+      });
+    });
+  }
+
+  if (applyBtn) {
+    applyBtn.addEventListener("click", () => {
+      const from = fromInput ? fromInput.value : "";
+      const to = toInput ? toInput.value : "";
+      if (!from && !to) {
+        // Empty range behaves like "all".
+        engineWindow = "all";
+        engineRange = { from: null, to: null };
+        markActiveWindow("all");
+        loadCortexState(root, false);
+        return;
+      }
+      // An explicit range wins over the rolling-window buttons.
+      engineWindow = null;
+      engineRange = { from: from || null, to: to || null };
+      markActiveWindow(null);
+      loadCortexState(root, false);
+    });
+  }
+
+  if (clearBtn) {
+    clearBtn.addEventListener("click", () => {
+      engineWindow = "all";
+      engineRange = { from: null, to: null };
+      if (fromInput) fromInput.value = "";
+      if (toInput) toInput.value = "";
+      markActiveWindow("all");
+      loadCortexState(root, false);
+    });
+  }
+}
+
+export function init(container) {
+  // Idempotency: cancel anything left over from a previous visit.
+  if (abortController) abortController.abort();
+  abortController = new AbortController();
+  clearTimeout(searchTimer);
+  // The view loader replaces the DOM wholesale; drop the stale list handle.
+  memoryList = null;
+  // A fresh visit always resets the engine window to the lifetime default.
+  engineWindow = "all";
+  engineRange = { from: null, to: null };
+
+  const root = container.querySelector("#cortex-view-section");
+  if (!root) return;
+
+  // Workspace memory stats live behind a separate endpoint (/api/memory) and
+  // load independently of the cortex state fetch.
+  loadWorkspaceMemory(root);
+
+  // Wire the date-window control, then do the first (lifetime) state load.
+  setupEngineWindow(root);
+  loadCortexState(root, true);
 }

@@ -290,6 +290,14 @@
       margin-top: 8px;
       font-style: italic;
     }
+    #tokens-view-section .lvx-or-subtitle {
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin: 4px 0 6px;
+    }
     #tokens-view-section .lvx-cards {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -365,10 +373,10 @@
         </div>
         <div class="tokens-cost-card hypothetical">
           <span class="tcc-label" data-i18n="views.tokens.hypotheticalLabel"
-            >If billed per-token (hypothetical)</span
+            >If billed per-token (cumulative)</span
           >
           <span class="tcc-value" id="tokens-hypothetical">$0.00</span>
-          <span class="tcc-sub" data-i18n="views.tokens.hypotheticalSub"
+          <span class="tcc-sub" id="tokens-hypothetical-sub" data-i18n="views.tokens.hypotheticalSub"
             >Projection only — NOT money you are spending</span
           >
         </div>
@@ -376,7 +384,7 @@
       <!-- Per-plan flat-fee subscription lines (Claude + Codex). Each plan is
            its own flat-fee line with the same margin model. Populated by the
            view from /api/cost-breakdown windows[k].plans. -->
-      <div class="tokens-plan-lines" id="tokens-plan-lines" hidden>
+      <div class="tokens-plan-lines" id="tokens-plan-lines">
         <div class="tokens-section-title" data-i18n="views.tokens.plansTitle">
           Subscription plans
         </div>
@@ -402,74 +410,19 @@
           </div>
           <div class="vitals-uptime">Routing: <span id="lv-routing-summary">-</span></div>
         </div>
+        <!-- NOTE: The three Claude plan-limit gauges (5h / weekly / Sonnet)
+             that used to live here were RETIRED. They read /api/llm-usage →
+             `openclaw status --usage`, which drops anthropic (403, missing
+             user:profile scope) and rendered a fake 0%. The SAME three figures
+             are now shown HONESTLY by the "Claude / Codex plan usage" rings
+             below (sourced live via the Headroom proxy). -->
         <div class="vitals-grid">
-          <!-- Claude Session -->
+          <!-- Codex (5h + daily plan-limit utilization, both live). The old
+               "tasks today" sub-stat was hardcoded 0 (no session telemetry in
+               Codex history logs) and has been dropped so no fake zero shows. -->
           <div class="vital-card">
             <div class="vital-header">
-              <span class="vital-label">🔮 Session Limit</span>
-              <span class="vital-value" id="lv-claude-session-pct">-%</span>
-            </div>
-            <div class="vital-bar">
-              <div class="vital-bar-fill purple" id="lv-claude-session-bar" style="width: 0%"></div>
-            </div>
-            <div class="vital-detail">
-              <div class="vital-detail-item">
-                <span class="vital-detail-value" id="lv-claude-session-remaining">-%</span>
-                <span class="vital-detail-label">remaining</span>
-              </div>
-              <div class="vital-detail-item">
-                <span class="vital-detail-value" id="lv-claude-session-reset">-</span>
-                <span class="vital-detail-label">resets in</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Claude Weekly -->
-          <div class="vital-card">
-            <div class="vital-header">
-              <span class="vital-label">📅 Weekly (All Models)</span>
-              <span class="vital-value" id="lv-claude-weekly-pct">-%</span>
-            </div>
-            <div class="vital-bar">
-              <div class="vital-bar-fill blue" id="lv-claude-weekly-bar" style="width: 0%"></div>
-            </div>
-            <div class="vital-detail">
-              <div class="vital-detail-item">
-                <span class="vital-detail-value" id="lv-claude-weekly-remaining">-%</span>
-                <span class="vital-detail-label">remaining</span>
-              </div>
-              <div class="vital-detail-item">
-                <span class="vital-detail-value" id="lv-claude-weekly-reset">-</span>
-                <span class="vital-detail-label">resets in</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Sonnet Weekly -->
-          <div class="vital-card">
-            <div class="vital-header">
-              <span class="vital-label">✨ Sonnet Weekly</span>
-              <span class="vital-value" id="lv-sonnet-weekly-pct">-%</span>
-            </div>
-            <div class="vital-bar">
-              <div class="vital-bar-fill green" id="lv-sonnet-weekly-bar" style="width: 0%"></div>
-            </div>
-            <div class="vital-detail">
-              <div class="vital-detail-item">
-                <span class="vital-detail-value" id="lv-sonnet-weekly-remaining">-%</span>
-                <span class="vital-detail-label">remaining</span>
-              </div>
-              <div class="vital-detail-item">
-                <span class="vital-detail-value" id="lv-sonnet-weekly-reset">-</span>
-                <span class="vital-detail-label">resets</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Codex -->
-          <div class="vital-card">
-            <div class="vital-header">
-              <span class="vital-label">⚡ Codex (OpenAI)</span>
+              <span class="vital-label">⚡ Codex (OpenAI) · 5h limit</span>
               <span class="vital-value" id="lv-codex-5h-pct">-%</span>
             </div>
             <div class="vital-bar">
@@ -479,10 +432,6 @@
               <div class="vital-detail-item">
                 <span class="vital-detail-value" id="lv-codex-day-pct">-%</span>
                 <span class="vital-detail-label">daily used</span>
-              </div>
-              <div class="vital-detail-item">
-                <span class="vital-detail-value" id="lv-codex-tasks">-</span>
-                <span class="vital-detail-label">tasks today</span>
               </div>
             </div>
           </div>
@@ -503,16 +452,12 @@
                 <span class="vital-detail-label">Codex</span>
               </div>
             </div>
-            <div class="vital-detail" style="margin-top: 8px">
-              <div class="vital-detail-item">
-                <span class="vital-detail-value" id="lv-llama-tasks">-</span>
-                <span class="vital-detail-label">🦙 Llama</span>
-              </div>
-              <div class="vital-detail-item">
-                <span class="vital-detail-value" id="lv-qwen-tasks">-</span>
-                <span class="vital-detail-label">🐱 Qwen</span>
-              </div>
-            </div>
+            <!-- Per-model routing rows, rendered from /api/routing-stats
+                 by_model (one row per model, sorted desc). Replaces the old
+                 hardcoded Llama/Qwen rows. Shows a "no routing data" note when
+                 the router has logged nothing. -->
+            <div class="vital-detail" style="margin-top: 8px; flex-direction: column; gap: 4px" id="lv-routing-by-model"></div>
+            <div class="vital-detail-label" id="lv-routing-empty" style="margin-top: 6px" hidden></div>
             <div
               style="margin-top: 8px; text-align: center"
               title="Average routing latency (classification + execution)"
@@ -535,14 +480,21 @@
       <div class="lvx-cards" id="lvx-bg-gauges"></div>
     </div>
 
-    <!-- ============ Claude Max Subscription (headroom) ============ -->
+    <!-- ============ Claude / Codex plan usage (observed via Headroom) ======
+         These rings are the OPERATOR's Claude plan-limit utilization (5h /
+         weekly all-models / weekly Sonnet). They are LIVE and accurate — the
+         data is observed through the Headroom proxy, which is why they work
+         where the retired `openclaw status --usage` gauges did not. -->
     <div class="vitals-panel lvx-panel" id="lvx-sub-panel" hidden>
       <div class="vitals-header">
         <div class="vitals-title">
-          👑 <span>Claude Max Subscription</span>
+          👑 <span>Claude / Codex Plan Usage</span>
           <span class="lvx-badge stale" id="lvx-sub-stale" hidden>STALE</span>
           <span class="vitals-hostname" id="lvx-sub-polled">-</span>
         </div>
+      </div>
+      <div class="lvx-status" id="lvx-sub-source-note" style="font-style: italic">
+        Plan-limit utilization — observed via the Headroom proxy.
       </div>
       <div class="lvx-status warn" id="lvx-sub-status" hidden></div>
       <div class="lvx-flex-split">
@@ -551,21 +503,21 @@
             <div class="lvx-ring" id="lvx-sub-5h-ring">
               <div class="lvx-ring-inner" id="lvx-sub-5h-pct">-%</div>
             </div>
-            <div class="lvx-ring-label">5-hour window</div>
+            <div class="lvx-ring-label" title="Claude 5-hour rolling plan limit">Claude 5h limit</div>
             <div class="lvx-ring-reset" id="lvx-sub-5h-reset">-</div>
           </div>
           <div class="lvx-ring-card">
             <div class="lvx-ring" id="lvx-sub-7d-ring">
               <div class="lvx-ring-inner" id="lvx-sub-7d-pct">-%</div>
             </div>
-            <div class="lvx-ring-label">7-day (all)</div>
+            <div class="lvx-ring-label" title="Claude weekly all-models plan limit">Claude weekly (all)</div>
             <div class="lvx-ring-reset" id="lvx-sub-7d-reset">-</div>
           </div>
           <div class="lvx-ring-card">
             <div class="lvx-ring" id="lvx-sub-sonnet-ring">
               <div class="lvx-ring-inner" id="lvx-sub-sonnet-pct">-%</div>
             </div>
-            <div class="lvx-ring-label">7-day Sonnet</div>
+            <div class="lvx-ring-label" title="Claude weekly Sonnet plan limit">Claude weekly (Sonnet)</div>
             <div class="lvx-ring-reset" id="lvx-sub-sonnet-reset">-</div>
           </div>
         </div>
@@ -588,6 +540,12 @@
             </div>
           </div>
         </div>
+      </div>
+      <div class="lvx-or-subtitle" style="margin-top: 12px">
+        Token usage — 24h rolling window
+        <span style="font-weight: 400; text-transform: none; letter-spacing: 0"
+          >(persisted; does not reset when a terminal session ends)</span
+        >
       </div>
       <div class="lvx-token-strip" id="lvx-sub-tokens">
         <div class="lvx-token-chip">
@@ -748,13 +706,24 @@
       </table>
     </div>
 
-    <!-- ============ OpenRouter ============ -->
+    <!-- ============ OpenRouter ============
+         One unified card. The two sub-sections read as a single panel:
+           • Account credits — the WHOLE OpenRouter account balance/usage
+             (GET /api/v1/credits → total_credits / total_usage).
+           • This key's usage — the specific API key's metered usage + limit
+             (GET /api/v1/auth/key → usage / limit). -->
     <div class="vitals-panel lvx-panel" id="lvx-or-panel" hidden>
       <div class="vitals-header">
         <div class="vitals-title">🌐 <span>OpenRouter</span></div>
       </div>
       <div class="lvx-status warn" id="lvx-or-status" hidden></div>
-      <div class="lvx-token-strip" id="lvx-or-body" hidden></div>
+      <div id="lvx-or-body" hidden>
+        <div class="lvx-or-subtitle" id="lvx-or-credits-title">Account credits (whole OpenRouter account)</div>
+        <div class="lvx-token-strip" id="lvx-or-credits"></div>
+        <div class="lvx-or-subtitle" id="lvx-or-key-title" style="margin-top: 12px">This key's usage</div>
+        <div class="lvx-token-strip" id="lvx-or-key"></div>
+        <div class="lvx-note" id="lvx-or-key-note" hidden></div>
+      </div>
     </div>
 
     <!-- Additional usage sources (future adapters) render here from whatever
@@ -789,6 +758,12 @@
         </button>
       </div>
       <div id="tokens-models-list"></div>
+      <p class="tokens-section-note">
+        Covers both runtimes: Codex (gpt-5.5) usage from the OpenClaw session
+        store and Claude Code / Opus usage from local Claude Code transcripts.
+        Each model's "if per-token" cost is priced at its OWN list rate (Codex
+        at the GPT rate, Opus at the Opus rate).
+      </p>
     </div>
 
     <div class="tokens-section">

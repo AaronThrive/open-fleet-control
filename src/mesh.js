@@ -271,6 +271,61 @@ function extractNodeVitals(state) {
   };
 }
 
+/**
+ * Group enriched node records into physical VPS hosts.
+ *
+ * Multiple fleet nodes can share one physical VPS — e.g. a primary dashboard
+ * (oc-bot-1:443) and a Hermes dashboard (hermes-agent-1:8443) running as two
+ * services on the same box. Each node's `vitals` block carries the OS-level
+ * `hostname` plus WHOLE-HOST metrics (memory total, disk, cpu cores/load read
+ * from /proc, df, nproc) — not per-container figures — so two nodes on the
+ * same VPS report the same host vitals.
+ *
+ * The grouping key is the node's reported `vitals.hostname` when present (the
+ * stable physical-host identity), falling back to the node's own tailnet
+ * hostname when the node never reported vitals. This makes additional VPS
+ * hosts appear automatically as separate groups; a single-VPS fleet collapses
+ * to one host. No host is ever fabricated — a host's summary vitals are taken
+ * verbatim from a member node that actually reported them (null otherwise).
+ *
+ * @param {Array<object>} enrichedNodes - nodes with {id, hostname, vitals, ...}
+ * @returns {Array<{hostId: string, hostname: string, vitals: object|null, nodeIds: string[]}>}
+ */
+function groupNodesByHost(enrichedNodes) {
+  const order = [];
+  const byKey = new Map();
+
+  for (const node of enrichedNodes) {
+    const reportedHost =
+      node.vitals && typeof node.vitals.hostname === "string" && node.vitals.hostname
+        ? node.vitals.hostname
+        : null;
+    const hostId = reportedHost || node.hostname || "unknown";
+
+    if (!byKey.has(hostId)) {
+      byKey.set(hostId, {
+        hostId,
+        hostname: hostId,
+        // Whole-VPS vitals: first member that actually reported a block wins;
+        // never synthesized. Stays null until a member reports vitals.
+        vitals: node.vitals || null,
+        nodeIds: [node.id],
+      });
+      order.push(hostId);
+    } else {
+      const host = byKey.get(hostId);
+      const updated = {
+        ...host,
+        nodeIds: [...host.nodeIds, node.id],
+        vitals: host.vitals || node.vitals || null,
+      };
+      byKey.set(hostId, updated);
+    }
+  }
+
+  return order.map((key) => byKey.get(key));
+}
+
 function createInitialHealth() {
   return {
     status: "unknown",
@@ -303,6 +358,11 @@ function createInitialHealth() {
  *   each entry is the same validateNodeInput shape (without id/registeredAt)
  * @param {string} [options.selfHostname] - this node's hostname; seed entries
  *   matching it are skipped (a node never seeds itself)
+ * @param {function} [options.getSelfVitals] - returns THIS host's locally
+ *   collected vitals block (same shape as a remote /api/state `vitals`), or
+ *   null. Used to populate the self node's grid card + host summary without a
+ *   tailnet round-trip, since the self node's remote poll of its own /api/state
+ *   may not populate the cache. Best-effort: any throw degrades to null.
  * @returns {{start, stop, getState, registerNode, unregisterNode, discoverPeers, getFleetCosts, collectNodeStats, _pollOnce}}
  */
 function createMesh(options = {}) {
@@ -317,6 +377,7 @@ function createMesh(options = {}) {
     nowFn = Date.now,
     seed = [],
     selfHostname = "",
+    getSelfVitals = null,
   } = options;
 
   if (!stateDir || typeof stateDir !== "string") {
@@ -763,22 +824,50 @@ function createMesh(options = {}) {
     const [tsStatus, discovery] = await Promise.all([tailscale.getStatus(), discoverPeers()]);
     const suffix = tsStatus.available && tsStatus.self ? tsStatus.self.magicDnsSuffix : "";
 
+    // Locally collected vitals for THIS host. Used to populate the self node's
+    // grid card directly, since the self node's remote /api/state poll over the
+    // tailnet may not refresh its own cache (closed loop, serve config, etc.).
+    // Best-effort: any throw or missing block degrades to null. Normalized
+    // through extractNodeVitals so it matches the remote-poll vitals shape.
+    let selfVitals = null;
+    if (typeof getSelfVitals === "function") {
+      try {
+        const raw = getSelfVitals();
+        selfVitals = raw ? extractNodeVitals({ vitals: raw }) : null;
+      } catch (e) {
+        selfVitals = null;
+      }
+    }
+    const selfName = selfHostname || (tsStatus.available && tsStatus.self ? tsStatus.self.hostname : "");
+
+    const enrichedNodes = nodes.map((node) => {
+      const stats = nodeStats[node.id];
+      const cachedVitals = stats ? stats.vitals : null;
+      // The self node prefers its locally collected vitals (always fresh, no
+      // round-trip); other nodes use their last cached remote /api/state poll.
+      const isSelf = !!selfName && node.hostname === selfName;
+      const vitals = isSelf ? selfVitals || cachedVitals : cachedVitals;
+      return {
+        ...node,
+        url: composeNodeUrl(node, suffix),
+        health: health[node.id] || createInitialHealth(),
+        vitals,
+        vitalsAt: isSelf && selfVitals ? nowFn() : stats ? stats.vitalsAt : null,
+        isSelf,
+      };
+    });
+
     return {
       self: tsStatus.available ? tsStatus.self : null,
       tailscale: {
         available: tsStatus.available,
         error: tsStatus.available ? null : tsStatus.error,
       },
-      nodes: nodes.map((node) => {
-        const stats = nodeStats[node.id];
-        return {
-          ...node,
-          url: composeNodeUrl(node, suffix),
-          health: health[node.id] || createInitialHealth(),
-          vitals: stats ? stats.vitals : null,
-          vitalsAt: stats ? stats.vitalsAt : null,
-        };
-      }),
+      nodes: enrichedNodes,
+      // Two-tier topology: physical VPS hosts (whole-host vitals) above, with
+      // the individual nodes that live on each host listed below. Multi-VPS
+      // aware — additional hosts appear automatically as additional groups.
+      hosts: groupNodesByHost(enrichedNodes),
       candidates: discovery.candidates,
       intervalMs,
       timestamp: nowFn(),
@@ -807,6 +896,7 @@ module.exports = {
   isSameInstance,
   extractNodeCosts,
   extractNodeVitals,
+  groupNodesByHost,
   LATENCY_SAMPLE_LIMIT,
   STATE_REFRESH_EVERY_N_POLLS,
   VALID_PLATFORMS,

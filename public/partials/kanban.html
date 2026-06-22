@@ -311,8 +311,16 @@
     .kb-card-meta {
       display: flex;
       gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
       font-size: 0.66rem;
       color: var(--text-muted);
+    }
+    /* Absolute last-activity date+time, surfaced on every card for scanning. */
+    .kb-card-time {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--text);
+      white-space: nowrap;
     }
 
     /* ---- Federation: origin legend + remote cards ---- */

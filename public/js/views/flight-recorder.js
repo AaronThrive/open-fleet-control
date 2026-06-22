@@ -35,6 +35,37 @@ let agentRosterPromise = null; // GET /api/agents/fleet, fetched once, cached
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
+/** Coerce an ISO/sqlite ("YYYY-MM-DD HH:MM:SS", UTC)/epoch timestamp to epoch-ms (or null). */
+function toEpochMs(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const normalized =
+    typeof value === "string" && /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(value)
+      ? `${value.replace(" ", "T")}Z`
+      : value;
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * Absolute local "Jun 1, 2026, 21:04" for an ISO/sqlite/epoch timestamp; falls
+ * back to the raw string when unparseable, "" when empty. Matches the
+ * formatAbsolute() used in the Cortex / Alerts / Tokens views so the operator
+ * reads the same exact date+time format across every view.
+ */
+function formatAbsolute(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const ms = toEpochMs(value);
+  if (ms === null) return String(value);
+  return new Date(ms).toLocaleString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function relativeTime(iso) {
   const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return "—";
@@ -184,7 +215,23 @@ function buildRunRow(els, run, isLive) {
   );
   sub.appendChild(seats);
 
+  // Absolute date+time (prominent): the exact moment the operator scans for.
+  // Live runs show when they started; archived runs show when they ended.
+  const stamp = isLive
+    ? run.startedAt
+    : run.endedAt || run.archivedAt || run.startedAt;
+  const absolute = formatAbsolute(stamp);
+  if (absolute) {
+    const abs = document.createElement("span");
+    abs.className = "fr-run-abs";
+    abs.textContent = absolute;
+    abs.title = absolute;
+    sub.appendChild(abs);
+  }
+
+  // Relative time kept small as secondary context ("3d ago" / "live").
   const when = document.createElement("span");
+  when.className = "fr-run-rel";
   when.textContent = isLive
     ? t("views.flightRecorder.liveNow", {}, "live")
     : relativeTime(run.endedAt || run.archivedAt || run.startedAt);

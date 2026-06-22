@@ -223,7 +223,10 @@ function renderState(state) {
   refs.body.hidden = false;
 
   renderSelf(state);
-  renderNodes(Array.isArray(state.nodes) ? state.nodes : []);
+  renderNodes(
+    Array.isArray(state.nodes) ? state.nodes : [],
+    Array.isArray(state.hosts) ? state.hosts : null,
+  );
 }
 
 function renderSelf(state) {
@@ -525,7 +528,14 @@ function formatUptime(uptime) {
 
 // --- Rendering: node grid -----------------------------------------------------
 
-function renderNodes(nodes) {
+/**
+ * Render the registered fleet as a two-tier topology: one whole-VPS host
+ * summary card per physical host (top), with that host's individual node
+ * cards grouped beneath it (bottom). `hosts` is the backend grouping
+ * (state.hosts); when absent (older backend) it is derived client-side so the
+ * view degrades gracefully. Multi-VPS aware — each host becomes its own group.
+ */
+function renderNodes(nodes, hosts) {
   const hasNodes = nodes.length > 0;
   refs.emptyState.hidden = hasNodes;
   refs.grid.hidden = !hasNodes;
@@ -551,9 +561,92 @@ function renderNodes(nodes) {
   );
   const hasSkew = versions.size > 1;
 
-  for (const node of nodes) {
-    refs.grid.appendChild(buildNodeCard(node, hasSkew));
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const groups = Array.isArray(hosts) && hosts.length > 0 ? hosts : deriveHostGroups(nodes);
+
+  for (const host of groups) {
+    const members = (Array.isArray(host.nodeIds) ? host.nodeIds : [])
+      .map((id) => nodeById.get(id))
+      .filter(Boolean);
+    if (members.length === 0) continue;
+    refs.grid.appendChild(buildHostGroup(host, members, hasSkew));
   }
+}
+
+/**
+ * Client-side fallback grouping by reported host (vitals.hostname) when the
+ * backend does not supply a `hosts` array. Mirrors the server's grouping key.
+ */
+function deriveHostGroups(nodes) {
+  const order = [];
+  const byKey = new Map();
+  for (const node of nodes) {
+    const reported =
+      node.vitals && typeof node.vitals.hostname === "string" && node.vitals.hostname
+        ? node.vitals.hostname
+        : null;
+    const hostId = reported || node.hostname || "unknown";
+    if (!byKey.has(hostId)) {
+      byKey.set(hostId, { hostId, hostname: hostId, vitals: node.vitals || null, nodeIds: [node.id] });
+      order.push(hostId);
+    } else {
+      const host = byKey.get(hostId);
+      host.nodeIds.push(node.id);
+      if (!host.vitals && node.vitals) host.vitals = node.vitals;
+    }
+  }
+  return order.map((key) => byKey.get(key));
+}
+
+/** A host group: whole-VPS summary card + its member node cards. */
+function buildHostGroup(host, members, hasSkew) {
+  const group = el("div", "mesh-host-group");
+  group.appendChild(buildHostCard(host, members.length));
+
+  const nodeGrid = el("div", "mesh-host-nodes");
+  for (const node of members) {
+    nodeGrid.appendChild(buildNodeCard(node, hasSkew));
+  }
+  group.appendChild(nodeGrid);
+  return group;
+}
+
+/**
+ * Whole-VPS summary card: host name + total memory / disk / cpu for the
+ * physical host. Vitals are taken verbatim from the backend grouping (never
+ * synthesized); when no member reported vitals, an honest note is shown
+ * instead of fabricated numbers.
+ */
+function buildHostCard(host, nodeCount) {
+  const card = el("div", "mesh-host-card");
+
+  const head = el("div", "mesh-host-head");
+  head.appendChild(el("span", "mesh-host-icon", "🖥️"));
+  head.appendChild(el("div", "mesh-host-name", host.hostname || "unknown"));
+  head.appendChild(
+    el(
+      "span",
+      "mesh-host-count",
+      t("views.mesh.hostNodeCount", { n: nodeCount }, "{n} node(s)"),
+    ),
+  );
+  head.appendChild(el("span", "mesh-host-tag", t("views.mesh.hostTag", {}, "VPS host")));
+  card.appendChild(head);
+
+  const vitalsSection = buildVitalsSection(host.vitals);
+  if (vitalsSection) {
+    vitalsSection.classList.add("mesh-host-vitals");
+    card.appendChild(vitalsSection);
+  } else {
+    card.appendChild(
+      el(
+        "div",
+        "mesh-host-no-vitals",
+        t("views.mesh.hostNoVitals", {}, "Whole-host metrics unavailable for this VPS."),
+      ),
+    );
+  }
+  return card;
 }
 
 /** Health may be nested (live API) or flattened (older shapes); handle both. */
