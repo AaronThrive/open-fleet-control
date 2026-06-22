@@ -440,12 +440,26 @@ function createGbrain(options = {}) {
     const lastExportAt = exportMatch ? exportMatch.at : null;
     const lastExportSummary = exportMatch ? exportMatch.summary : null;
 
-    // Approx vault page count, opportunistically parsed from the export summary
-    // (e.g. "412 pages" / "exported 412"). Best-effort only → null when absent.
+    // Approx vault page count, derived from the export summary. The export
+    // line looks like "gbrain->vault done: added=4 updated=463 decased=1": the
+    // export touches every reconciled page exactly once, so the vault page
+    // total is added + updated (≈467 here). The old code grabbed the first
+    // bare number it saw, which was `added=4` — wrong by two orders of
+    // magnitude. Prefer an explicit "<n> pages" phrasing if a future log adds
+    // it, otherwise sum the added+updated counts. Best-effort only → null when
+    // neither shape is present.
     let vaultPagesApprox = null;
     if (lastExportSummary) {
-      const num = lastExportSummary.match(/(\d+)\s*pages?\b/i) || lastExportSummary.match(/\b(\d+)\b/);
-      if (num) vaultPagesApprox = Number(num[1]);
+      const explicit = lastExportSummary.match(/(\d+)\s*pages?\b/i);
+      if (explicit) {
+        vaultPagesApprox = Number(explicit[1]);
+      } else {
+        const added = lastExportSummary.match(/\badded=(\d+)\b/i);
+        const updated = lastExportSummary.match(/\bupdated=(\d+)\b/i);
+        if (added || updated) {
+          vaultPagesApprox = (added ? Number(added[1]) : 0) + (updated ? Number(updated[1]) : 0);
+        }
+      }
     }
 
     const importStale = isStaleTimestamp(lastImportAt, nowMs);

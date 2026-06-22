@@ -11,6 +11,7 @@ let windowRows;
 let dailySummaryNumbers;
 let dailyRowsFrom;
 let sourceRowsFrom;
+let planLinesFrom;
 
 before(async () => {
   const mod = await import("../public/js/views/tokens.js");
@@ -18,6 +19,7 @@ before(async () => {
   dailySummaryNumbers = mod.dailySummaryNumbers;
   dailyRowsFrom = mod.dailyRowsFrom;
   sourceRowsFrom = mod.sourceRowsFrom;
+  planLinesFrom = mod.planLinesFrom;
 });
 
 describe("tokens view row builders", () => {
@@ -47,6 +49,68 @@ describe("tokens view row builders", () => {
     it("returns [] for missing/malformed payloads", () => {
       assert.deepStrictEqual(windowRows(null), []);
       assert.deepStrictEqual(windowRows({}), []);
+    });
+
+    it("includes the 30d window when present", () => {
+      const rows = windowRows({
+        windows: {
+          "24h": { marginalCost: 1, requests: 1, tokens: {} },
+          "30d": { marginalCost: 30, requests: 300, hypotheticalCost: 900, tokens: {} },
+        },
+      });
+      const keys = rows.map((r) => r.key);
+      assert.ok(keys.includes("30d"));
+      const thirty = rows.find((r) => r.key === "30d");
+      assert.strictEqual(thirty.marginal, 30);
+      assert.strictEqual(thirty.hypothetical, 900);
+    });
+  });
+
+  describe("planLinesFrom()", () => {
+    it("extracts per-plan flat-fee lines for a window", () => {
+      const lines = planLinesFrom(
+        {
+          windows: {
+            "24h": {
+              plans: [
+                {
+                  id: "claude",
+                  label: "Claude Code Max",
+                  planCost: 200,
+                  hypotheticalMonthly: 500,
+                  marginalMonthly: 0,
+                  actualMonthlySpend: 200,
+                  requests: 12,
+                },
+                {
+                  id: "codex",
+                  label: "Codex subscription",
+                  planCost: 200,
+                  hypotheticalMonthly: 120,
+                  marginalMonthly: 5,
+                  actualMonthlySpend: 205,
+                  requests: 4,
+                },
+              ],
+            },
+          },
+        },
+        "24h",
+      );
+      assert.strictEqual(lines.length, 2);
+      assert.strictEqual(lines[0].id, "claude");
+      assert.strictEqual(lines[0].planCost, 200);
+      assert.strictEqual(lines[0].hypotheticalMonthly, 500);
+      assert.strictEqual(lines[1].id, "codex");
+      assert.strictEqual(lines[1].marginalMonthly, 5);
+    });
+
+    it("falls back to top-level plans and returns [] when absent", () => {
+      const fromTop = planLinesFrom({ plans: [{ id: "claude", planCost: 200 }] }, "24h");
+      assert.strictEqual(fromTop.length, 1);
+      assert.strictEqual(fromTop[0].planCost, 200);
+      assert.deepStrictEqual(planLinesFrom(null, "24h"), []);
+      assert.deepStrictEqual(planLinesFrom({}, "24h"), []);
     });
   });
 

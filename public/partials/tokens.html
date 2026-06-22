@@ -338,6 +338,7 @@
           <button class="filter-btn active" data-window="24h" type="button">24h</button>
           <button class="filter-btn" data-window="3d" type="button">3d</button>
           <button class="filter-btn" data-window="7d" type="button">7d</button>
+          <button class="filter-btn" data-window="30d" type="button">30d</button>
         </div>
       </div>
       <div class="tokens-cost-cards">
@@ -356,9 +357,7 @@
           <span class="tcc-sub" id="tokens-plan-name">—</span>
         </div>
         <div class="tokens-cost-card actual">
-          <span class="tcc-label" data-i18n="views.tokens.actualMonthlyLabel"
-            >Actual monthly</span
-          >
+          <span class="tcc-label" data-i18n="views.tokens.actualMonthlyLabel">Actual monthly</span>
           <span class="tcc-value" id="tokens-actual-monthly">$0.00</span>
           <span class="tcc-sub" data-i18n="views.tokens.actualMonthlySub"
             >Plan + marginal — what you actually pay</span
@@ -374,9 +373,20 @@
           >
         </div>
       </div>
+      <!-- Per-plan flat-fee subscription lines (Claude + Codex). Each plan is
+           its own flat-fee line with the same margin model. Populated by the
+           view from /api/cost-breakdown windows[k].plans. -->
+      <div class="tokens-plan-lines" id="tokens-plan-lines" hidden>
+        <div class="tokens-section-title" data-i18n="views.tokens.plansTitle">
+          Subscription plans
+        </div>
+        <div class="tokens-plan-cards" id="tokens-plan-cards"></div>
+      </div>
       <p class="tokens-cost-warning" data-i18n="views.tokens.hypotheticalWarning">
-        The "if billed per-token" figure is a hypothetical estimate of what this usage <em>would</em>
-        cost at public per-token rates. Because usage runs through OAuth / subscription plans, you are
+        The "if billed per-token" figure is a hypothetical estimate of what this usage
+        <em>would</em>
+        cost at public per-token rates. Because usage runs through OAuth / subscription plans, you
+        are
         <strong>not</strong> paying that amount. Your real outlay is the flat plan cost plus any
         marginal spend shown above.
       </p>
@@ -766,6 +776,7 @@
           <button class="filter-btn active" data-window="24h" type="button">24h</button>
           <button class="filter-btn" data-window="3d" type="button">3d</button>
           <button class="filter-btn" data-window="7d" type="button">7d</button>
+          <button class="filter-btn" data-window="30d" type="button">30d</button>
         </div>
         <button
           class="btn-secondary"

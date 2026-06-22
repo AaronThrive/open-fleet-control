@@ -27,6 +27,7 @@ const { createCortex } = require("./cortex");
 const { createAlerts, createNodeAlertTracker, createSinkDispatcher } = require("./alerts");
 const { createRateLimiter } = require("./rate-limit");
 const { createBudgets } = require("./budgets");
+const { createSubscriptionLimitWatcher } = require("./subscription-limit-watcher");
 const { createDigest } = require("./digest");
 const { createDigestsStore } = require("./digests-store");
 const { createNtfyIngest } = require("./ntfy-ingest");
@@ -362,6 +363,52 @@ function createFleetRuntime({ config, broadcast }) {
     console.log("[Fleet] Budget evaluator reconfigured from updated settings");
   }
 
+  // Subscription / rate-limit alerting (src/subscription-limit-watcher.js):
+  // periodic plan-utilization evaluation that fires subscriptionLimit alerts
+  // through the normal alert engine when Codex/Claude cross 80%/95% of a
+  // subscription/rate-limit window. Like budgets, the provider windows are
+  // INJECTED by the orchestrator via setSubscriptionWindowsProvider() because
+  // the usage-sources (src/usage-sources/headroom.js, etc.) are instantiated in
+  // src/index.js — until wired, the provider returns [] and the watcher no-ops.
+  //
+  // NOTE: the Claude windows ultimately come from
+  // ~/.headroom/subscription_state.json, which is currently STALE (the live
+  // :8787 Headroom proxy is not refreshing it — see the Job 2 diagnosis). The
+  // watcher SKIPS any window the headroom source marks `stale`, so a multi-day
+  // old snapshot can never fire a false critical. The injected provider must
+  // propagate that `stale` flag truthfully.
+  let subscriptionWindowsProvider = null;
+  const subscriptionLimitsCfg = config.subscriptionLimits || {};
+  const subscriptionLimitsEnabled = subscriptionLimitsCfg.enabled === true;
+  // No-op stand-in when disabled — mirrors NOOP_POLLER below so boot never
+  // depends on the feature being configured.
+  const NOOP_WATCHER = { start() {}, stop() {}, evaluate() {}, getState: () => ({ running: false }) };
+  const subscriptionLimits = subscriptionLimitsEnabled
+    ? createSubscriptionLimitWatcher({
+        config: subscriptionLimitsCfg,
+        getProviderWindows: () =>
+          subscriptionWindowsProvider ? subscriptionWindowsProvider() : [],
+        onAlert: (event) => {
+          fireAlert({
+            type: "subscriptionLimit",
+            severity: event.severity === "critical" ? "critical" : "warn",
+            task: event.task,
+            message: event.message,
+          });
+        },
+      })
+    : NOOP_WATCHER;
+
+  /**
+   * Inject the provider-windows source used by the subscription-limit watcher.
+   * Expected shape: () => [{ provider, window, utilizationPct, capPct?,
+   * resetsAt?, stale }]. Pass null to unwire. No-op when the watcher is
+   * disabled (the NOOP_WATCHER has nothing to feed).
+   */
+  function setSubscriptionWindowsProvider(fn) {
+    subscriptionWindowsProvider = typeof fn === "function" ? fn : null;
+  }
+
   // Scheduled fleet digest (src/digest.js): a 60s tick sends the compact
   // markdown summary through the SHARED sink dispatcher over the current
   // alerts sink endpoints, restricted to fleet.digest.sinks. Sources that
@@ -461,6 +508,7 @@ function createFleetRuntime({ config, broadcast }) {
     federation.start();
     watchdog.start();
     budgets.start();
+    if (subscriptionLimitsEnabled) subscriptionLimits.start();
     digest.start();
     if (ntfyIngestEnabled) ntfyIngest.start();
     if (cronIngestEnabled) cronLog.start();
@@ -472,6 +520,7 @@ function createFleetRuntime({ config, broadcast }) {
     federation.stop();
     watchdog.stop();
     budgets.stop();
+    subscriptionLimits.stop();
     digest.stop();
     ntfyIngest.stop();
     cronLog.stop();
@@ -629,6 +678,8 @@ function createFleetRuntime({ config, broadcast }) {
     budgets,
     applyBudgetsConfig,
     setUsageProvider,
+    subscriptionLimits,
+    setSubscriptionWindowsProvider,
     digest,
     digests,
     applyDigestConfig,
