@@ -16,6 +16,7 @@
 const path = require("path");
 const os = require("os");
 const { createMesh } = require("./mesh");
+const { getSystemVitals } = require("./vitals");
 const { createFederation } = require("./federation");
 const { createTailscaleAdapter } = require("./tailscale");
 const { createFleetChat } = require("./fleet-chat");
@@ -223,6 +224,10 @@ function createFleetRuntime({ config, broadcast }) {
     // are keyed on. Empty seed = no-op (byte-identical to pre-seed boots).
     seed: config.mesh.seed,
     selfHostname: (config.dispatch && config.dispatch.identity) || os.hostname(),
+    // Locally collected whole-host vitals for the self node's grid card + host
+    // summary, so the OC-bot card shows mem/disk/cpu without a tailnet round
+    // trip. Cached + non-blocking inside the vitals module.
+    getSelfVitals: () => getSystemVitals(),
     // Non-blocking by design: mesh.getState() feeds GET /api/state, which
     // must never wait on the tailscale CLI / LocalAPI at request time.
     tailscale: createNonBlockingTailscale(),

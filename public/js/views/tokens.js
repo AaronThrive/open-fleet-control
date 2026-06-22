@@ -211,14 +211,18 @@ function renderPlanLines(els) {
           )
         : t("views.tokens.planLineFlat", {}, "flat fee — $0 marginal token cost");
     card.appendChild(el("span", "tcc-sub", sub));
+    // hypotheticalMonthly is a RATE (cumulative / windowDays * 30), so label it
+    // with its window basis so a front-loaded short window reading higher than a
+    // longer one is self-explanatory.
+    const windowLabel = WINDOW_LABELS[selectedCostWindow] || selectedCostWindow;
     card.appendChild(
       el(
         "span",
         "tcc-sub",
         t(
           "views.tokens.planLineHypothetical",
-          { amount: formatCost(line.hypotheticalMonthly) },
-          "≈ {amount}/mo if billed per-token",
+          { amount: formatCost(line.hypotheticalMonthly), window: windowLabel },
+          "≈ {amount}/mo if billed per-token, at the {window} burn rate",
         ),
       ),
     );
@@ -258,8 +262,25 @@ function renderCostSummary(els) {
   // Actual monthly = plan + marginal.
   setText(els, "actualMonthly", formatCost(s.actualMonthlySpend));
 
-  // Hypothetical "if billed per-token" — explicitly NOT spend.
-  setText(els, "hypothetical", formatCost(s.hypotheticalMonthly || s.hypotheticalCost));
+  // Hypothetical "if billed per-token" — explicitly NOT spend. The PRIMARY
+  // figure is the CUMULATIVE cost over the selected window (monotonic: a 30d
+  // window always >= a 7d window). The monthly figure is a RATE projection
+  // (cumulative / windowDays * 30), so a front-loaded week can read higher
+  // per-month than a quieter month — we label it as a rate with its basis so
+  // 7d > 30d is self-explanatory rather than looking like a bug.
+  setText(els, "hypothetical", formatCost(s.hypotheticalCost));
+  const windowLabel = WINDOW_LABELS[selectedCostWindow] || selectedCostWindow;
+  setText(
+    els,
+    "hypotheticalSub",
+    s.hypotheticalMonthly > 0
+      ? t(
+          "views.tokens.hypotheticalRateSub",
+          { amount: formatCost(s.hypotheticalMonthly), window: windowLabel },
+          "≈ {amount}/mo at the {window} burn rate — projection, NOT money spent",
+        )
+      : t("views.tokens.hypotheticalSubZero", {}, "Projection only — NOT money you are spending"),
+  );
 
   // Per-plan flat-fee subscription lines (Claude + Codex, each its own line).
   renderPlanLines(els);
@@ -599,16 +620,27 @@ export function sourceRowsFrom(sources) {
     note: src.nineRouter?.reason || null,
   });
 
+  // Headroom is a PLAN-QUOTA observation (the operator's Claude plan-limit
+  // utilization), NOT a per-token spend source. Its raw token figure is a
+  // weighted quota count that is not comparable to the other rows' token totals
+  // and must never be summed as cost — so we keep the row for visibility but
+  // null the tokens/cost columns and label it as a quota observation in the
+  // note. The actual numbers live in the "Claude / Codex Plan Usage" rings.
   const headroom = src.headroom;
+  const headroomRaw = headroom?.available ? Number(headroom.windowTokens?.totalRaw) || 0 : null;
   rows.push({
     id: "headroom",
-    source: "Headroom",
+    source: "Headroom (plan quota)",
     status: headroom?.available ? (headroom.stale ? "stale" : "available") : "unavailable",
-    tokens: headroom?.available ? Number(headroom.windowTokens?.totalRaw) || 0 : null,
+    tokens: null,
     requests: null,
     cost: null,
     costKind: null,
-    note: headroom?.reason || null,
+    note:
+      headroom?.reason ||
+      (headroomRaw !== null
+        ? `plan-quota observation — ${formatTokens(headroomRaw)} weighted tokens (see plan-usage rings; not a token cost)`
+        : "plan-quota observation (see Claude / Codex Plan Usage rings)"),
   });
 
   const credits = src.openrouter?.credits;
@@ -693,22 +725,6 @@ function buildSourcesList(host) {
 /*   files remain untouched.                                           */
 /* ================================================================== */
 
-function setGauge(els, prefix, usedPct, remainingPct, reset) {
-  const used = Number.isFinite(usedPct) ? usedPct : 0;
-  setText(els, `${prefix}Pct`, `${used}%`);
-  setText(
-    els,
-    `${prefix}Remaining`,
-    `${Number.isFinite(remainingPct) ? remainingPct : 100 - used}%`,
-  );
-  setText(els, `${prefix}Reset`, reset || "-");
-  const bar = els[`${prefix}Bar`];
-  if (bar) {
-    bar.style.width = `${Math.min(100, Math.max(0, used))}%`;
-    bar.className = "vital-bar-fill " + (used > 80 ? "red" : used > 50 ? "yellow" : "green");
-  }
-}
-
 function fmtNum(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return "-";
@@ -759,51 +775,25 @@ async function fetchSource(url) {
 function renderUsage(els, data) {
   if (!data) return;
 
-  const authError = data.errorType === "auth" || data.claude?.session?.error;
-  els.auth.hidden = !authError;
-  if (authError) {
-    for (const prefix of ["claudeSession", "claudeWeekly", "sonnetWeekly"]) {
-      setText(els, `${prefix}Pct`, "N/A");
-      setText(els, `${prefix}Remaining`, "N/A");
-      setText(els, `${prefix}Reset`, "-");
-      if (els[`${prefix}Bar`]) els[`${prefix}Bar`].style.width = "0%";
-    }
-  }
+  // The 3 Claude plan-limit gauges that read `openclaw status --usage` (which
+  // 403s on the missing user:profile scope and rendered a fake 0%) were
+  // RETIRED. The honest Claude/Codex plan-limit figures now come from the
+  // Headroom rings (renderSubscription). So the anthropic auth error is no
+  // longer a blocking banner here — keep the banner only when the whole
+  // llm-usage payload is an auth error AND no honest source exists.
+  els.auth.hidden = true;
 
-  if (data.claude?.lastSynced) {
+  if (data.source === "live") {
+    setText(els, "syncTime", "Live");
+  } else if (data.claude?.lastSynced) {
     const ago = Math.round((Date.now() - new Date(data.claude.lastSynced)) / 60000);
     setText(els, "syncTime", ago < 60 ? `${ago}m ago` : `${Math.round(ago / 60)}h ago`);
-  } else if (data.source === "live") {
-    setText(els, "syncTime", "Live");
   } else if (data.error) {
     setText(els, "syncTime", data.needsSync ? "Needs sync" : "Error");
   }
 
-  if (!authError) {
-    setGauge(
-      els,
-      "claudeSession",
-      data.claude?.session?.usedPct,
-      data.claude?.session?.remainingPct,
-      data.claude?.session?.resetsIn,
-    );
-    setGauge(
-      els,
-      "claudeWeekly",
-      data.claude?.weekly?.usedPct,
-      data.claude?.weekly?.remainingPct,
-      data.claude?.weekly?.resets,
-    );
-    setGauge(
-      els,
-      "sonnetWeekly",
-      data.claude?.sonnet?.usedPct,
-      data.claude?.sonnet?.remainingPct,
-      data.claude?.sonnet?.resets,
-    );
-  }
-
-  // Codex
+  // Codex (5h + daily plan-limit utilization — both live). The old "tasks
+  // today" sub-stat was a hardcoded 0 and has been dropped from the markup.
   const codex5h = data.codex?.usage5hPct || 0;
   setText(els, "codex5hPct", `${codex5h}%`);
   if (els.codex5hBar) {
@@ -812,7 +802,6 @@ function renderUsage(els, data) {
       "vital-bar-fill " + (codex5h > 80 ? "red" : codex5h > 50 ? "yellow" : "blue");
   }
   setText(els, "codexDayPct", `${data.codex?.usageDayPct || 0}%`);
-  setText(els, "codexTasks", data.codex?.tasksToday ?? "-");
 
   // Routing summary
   if (data.routing) {
@@ -898,20 +887,43 @@ function renderExtraSources(els, data) {
   if (els.extraSources) els.extraSources.replaceChildren(...cards);
 }
 
+/** A single "model · count" routing row (textContent only — XSS-safe). */
+function routingModelRow(model, count) {
+  const item = el("div", "vital-detail-item");
+  item.appendChild(el("span", "vital-detail-value", (Number(count) || 0).toLocaleString()));
+  item.appendChild(el("span", "vital-detail-label", model));
+  return item;
+}
+
 function renderRoutingStats(els, stats) {
   if (!stats || stats.error) return;
   const total = stats.total_requests || 0;
   setText(els, "totalRouted", `${total} (24h)`);
 
-  let llama = 0;
-  let qwen = 0;
-  for (const [model, count] of Object.entries(stats.by_model || {})) {
-    const name = model.toLowerCase();
-    if (name.includes("llama")) llama += count;
-    else if (name.includes("qwen")) qwen += count;
+  // Data-driven per-model routing: one row per key in by_model, sorted by
+  // count desc. Replaces the old hardcoded Llama/Qwen rows. Shows a clear
+  // "no routing data" note when the router has logged nothing.
+  if (els.routingByModel) {
+    const entries = Object.entries(stats.by_model || {})
+      .map(([model, count]) => [model, Number(count) || 0])
+      .sort((a, b) => b[1] - a[1]);
+    if (entries.length === 0) {
+      els.routingByModel.replaceChildren();
+      if (els.routingEmpty) {
+        els.routingEmpty.hidden = false;
+        els.routingEmpty.textContent = t(
+          "views.tokens.noRoutingData",
+          {},
+          "No routing data — the llm_routing skill has not recorded any requests.",
+        );
+      }
+    } else {
+      if (els.routingEmpty) els.routingEmpty.hidden = true;
+      els.routingByModel.replaceChildren(
+        ...entries.map(([model, count]) => routingModelRow(model, count)),
+      );
+    }
   }
-  setText(els, "llamaTasks", llama);
-  setText(els, "qwenTasks", qwen);
 
   if (els.routingLatency) {
     const avg = stats.avg_latency_ms || 0;
@@ -1127,6 +1139,50 @@ function renderNineRouter(els, data) {
   );
 }
 
+// Humanize a raw OpenRouter key into a readable chip label. Maps the known
+// camelCase/snake_case keys to friendly names; falls back to splitting
+// camelCase + snake_case so "totalCredits" never renders as "TOTALCREDITS".
+const OPENROUTER_LABELS = {
+  totalCredits: "Credits",
+  totalUsage: "Total usage",
+  remaining: "Remaining",
+  usage: "Usage",
+  limit: "Limit",
+  limitRemaining: "Remaining",
+  label: "Key label",
+};
+function humanizeOpenRouterKey(key) {
+  if (OPENROUTER_LABELS[key]) return OPENROUTER_LABELS[key];
+  const words = String(key)
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** Build money/number chips from a flat {key:value} object (humanized labels). */
+function openRouterChips(source) {
+  const chips = [];
+  for (const [key, value] of Object.entries(source || {})) {
+    if (key === "available") continue;
+    if (typeof value === "object" || typeof value === "boolean") continue;
+    if (value === null || value === undefined) continue;
+    const chip = el("div", "lvx-token-chip");
+    const isMoney = /usd|cost|credit|spend|limit|usage|remaining/i.test(key);
+    chip.appendChild(
+      el(
+        "span",
+        "chip-value",
+        isMoney && Number.isFinite(Number(value)) ? fmtUsd(value) : fmtNum(value),
+      ),
+    );
+    chip.appendChild(el("span", "chip-label", humanizeOpenRouterKey(key)));
+    chips.push(chip);
+  }
+  return chips;
+}
+
 function renderOpenRouter(els, data) {
   if (!data || !els.orPanel) return;
   els.orPanel.hidden = false;
@@ -1144,23 +1200,50 @@ function renderOpenRouter(els, data) {
   els.orStatus.hidden = true;
   els.orBody.hidden = false;
 
-  const source = data.credits || data.usage || data;
-  const chips = [];
-  for (const [key, value] of Object.entries(source)) {
-    if (typeof value === "object" || typeof value === "boolean") continue;
-    const chip = el("div", "lvx-token-chip");
-    const isMoney = /usd|cost|credit|spend|limit/i.test(key);
-    chip.appendChild(
-      el(
-        "span",
-        "chip-value",
-        isMoney && Number.isFinite(Number(value)) ? fmtUsd(value) : fmtNum(value),
+  // Account-wide credits: GET /api/v1/credits → total_credits / total_usage.
+  // This is the WHOLE OpenRouter account balance, NOT this key's usage.
+  const credits = data.credits && data.credits.available !== false ? data.credits : null;
+  if (els.orCredits) {
+    els.orCredits.replaceChildren(
+      ...openRouterChips(
+        credits
+          ? {
+              totalCredits: credits.totalCredits,
+              totalUsage: credits.totalUsage,
+              remaining: credits.remaining,
+            }
+          : {},
       ),
     );
-    chip.appendChild(el("span", "chip-label", key));
-    chips.push(chip);
   }
-  els.orBody.replaceChildren(...chips);
+
+  // This specific key's metered usage: GET /api/v1/auth/key → usage / limit.
+  const keyInfo = data.keyInfo && data.keyInfo.available !== false ? data.keyInfo : null;
+  if (els.orKey) {
+    els.orKey.replaceChildren(
+      ...openRouterChips(
+        keyInfo
+          ? {
+              usage: keyInfo.usage,
+              limit: keyInfo.limit,
+              limitRemaining: keyInfo.limitRemaining,
+            }
+          : {},
+      ),
+    );
+  }
+  if (els.orKeyNote) {
+    if (keyInfo && keyInfo.limit === null) {
+      els.orKeyNote.hidden = false;
+      els.orKeyNote.textContent = t(
+        "views.tokens.orKeyUnlimited",
+        { label: keyInfo.label || "this key" },
+        "{label}: no spend limit set on this key.",
+      );
+    } else {
+      els.orKeyNote.hidden = true;
+    }
+  }
 }
 
 function buildBudgetGauge(scope, periodLabel, elapsedText) {
@@ -1372,6 +1455,7 @@ export function init(container) {
     planName: container.querySelector("#tokens-plan-name"),
     actualMonthly: container.querySelector("#tokens-actual-monthly"),
     hypothetical: container.querySelector("#tokens-hypothetical"),
+    hypotheticalSub: container.querySelector("#tokens-hypothetical-sub"),
     planLines: container.querySelector("#tokens-plan-lines"),
     planCards: container.querySelector("#tokens-plan-cards"),
     // Token breakdown lists
@@ -1385,27 +1469,15 @@ export function init(container) {
     // ---- LLM fuel gauges (folded in) ----
     syncTime: container.querySelector("#lv-sync-time"),
     routingSummary: container.querySelector("#lv-routing-summary"),
-    claudeSessionPct: container.querySelector("#lv-claude-session-pct"),
-    claudeSessionBar: container.querySelector("#lv-claude-session-bar"),
-    claudeSessionRemaining: container.querySelector("#lv-claude-session-remaining"),
-    claudeSessionReset: container.querySelector("#lv-claude-session-reset"),
-    claudeWeeklyPct: container.querySelector("#lv-claude-weekly-pct"),
-    claudeWeeklyBar: container.querySelector("#lv-claude-weekly-bar"),
-    claudeWeeklyRemaining: container.querySelector("#lv-claude-weekly-remaining"),
-    claudeWeeklyReset: container.querySelector("#lv-claude-weekly-reset"),
-    sonnetWeeklyPct: container.querySelector("#lv-sonnet-weekly-pct"),
-    sonnetWeeklyBar: container.querySelector("#lv-sonnet-weekly-bar"),
-    sonnetWeeklyRemaining: container.querySelector("#lv-sonnet-weekly-remaining"),
-    sonnetWeeklyReset: container.querySelector("#lv-sonnet-weekly-reset"),
+    // (Retired Claude plan-limit gauges removed — see renderUsage note.)
     codex5hPct: container.querySelector("#lv-codex-5h-pct"),
     codex5hBar: container.querySelector("#lv-codex-5h-bar"),
     codexDayPct: container.querySelector("#lv-codex-day-pct"),
-    codexTasks: container.querySelector("#lv-codex-tasks"),
     totalRouted: container.querySelector("#lv-total-routed"),
     claudeTasks: container.querySelector("#lv-claude-tasks"),
     codexTaskCount: container.querySelector("#lv-codex-task-count"),
-    llamaTasks: container.querySelector("#lv-llama-tasks"),
-    qwenTasks: container.querySelector("#lv-qwen-tasks"),
+    routingByModel: container.querySelector("#lv-routing-by-model"),
+    routingEmpty: container.querySelector("#lv-routing-empty"),
     routingLatency: container.querySelector("#lv-routing-latency"),
     codexFloor: container.querySelector("#lv-codex-floor"),
     extraSources: container.querySelector("#lv-extra-sources"),
@@ -1470,6 +1542,9 @@ export function init(container) {
     orPanel: container.querySelector("#lvx-or-panel"),
     orStatus: container.querySelector("#lvx-or-status"),
     orBody: container.querySelector("#lvx-or-body"),
+    orCredits: container.querySelector("#lvx-or-credits"),
+    orKey: container.querySelector("#lvx-or-key"),
+    orKeyNote: container.querySelector("#lvx-or-key-note"),
   };
 
   // Only the core cost-tab elements are strictly required. The folded-in
