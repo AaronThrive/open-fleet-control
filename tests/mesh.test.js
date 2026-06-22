@@ -10,6 +10,7 @@ const {
   validateRegistry,
   extractNodeCosts,
   extractNodeVitals,
+  groupNodesByHost,
   LATENCY_SAMPLE_LIMIT,
   STATE_REFRESH_EVERY_N_POLLS,
 } = require("../src/mesh");
@@ -951,6 +952,131 @@ describe("mesh module", () => {
       assert.strictEqual(state.tailscale.error, "down");
       // URL falls back to bare hostname when the suffix is unknown
       assert.strictEqual(state.nodes[0].url, "https://atlas/health");
+    });
+
+    it("injects locally collected self vitals into the self node card", async () => {
+      // The self node's remote /api/state poll may not refresh its own cache,
+      // so getSelfVitals() must populate its grid-card vitals directly.
+      const SELF_VITALS = {
+        hostname: "oc-bot-1",
+        uptime: "3 days",
+        cpu: { loadAvg: [1.2, 1.0, 0.8], cores: 8, usage: 40 },
+        memory: { used: 8000000000, total: 32000000000, percent: 25 },
+        disk: { used: 80000000000, free: 320000000000, total: 400000000000, percent: 20 },
+        temperature: null,
+      };
+      const mesh = makeMesh({
+        selfHostname: "hermes", // fakeTailscale self is "hermes"
+        getSelfVitals: () => SELF_VITALS,
+        fetchFn: async () => okResponse({ status: "ok" }), // no remote vitals
+      });
+      mesh.registerNode({ hostname: "hermes" });
+
+      const state = await mesh.getState();
+      const selfNode = state.nodes.find((n) => n.hostname === "hermes");
+      assert.strictEqual(selfNode.isSelf, true);
+      assert.strictEqual(selfNode.vitals.hostname, "oc-bot-1");
+      assert.strictEqual(selfNode.vitals.memory.pct, 25);
+      assert.strictEqual(selfNode.vitals.cpu.percent, 40);
+      assert.strictEqual(typeof selfNode.vitalsAt, "number");
+    });
+
+    it("never throws when getSelfVitals() fails or returns null", async () => {
+      const mesh = makeMesh({
+        selfHostname: "hermes",
+        getSelfVitals: () => {
+          throw new Error("collection failed");
+        },
+      });
+      mesh.registerNode({ hostname: "hermes" });
+      const state = await mesh.getState();
+      const selfNode = state.nodes.find((n) => n.hostname === "hermes");
+      assert.strictEqual(selfNode.isSelf, true);
+      assert.strictEqual(selfNode.vitals, null);
+    });
+
+    it("groups nodes into per-VPS hosts in the state snapshot", async () => {
+      const sameHostVitals = (host) => ({
+        hostname: host,
+        uptime: "1 day",
+        cpu: { loadAvg: [0.5, 0.5, 0.5], cores: 8, usage: 10 },
+        memory: { used: 1, total: 2, percent: 50 },
+        disk: { used: 1, free: 1, total: 2, percent: 50 },
+        temperature: null,
+      });
+      const mesh = makeMesh({
+        selfHostname: "hermes",
+        getSelfVitals: () => sameHostVitals("oc-bot-1"),
+        fetchFn: async (url) => {
+          const u = String(url);
+          if (u.endsWith("/api/state")) {
+            // The atlas peer reports it lives on the same physical box.
+            return okResponse({ version: "1.0.0", vitals: sameHostVitals("oc-bot-1") });
+          }
+          return okResponse({ status: "ok" });
+        },
+      });
+      mesh.registerNode({ hostname: "hermes" }); // self
+      mesh.registerNode({ hostname: "atlas", port: 8443 }); // co-located peer
+      await mesh._pollOnce();
+
+      const state = await mesh.getState();
+      assert.ok(Array.isArray(state.hosts));
+      // Both nodes report hostname "oc-bot-1" => collapse to ONE VPS host.
+      assert.strictEqual(state.hosts.length, 1);
+      assert.strictEqual(state.hosts[0].hostId, "oc-bot-1");
+      assert.strictEqual(state.hosts[0].nodeIds.length, 2);
+      assert.strictEqual(state.hosts[0].vitals.hostname, "oc-bot-1");
+    });
+  });
+
+  describe("groupNodesByHost()", () => {
+    const withVitals = (id, hostname, vitalsHost) => ({
+      id,
+      hostname,
+      vitals: vitalsHost ? { hostname: vitalsHost, memory: { pct: 10 } } : null,
+    });
+
+    it("collapses co-located nodes onto one host keyed by vitals.hostname", () => {
+      const hosts = groupNodesByHost([
+        withVitals("a", "oc-bot-1", "oc-bot-1"),
+        withVitals("b", "hermes-agent-1", "oc-bot-1"),
+      ]);
+      assert.strictEqual(hosts.length, 1);
+      assert.deepStrictEqual(hosts[0].nodeIds, ["a", "b"]);
+      assert.strictEqual(hosts[0].hostId, "oc-bot-1");
+      assert.strictEqual(hosts[0].vitals.hostname, "oc-bot-1");
+    });
+
+    it("creates a separate host per distinct reported hostname (multi-VPS)", () => {
+      const hosts = groupNodesByHost([
+        withVitals("a", "oc-bot-1", "oc-bot-1"),
+        withVitals("b", "atlas", "atlas-vps"),
+      ]);
+      assert.strictEqual(hosts.length, 2);
+      assert.deepStrictEqual(
+        hosts.map((h) => h.hostId),
+        ["oc-bot-1", "atlas-vps"],
+      );
+    });
+
+    it("falls back to the node hostname when no vitals were reported", () => {
+      const hosts = groupNodesByHost([withVitals("a", "lonely", null)]);
+      assert.strictEqual(hosts.length, 1);
+      assert.strictEqual(hosts[0].hostId, "lonely");
+      assert.strictEqual(hosts[0].vitals, null);
+    });
+
+    it("takes host vitals from the first member that reported them", () => {
+      const hosts = groupNodesByHost([
+        withVitals("a", "oc-bot-1", null), // no vitals yet
+        withVitals("b", "oc-bot-1", "oc-bot-1"), // reports — but groups under hostname
+      ]);
+      // a has null vitals so it groups under its node hostname "oc-bot-1";
+      // b reports vitals.hostname "oc-bot-1" => same key => merged, vitals filled.
+      assert.strictEqual(hosts.length, 1);
+      assert.strictEqual(hosts[0].vitals.hostname, "oc-bot-1");
+      assert.deepStrictEqual(hosts[0].nodeIds, ["a", "b"]);
     });
   });
 

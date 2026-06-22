@@ -253,8 +253,16 @@ describe("tokens module", () => {
       ];
       fs.writeFileSync(path.join(sessionsDir, "test-session.jsonl"), lines.join("\n") + "\n");
 
+      // Point Claude Code ingestion at a guaranteed-empty dir so this test
+      // stays isolated to the OpenClaw session store it sets up (the refresh
+      // now ALSO ingests ~/.claude/projects by default).
+      const emptyClaudeDir = path.join(tmpDir, "no-claude-projects");
+
       try {
-        await refreshTokenUsageAsync(() => tmpDir);
+        await refreshTokenUsageAsync(
+          () => tmpDir,
+          () => emptyClaudeDir,
+        );
         const usage = getDailyTokenUsage(() => tmpDir);
 
         // 24h window: both models present
@@ -311,6 +319,65 @@ describe("tokens module", () => {
         // Top-level breakdown exposes plans + summed planCost.
         assert.strictEqual(breakdown.planCost, 400);
         assert.ok(Array.isArray(breakdown.plans));
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("ingests Claude Code / Opus transcripts into byModel so Opus is visible", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ofc-tokens-cc-"));
+      const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      // The OpenClaw store carries a Codex (gpt-5.5) turn.
+      const now = Date.now();
+      const ts = new Date(now - 3600 * 1000).toISOString();
+      fs.writeFileSync(
+        path.join(sessionsDir, "oc.jsonl"),
+        JSON.stringify({ timestamp: ts, message: { model: "gpt-5.5", usage: { input: 100, output: 50 } } }) + "\n",
+      );
+
+      // A separate Claude Code projects dir carries an Opus transcript (the
+      // snake_case usage shape Claude Code writes, type:"assistant").
+      const ccDir = path.join(tmpDir, "claude-projects", "proj");
+      fs.mkdirSync(ccDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(ccDir, "session.jsonl"),
+        JSON.stringify({
+          type: "assistant",
+          timestamp: ts,
+          message: {
+            model: "claude-opus-4-20250101",
+            usage: { input_tokens: 1_000_000, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          },
+        }) + "\n",
+      );
+
+      try {
+        await refreshTokenUsageAsync(
+          () => tmpDir,
+          () => path.join(tmpDir, "claude-projects"),
+        );
+        const usage = getDailyTokenUsage(() => tmpDir);
+        const m24 = usage.windows["24h"].byModel;
+        // Both runtimes present in the per-model map.
+        assert.strictEqual(m24["gpt-5.5"].input, 100, "Codex usage ingested");
+        assert.ok(m24["claude-opus-4-20250101"], "Opus model now visible");
+        assert.strictEqual(m24["claude-opus-4-20250101"].input, 1_000_000);
+
+        // Per-model rates: gpt-5.5 priced at the Codex rate ($1.25/1M input),
+        // Opus priced at the Opus rate ($15/1M input).
+        const breakdown = getCostBreakdown(
+          {},
+          () => [],
+          () => tmpDir,
+        );
+        const rows = breakdown.windows["24h"].byModel;
+        const opus = rows.find((r) => r.model === "claude-opus-4-20250101");
+        const codex = rows.find((r) => r.model === "gpt-5.5");
+        assert.ok(Math.abs(opus.estCost - 15.0) < 1e-9, "Opus 1M input → $15");
+        // gpt-5.5: 100 input * $1.25/1M + 50 output * $10/1M
+        const expectedCodex = (100 / 1e6) * 1.25 + (50 / 1e6) * 10;
+        assert.ok(Math.abs(codex.estCost - expectedCodex) < 1e-9, "Codex priced at GPT rate, not Opus");
       } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       }

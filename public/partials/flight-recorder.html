@@ -144,6 +144,19 @@
       text-transform: uppercase;
       letter-spacing: 0.04em;
     }
+    /* Absolute date+time: the exact moment, surfaced prominently for scanning. */
+    #flight-recorder-view-section .fr-run-abs {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.72rem;
+      color: var(--text);
+      white-space: nowrap;
+    }
+    /* Relative time kept small + dim as secondary context. */
+    #flight-recorder-view-section .fr-run-rel {
+      font-size: 0.66rem;
+      color: var(--text-muted);
+      opacity: 0.8;
+    }
     /* Status pills */
     #flight-recorder-view-section .fr-status {
       display: inline-block;

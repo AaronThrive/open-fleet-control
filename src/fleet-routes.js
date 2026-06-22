@@ -1089,12 +1089,71 @@ function createFleetRoutes({
     return 503;
   }
 
+  // Named rolling windows for the cortex gauge date filter. Each resolves to a
+  // `from` epoch-ms offset back from "now"; `all` (and the no-param default)
+  // means lifetime totals — an unbounded range.
+  const CORTEX_WINDOW_MS = {
+    "24h": 24 * 60 * 60 * 1000,
+    "7d": 7 * 24 * 60 * 60 * 1000,
+    "30d": 30 * 24 * 60 * 60 * 1000,
+  };
+
+  /**
+   * Resolve the cortex gauge date range from the query string. Precedence:
+   * explicit from/to win; otherwise a named `window` resolves to a rolling
+   * [now-window, now] range. No params (or window=all) => unbounded (lifetime),
+   * preserving the original no-filter behavior exactly.
+   *
+   * Validates strictly: unknown windows and unparseable / inverted dates are
+   * 400s. `from`/`to` accept `YYYY-MM-DD` or any Date-parseable string; a
+   * bare date `to` is widened to end-of-day so the range is inclusive.
+   *
+   * @returns {{ from: number|null, to: number|null }} epoch-ms bounds.
+   */
+  function resolveCortexRange(query) {
+    const fromRaw = (query.get("from") || "").trim();
+    const toRaw = (query.get("to") || "").trim();
+    const windowRaw = (query.get("window") || "").trim();
+
+    const parseBound = (raw, name, endOfDay) => {
+      if (!raw) return null;
+      const bareDate = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+      const iso = bareDate ? `${raw}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}Z` : raw;
+      const ms = Date.parse(iso);
+      if (!Number.isFinite(ms)) throw httpError(400, `Invalid ${name} parameter`);
+      return ms;
+    };
+
+    if (fromRaw || toRaw) {
+      const from = parseBound(fromRaw, "from", false);
+      const to = parseBound(toRaw, "to", true);
+      if (from !== null && to !== null && from > to) {
+        throw httpError(400, "from must be on or before to");
+      }
+      return { from, to };
+    }
+
+    if (windowRaw && windowRaw !== "all") {
+      const span = CORTEX_WINDOW_MS[windowRaw];
+      if (span === undefined) {
+        throw httpError(400, "Invalid window parameter (expected 24h, 7d, 30d, or all)");
+      }
+      return { from: Date.now() - span, to: null };
+    }
+
+    return { from: null, to: null };
+  }
+
   // The Cortex memory browser is READ-ONLY: it reflects gbrain (the system of
   // record), which is written out-of-band by a nightly sync. No store/update/
   // delete endpoints and no knowledge-graph viz are exposed here.
   async function handleCortex(req, res, method, segments, query) {
     if (segments.length === 1 && method === "GET") {
-      json(res, 200, await fleet.cortex.getState());
+      // Optional date filter for the gauge ("engine") figures. With no
+      // window/from/to params this resolves to an unbounded range and
+      // getStateRanged returns the cached lifetime state unchanged.
+      const range = resolveCortexRange(query);
+      json(res, 200, await fleet.cortex.getStateRanged(range));
       return true;
     }
     if (segments[1] === "memory" && segments.length === 2 && method === "GET") {

@@ -76,6 +76,51 @@
       font-weight: 700;
     }
 
+    /* Engine date-window control ---------------------------------------- */
+    #cortex-view-section .cx-engine-window {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px 16px;
+      margin-bottom: 14px;
+    }
+    #cortex-view-section .cx-window-range {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-size: 0.74rem;
+      color: var(--cx-muted);
+    }
+    #cortex-view-section .cx-window-range-label {
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-size: 0.66rem;
+      color: var(--cx-muted);
+    }
+    #cortex-view-section .cx-window-date {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--cx-border);
+      border-radius: 8px;
+      color: var(--text, #fff);
+      font-size: 0.76rem;
+      padding: 5px 8px;
+      outline: none;
+      color-scheme: dark;
+    }
+    #cortex-view-section .cx-window-date:focus {
+      border-color: var(--cx-accent-2);
+      box-shadow: 0 0 0 2px rgba(13, 245, 227, 0.12);
+    }
+    #cortex-view-section .cx-window-status {
+      font-size: 0.72rem;
+      color: var(--cx-accent-2);
+      font-variant-numeric: tabular-nums;
+    }
+    #cortex-view-section .cx-window-status:empty {
+      display: none;
+    }
+
     /* Engine card badges + purpose-built bodies -------------------------- */
     #cortex-view-section .cx-badge {
       display: inline-flex;
@@ -731,6 +776,59 @@
 
     <!-- Active context engine strip -->
     <div class="cx-engine-strip" id="cx-engine-strip" style="display: none"></div>
+
+    <!-- Engine date-window control: scopes the gauge figures below to a
+         rolling window or an explicit from/to range. "All" = lifetime totals
+         (the default), which leaves the original no-filter behavior intact. -->
+    <div class="cx-engine-window" id="cx-engine-window">
+      <div class="filter-group" id="cx-window-tabs">
+        <span class="filter-label" data-i18n="views.cortex.engineWindowLabel">Engine window:</span>
+        <button class="filter-btn" data-window="24h" type="button">24h</button>
+        <button class="filter-btn" data-window="7d" type="button">7d</button>
+        <button class="filter-btn" data-window="30d" type="button">30d</button>
+        <button
+          class="filter-btn active"
+          data-window="all"
+          type="button"
+          data-i18n="views.cortex.engineWindowAll"
+        >
+          All
+        </button>
+      </div>
+      <div class="cx-window-range" id="cx-window-range">
+        <label
+          class="cx-window-range-label"
+          for="cx-window-from"
+          data-i18n="views.cortex.engineWindowFrom"
+          >From</label
+        >
+        <input type="date" class="cx-window-date" id="cx-window-from" />
+        <label
+          class="cx-window-range-label"
+          for="cx-window-to"
+          data-i18n="views.cortex.engineWindowTo"
+          >To</label
+        >
+        <input type="date" class="cx-window-date" id="cx-window-to" />
+        <button
+          class="filter-btn"
+          id="cx-window-apply"
+          type="button"
+          data-i18n="views.cortex.engineWindowApply"
+        >
+          Apply range
+        </button>
+        <button
+          class="filter-btn"
+          id="cx-window-clear"
+          type="button"
+          data-i18n="views.cortex.engineWindowClear"
+        >
+          Clear
+        </button>
+      </div>
+      <span class="cx-window-status" id="cx-window-status"></span>
+    </div>
 
     <!-- Per-engine gauge cards -->
     <div class="cx-gauges" id="cx-gauges">
