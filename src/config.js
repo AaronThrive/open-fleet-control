@@ -232,6 +232,10 @@ const FLEET_DEFAULTS = {
       // Dispatch follow-through completion ping (src/dispatch.js watcher).
       // Deliberately OFF by default — opt in via settings or the config file.
       dispatchComplete: false,
+      // Dispatch watchdog reclaimed a stuck/silent in-flight lock
+      // (src/dispatch-watchdog.js). ON by default — a reclaim means a dispatch
+      // went silent and was retried or failed, which an operator should see.
+      dispatchReclaimed: true,
       // Flight Recorder: a board/chain run failed or a seat timed out
       // (src/run-archive.js → fleet.fireAlert). ON by default so a failed
       // orchestration surfaces; routed to whichever sinks are configured (ntfy).
@@ -306,6 +310,26 @@ const FLEET_DEFAULTS = {
     node: "",
     token: "",
     identity: "",
+  },
+  // Dispatch liveness watchdog + stale-lock sweeper (src/dispatch-watchdog.js).
+  // Periodically reclaims in-flight dispatch locks that have gone silent past
+  // staleAfterMs (e.g. a server crash mid-run left an open attempt wedged),
+  // re-dispatching under the retry cap and marking failed once the cap is hit.
+  //   enabled: ON by default — reclaiming a stuck lock is the only path back
+  //     from a crash-wedged card; conservative defaults keep it safe on a live
+  //     fleet. Set false to disable entirely (the watchdog becomes inert).
+  //   checkIntervalMs: sweep cadence (default 60s).
+  //   staleAfterMs: silence threshold before a lock is reclaimed. Default 25min,
+  //     safely past the 20-min dispatch.timeoutSec so a legitimately running
+  //     dispatch (which closes its own attempt at the timeout) is NEVER reclaimed.
+  //     The watchdog ALSO hard-floors this at dispatch.timeoutSec + 60s, so even a
+  //     misconfigured small value can't re-dispatch live work. Raise if turns run long.
+  //   maxRetries: re-dispatch attempts before a card is marked failed (default 2).
+  dispatchWatchdog: {
+    enabled: true,
+    checkIntervalMs: 60000,
+    staleAfterMs: 1500000,
+    maxRetries: 2,
   },
   // Multi-agent orchestration (src/orchestrate.js).
   // sequentialBoard: when true, board councils dispatch advisors ONE-AT-A-TIME
