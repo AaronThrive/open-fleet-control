@@ -831,7 +831,7 @@
       "restarting": "Restarting…",
       "retry": "Retry",
       "sectionError": "This section failed to render: {message}",
-      "aboutLine": "{license} license — built by Aaron May — based on openclaw-command-center",
+      "aboutLine": "{license} license — built by Aaron May",
       "digestEnabled": "Scheduled digest enabled",
       "digestHint": "Delivers a compact markdown fleet summary through the alert sinks configured above. No sink checked = all sinks (\"*\"). Test sends never shift the schedule.",
       "digestHour": "Hour (UTC)",
