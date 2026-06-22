@@ -97,9 +97,7 @@ function synthStdout(body) {
     },
     error:
       detail.cliError ||
-      (body && body.success === false
-        ? body.error || "agent run reported failure"
-        : undefined),
+      (body && body.success === false ? body.error || "agent run reported failure" : undefined),
   });
 }
 
@@ -182,7 +180,9 @@ function composeKickoffMessage(
   // (--reply-to <ts>) so #ceo-boardroom shows one collapsible item instead of N
   // top-level posts. Absent a ts, the flag is omitted = top-level (prior behavior).
   const replyToArg =
-    isBoard && typeof slackThreadTs === "string" && slackThreadTs ? ` --reply-to ${slackThreadTs}` : "";
+    isBoard && typeof slackThreadTs === "string" && slackThreadTs
+      ? ` --reply-to ${slackThreadTs}`
+      : "";
 
   // BOARD MODE: a lean, single-purpose brief. A board advisor only needs to
   // research and answer — the dispatch watcher already captures the agent's
@@ -245,8 +245,12 @@ function composeKickoffMessage(
     `   you post). Run this EXACTLY as written (the target is a channel id, not a #name):`,
     `   openclaw message send --channel slack --account ${agent} --target ${slackTarget} --message "<your full answer>" --json`,
     ...(isBoard
-      ? [`   Because this is a BOARD task, lead the post with "${chiefMention}" and light emojis are welcome.`]
-      : [`   Keep it factual and self-contained — a teammate reading only the Slack post should understand the outcome.`]),
+      ? [
+          `   Because this is a BOARD task, lead the post with "${chiefMention}" and light emojis are welcome.`,
+        ]
+      : [
+          `   Keep it factual and self-contained — a teammate reading only the Slack post should understand the outcome.`,
+        ]),
   ];
   return lines.join("\n");
 }
@@ -679,7 +683,14 @@ function createDispatch(options = {}) {
     notifyCompletion({ taskId, agent, ok: false, detail: reason });
   }
 
-  function handleRunSettled(taskId, attemptIndex, agent, settled, startedMs, successStatus = "review") {
+  function handleRunSettled(
+    taskId,
+    attemptIndex,
+    agent,
+    settled,
+    startedMs,
+    successStatus = "review",
+  ) {
     if (settled.ok) {
       const run = parseRunResult(settled.stdout);
       if (run.error) {
@@ -755,7 +766,15 @@ function createDispatch(options = {}) {
       agent,
       node: selfNode,
       slackChannel,
-      message: composeKickoffMessage(task, { agent, baseUrl, briefsDir, slackChannel, isBoard, slack: config.slack || {}, slackThreadTs: opts.slackThreadTs || null }),
+      message: composeKickoffMessage(task, {
+        agent,
+        baseUrl,
+        briefsDir,
+        slackChannel,
+        isBoard,
+        slack: config.slack || {},
+        slackThreadTs: opts.slackThreadTs || null,
+      }),
     };
   }
 
@@ -785,6 +804,11 @@ function createDispatch(options = {}) {
     const actor = typeof opts.actor === "string" && opts.actor ? opts.actor : "operator";
     const { board, task } = requireTask(taskId);
 
+    // Cheap fast-fail BEFORE any work, preserving the 409/409 status contract
+    // and "no side effect before throw" guarantee. These are advisory: a
+    // concurrent claimer could still slip between this read and the atomic
+    // claim below — which is exactly why the claim re-verifies the same
+    // preconditions at write time (the load-bearing compare-and-set).
     if (hasOpenDispatch(task)) {
       throw httpError(409, `Task ${taskId} already has an open dispatched attempt`);
     }
@@ -798,7 +822,15 @@ function createDispatch(options = {}) {
     const startedMs = nowFn();
     const sessionKey = `agent:${agent}:kanban-${taskId}-${startedMs}`;
     const { isBoard, slackChannel } = resolveSlack(agent, opts);
-    const message = composeKickoffMessage(task, { agent, baseUrl, briefsDir, slackChannel, isBoard, slack: config.slack || {}, slackThreadTs: opts.slackThreadTs || null });
+    const message = composeKickoffMessage(task, {
+      agent,
+      baseUrl,
+      briefsDir,
+      slackChannel,
+      isBoard,
+      slack: config.slack || {},
+      slackThreadTs: opts.slackThreadTs || null,
+    });
     const args = [
       "agent",
       "--agent",
@@ -812,6 +844,33 @@ function createDispatch(options = {}) {
       String(timeoutSec),
     ];
 
+    // ATOMIC CHECKOUT (Phase E). Claim the card BEFORE firing the run — the
+    // claim appends the open "dispatched" attempt (the lock) and re-checks the
+    // double-dispatch + concurrency preconditions against the freshly-read
+    // board inside the safe store's synchronous read→write window. Two
+    // concurrent claimers serialize here: exactly one wins, the loser gets
+    // claimed:false and throws 409 WITHOUT firing an agent run. Firing the run
+    // only after we hold the lock means the loser never starts a duplicate
+    // process (the old order appended the attempt AFTER startRun, leaving a
+    // check→fire→write race that could double-dispatch).
+    const claim = kanban.claimTask(taskId, {
+      agent,
+      note: DISPATCH_NOTE,
+      precondition: (fresh) => {
+        const nowMs = nowFn();
+        if (fresh.attempts.some((a) => isOpenDispatchAttempt(a, nowMs, openTtlMs))) return false;
+        const freshBoard = kanban.getBoard();
+        return countOpenDispatches(freshBoard) < maxConcurrent;
+      },
+    });
+    if (!claim.claimed) {
+      // Lost the compare-and-set race (another claimer took the slot between
+      // our fast-fail read and the atomic write). Block the loser — do NOT
+      // fire an agent run.
+      throw httpError(409, `Task ${taskId} was just claimed by a concurrent dispatch`);
+    }
+    const attemptIndex = claim.attemptIndex;
+
     // Fire the agent run NOW (async, never awaited here). startRun resolves
     // the route (local vs remote) and produces the same {ok, stdout} /
     // {ok:false, error} contract the watcher consumes. Spawn-time failures
@@ -820,13 +879,16 @@ function createDispatch(options = {}) {
     try {
       settledPromise = startRun(opts.node, { args, agent, agentRef, message, sessionKey });
     } catch (e) {
+      // The lock is held but the run never started — close the claim as a
+      // failure so the slot is freed immediately rather than waiting for the
+      // watchdog to reclaim it.
+      settleFailure(taskId, attemptIndex, agent, {
+        reason: shortReason(e.message, "invocation failed"),
+        timedOut: false,
+      });
       throw httpError(503, `Dispatch invocation failed: ${e.message}`);
     }
 
-    // Bookkeeping on the card. The attempt index is stable: agents only ever
-    // APPEND attempts, so the one we just added keeps its position.
-    const afterAttempt = kanban.addAttempt(taskId, { agent, note: DISPATCH_NOTE });
-    const attemptIndex = afterAttempt.attempts.length - 1;
     if (task.status === "inbox") {
       kanban.moveTask(taskId, "assigned", task.order, actor);
     }
@@ -837,7 +899,14 @@ function createDispatch(options = {}) {
     emit({ type: "task.dispatched", taskId, agent, actor, sessionKey });
 
     const completion = settledPromise.then((settled) =>
-      handleRunSettled(taskId, attemptIndex, agent, settled, startedMs, isBoard ? "done" : "review"),
+      handleRunSettled(
+        taskId,
+        attemptIndex,
+        agent,
+        settled,
+        startedMs,
+        isBoard ? "done" : "review",
+      ),
     );
 
     const { task: latest } = requireTask(taskId);
