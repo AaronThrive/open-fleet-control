@@ -305,10 +305,11 @@ const dispatch = createDispatch({
 // open attempt wedged), with bounded retries and a snooze/re-arm. GATED by
 // fleet.dispatchWatchdog.enabled — mirrors the budgets/ntfy NOOP-poller idiom:
 // when disabled the stand-in is inert and boot never depends on the feature.
-// Enabled by default with conservative defaults (60s / 15min / 2 retries):
+// Enabled by default with conservative defaults (60s / 25min / 2 retries):
 // reclaiming a stuck lock is the only path back from a crash-wedged card, and
-// the 15min threshold sits well beyond a normal agent turn so a legitimately
-// long-running dispatch is not disturbed.
+// the 25min threshold (hard-floored at dispatch.timeoutSec + 60s) sits beyond
+// the 20min dispatch timeout so a legitimately long-running dispatch is not
+// disturbed.
 const dispatchWatchdogCfg = CONFIG.fleet.dispatchWatchdog || {};
 const dispatchWatchdogEnabled = dispatchWatchdogCfg.enabled !== false;
 const NOOP_DISPATCH_WATCHDOG = {

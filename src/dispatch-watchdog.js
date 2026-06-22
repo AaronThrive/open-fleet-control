@@ -18,7 +18,7 @@
  * path for exactly that failure.
  *
  * SAFETY (this runs on a LIVE fleet and reclaims real locks):
- *   - Conservative defaults: 60s interval, 15min stale threshold (well beyond a
+ *   - Conservative defaults: 60s interval, 25min stale threshold (well beyond a
  *     normal Codex turn), 2 retries. A legitimately long-running dispatch is
  *     protected as long as staleAfterMs > its real runtime; tune via config.
  *   - Gated behind fleet.dispatchWatchdog.enabled. When disabled, the caller
