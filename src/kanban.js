@@ -211,6 +211,77 @@ function createKanban(options = {}) {
   }
 
   /**
+   * Atomically claim a task for dispatch by appending a "claim" attempt, but
+   * ONLY if the supplied compare-and-set precondition still holds at write
+   * time. This is the correctness primitive that makes double-dispatch
+   * impossible across concurrent ticks / concurrent HTTP requests.
+   *
+   * Why this is atomic: the safe store's read() and write() are SYNCHRONOUS
+   * (fs sync calls) and Node is single-threaded, so the precondition check and
+   * the write happen with NO await boundary between them — no other JS on this
+   * instance can interleave. Two concurrent claimers therefore serialize: the
+   * first re-reads, sees the precondition holds, and writes its claim; the
+   * second re-reads (now seeing the first claim already persisted), the
+   * precondition fails, and it gets `{claimed:false}` without writing. This is
+   * the in-process equivalent of paperclip's
+   * `UPDATE … WHERE claim IS NULL RETURNING`.
+   *
+   * Guarantee boundary (documented honestly): atomicity holds within a SINGLE
+   * server instance. It does NOT coordinate two separate OS processes writing
+   * the same kanban.json concurrently — that would need file locking and is out
+   * of scope (OFC runs one writer per board: the :3333 instance). External
+   * agent edits to kanban.json are already quarantined/validated by the safe
+   * store, not raced through this path.
+   *
+   * @param {string} id - task id
+   * @param {object} params
+   * @param {string} params.agent - claimant agent id (recorded on the attempt)
+   * @param {function} params.precondition - (task) => boolean; the CAS guard,
+   *   re-evaluated against the freshly-read task immediately before the write.
+   *   Return false to refuse the claim (already claimed / not eligible).
+   * @param {string} [params.note] - attempt note (defaults to the caller's tag)
+   * @returns {{claimed: boolean, task?: object, attemptIndex?: number, reason?: string}}
+   */
+  function claimTask(id, { agent, precondition, note } = {}) {
+    if (typeof agent !== "string" || agent.length === 0) {
+      throw new Error("claimTask: agent must be a non-empty string");
+    }
+    if (typeof precondition !== "function") {
+      throw new Error("claimTask: precondition must be a function");
+    }
+    // --- begin atomic section: read → check → write, no await in between ---
+    const board = readBoard();
+    const current = requireTask(board, id);
+    let ok;
+    try {
+      ok = precondition(current) === true;
+    } catch (e) {
+      return { claimed: false, reason: `precondition threw: ${e.message}` };
+    }
+    if (!ok) {
+      return { claimed: false, reason: "precondition not satisfied (already claimed?)" };
+    }
+    const attempt = {
+      agent,
+      started_at: nowIso(),
+      ended_at: null,
+      result: null,
+      branch: null,
+      note: note ?? null,
+      result_text: null,
+    };
+    const updated = {
+      ...current,
+      attempts: [...current.attempts, attempt],
+      updated_at: nowIso(),
+    };
+    store.write(withTask(board, updated)); // throws if the claim produced an invalid task
+    // --- end atomic section ---
+    emit("attempt.added", { taskId: id, actor: agent, task: updated, attempt });
+    return { claimed: true, task: updated, attemptIndex: updated.attempts.length - 1 };
+  }
+
+  /**
    * Patch one existing attempt in place (by index). Attempts are append-only
    * for agents, so an index captured at addAttempt time stays stable. Used by
    * the dispatch module to close its attempt when the agent run settles.
@@ -289,6 +360,7 @@ function createKanban(options = {}) {
     moveTask,
     addComment,
     addAttempt,
+    claimTask,
     updateAttempt,
     deleteTask,
     setStaleTaskIds,
