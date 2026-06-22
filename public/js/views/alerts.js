@@ -24,6 +24,25 @@ const AUTO_REFRESH_MS = 60000;
 const SSE_REFRESH_DEBOUNCE_MS = 400;
 const SSE_URL = "/api/events";
 const NODE_RULES = ["nodeOffline", "nodeUnreachable"];
+// Canonical alert types known to be emitted across the fleet. The Type filter is
+// populated dynamically from the loaded data (so it always matches the Type
+// column), unioned with this stable baseline so common types stay selectable
+// even before any such alert is present in the current window.
+const CANONICAL_ALERT_TYPES = [
+  "nodeOffline",
+  "nodeUnreachable",
+  "nodeRecovered",
+  "taskFailed",
+  "taskStale",
+  "lessonPending",
+  "budgetBreach",
+  "orchestrationFailed",
+  "dispatchComplete",
+  "fleetDigest",
+  "ntfy",
+  "cron",
+  "testAlert",
+];
 const HOUR_MS = 3600000;
 const LAST_READ_KEY = "ofc-alerts-lastread";
 
@@ -173,15 +192,28 @@ function buildRow(els, alert, lastRead) {
   type.textContent = String(alert.type || "—");
   type.title = String(alert.type || "");
 
-  const target = document.createElement("span");
-  target.className = "alerts-target";
-  const targetText = alert.node || alert.task || "";
-  if (targetText) {
-    target.textContent = targetText;
-    target.title = targetText;
+  // Node and Task are separate columns: node is the host, task is the human
+  // label (e.g. an ntfy title "Daily VPS" or a cron job name) — never the type.
+  const node = document.createElement("span");
+  node.className = "alerts-target";
+  const nodeText = alert.node || "";
+  if (nodeText) {
+    node.textContent = nodeText;
+    node.title = nodeText;
   } else {
-    target.textContent = "—";
-    target.classList.add("alerts-target-empty");
+    node.textContent = "—";
+    node.classList.add("alerts-target-empty");
+  }
+
+  const taskCell = document.createElement("span");
+  taskCell.className = "alerts-task";
+  const taskText = alert.task || "";
+  if (taskText) {
+    taskCell.textContent = taskText;
+    taskCell.title = taskText;
+  } else {
+    taskCell.textContent = "—";
+    taskCell.classList.add("alerts-task-empty");
   }
 
   const message = document.createElement("span");
@@ -229,7 +261,7 @@ function buildRow(els, alert, lastRead) {
     actions.appendChild(dismiss);
   }
 
-  row.append(time, severityCell, type, target, message, actions);
+  row.append(time, severityCell, type, node, taskCell, message, actions);
   return row;
 }
 
@@ -253,8 +285,41 @@ function renderUnreadCount(els, alerts) {
   els.markReadBtn.disabled = unread === 0;
 }
 
+/**
+ * Rebuild the Type filter <option>s from the distinct `type` values present in
+ * the loaded alerts, unioned with the canonical baseline set, so the picker
+ * always matches the Type column. The leading "All types" default is preserved,
+ * as is the current selection (even if it falls outside the rebuilt set).
+ */
+function syncTypeOptions(els, alerts) {
+  const select = els.type;
+  const current = select.value;
+  const fromData = alerts
+    .map((a) => (typeof a.type === "string" ? a.type : ""))
+    .filter((tp) => tp.length > 0);
+  const distinct = [...new Set([...CANONICAL_ALERT_TYPES, ...fromData])].sort((a, b) =>
+    a.localeCompare(b),
+  );
+  // Keep the static first option (All types); rebuild the rest.
+  const allOption = select.querySelector('option[value=""]');
+  const options = [];
+  if (allOption) options.push(allOption);
+  // If the active selection is no longer in the distinct set, keep it as an
+  // option so the current filter is not silently dropped on refresh.
+  if (current && !distinct.includes(current)) distinct.push(current);
+  for (const tp of distinct) {
+    const opt = document.createElement("option");
+    opt.value = tp;
+    opt.textContent = tp;
+    options.push(opt);
+  }
+  select.replaceChildren(...options);
+  select.value = current; // restore selection (falls back to "" if absent)
+}
+
 function render(els, alerts) {
   lastAlerts = alerts; // cache for client-side re-filter (source chip changes)
+  syncTypeOptions(els, alerts);
   const filtered = applySourceFilter(els, alerts);
   const lastRead = getLastRead();
   els.rows.replaceChildren(...filtered.map((alert) => buildRow(els, alert, lastRead)));

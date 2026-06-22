@@ -394,7 +394,15 @@ function validateBudgetUSD(value, label) {
   return value;
 }
 
-/** budgets.<period>.perProvider: FULL replacement {provider: USD > 0}. */
+/**
+ * budgets.<period>.perProvider: FULL replacement {provider: USD}.
+ *
+ * Because perProvider is a full replacement map, a value of 0 (or an empty
+ * string, which coerces to 0) is the clean way to REMOVE a provider's budget:
+ * the entry is simply dropped from the result so the budget no longer exists.
+ * Positive numbers are still validated (finite, ≤ BUDGET_USD_MAX). Negative or
+ * malformed values remain hard errors.
+ */
 function validateBudgetProviders(value, label) {
   if (!isPlainObject(value)) throw badRequest(`${label} must be an object`);
   const entries = Object.entries(value);
@@ -402,15 +410,15 @@ function validateBudgetProviders(value, label) {
     throw badRequest(`${label}: too many providers (max ${MAX_BUDGET_PROVIDERS})`);
   }
   const out = {};
-  for (const [provider, usd] of entries) {
+  for (const [provider, rawUsd] of entries) {
     if (!BUDGET_PROVIDER_RE.test(provider)) {
       throw badRequest(`${label}: invalid provider name "${provider}"`);
     }
+    // Empty string → remove (treated as 0).
+    const usd = rawUsd === "" ? 0 : rawUsd;
     const amount = validateBudgetUSD(usd, `${label}.${provider}`);
-    if (amount <= 0) {
-      throw badRequest(`${label}.${provider} must be greater than 0 (omit the entry to remove it)`);
-    }
-    out[provider] = amount;
+    // 0 = remove this provider's budget (omit it from the replacement map).
+    if (amount > 0) out[provider] = amount;
   }
   return out;
 }
