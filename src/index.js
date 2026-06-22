@@ -63,7 +63,13 @@ if (cliPort) {
 const { getVersion } = require("./utils");
 const { CONFIG, getOpenClawDir } = require("./config");
 const { handleJobsRequest, isJobsRoute, setCronFallback, setAuditRecorder } = require("./jobs");
-const { runOpenClaw, runOpenClawAsync, runOpenClawArgv, extractJSON, getSafeEnv } = require("./openclaw");
+const {
+  runOpenClaw,
+  runOpenClawAsync,
+  runOpenClawArgv,
+  extractJSON,
+  getSafeEnv,
+} = require("./openclaw");
 const {
   getSystemVitals,
   forceRefreshVitals,
@@ -100,6 +106,7 @@ const { createStateModule } = require("./state");
 const { createFleetRuntime } = require("./fleet");
 const { createFleetRoutes, isFleetRoute } = require("./fleet-routes");
 const { createDispatch } = require("./dispatch");
+const { createDispatchWatchdog } = require("./dispatch-watchdog");
 const { createOrchestrate } = require("./orchestrate");
 const { createSettings } = require("./settings");
 const { createDocker } = require("./docker");
@@ -114,10 +121,7 @@ const { createAgentSpawn } = require("./agent-spawn");
 const { createFlightRecorder, createStoreSessionsSource } = require("./flight-recorder");
 const { createTimelineRoutes, isTimelineRoute } = require("./timeline-routes");
 const { createRunArchive, runEntryToRecord, recordIsFailure } = require("./run-archive");
-const {
-  createFlightRecorderRoutes,
-  isFlightRecorderRoute,
-} = require("./run-archive-routes");
+const { createFlightRecorderRoutes, isFlightRecorderRoute } = require("./run-archive-routes");
 const { createSessionControl } = require("./session-control");
 const { createRateLimiter } = require("./rate-limit");
 const { resolveBindHost } = require("./bind-host");
@@ -295,6 +299,39 @@ const dispatch = createDispatch({
   dispatchToken: CONFIG.fleet.dispatch.token || null,
 });
 
+// Dispatch liveness watchdog + stale-lock sweeper (Phase E,
+// src/dispatch-watchdog.js). Periodically reclaims in-flight dispatch locks
+// that have gone silent past a threshold (e.g. a server crash mid-run left an
+// open attempt wedged), with bounded retries and a snooze/re-arm. GATED by
+// fleet.dispatchWatchdog.enabled — mirrors the budgets/ntfy NOOP-poller idiom:
+// when disabled the stand-in is inert and boot never depends on the feature.
+// Enabled by default with conservative defaults (60s / 15min / 2 retries):
+// reclaiming a stuck lock is the only path back from a crash-wedged card, and
+// the 15min threshold sits well beyond a normal agent turn so a legitimately
+// long-running dispatch is not disturbed.
+const dispatchWatchdogCfg = CONFIG.fleet.dispatchWatchdog || {};
+const dispatchWatchdogEnabled = dispatchWatchdogCfg.enabled !== false;
+const NOOP_DISPATCH_WATCHDOG = {
+  check: () => [],
+  start() {},
+  stop() {},
+  getState: () => ({ running: false }),
+};
+const dispatchWatchdog = dispatchWatchdogEnabled
+  ? createDispatchWatchdog({
+      kanban: fleet.kanban,
+      config: dispatchWatchdogCfg,
+      dispatchConfig: CONFIG.fleet.dispatch,
+      // Re-run a reclaimed card under the retry cap. Best-effort: dispatchTask
+      // throws on its own guards (409/429/503) — the watchdog logs and the card
+      // is left freed for the next manual/orchestrated dispatch.
+      redispatch: (taskId, { agent }) => {
+        dispatch.dispatchTask(taskId, { agent, actor: "dispatch-watchdog" });
+      },
+      fireAlert: (event) => fleet.fireAlert(event),
+    })
+  : NOOP_DISPATCH_WATCHDOG;
+
 // Multi-agent orchestration (src/orchestrate.js) — fan-in councils + chains
 // composed over the dispatch primitive. Reuses dispatch's attempt model,
 // concurrency cap, and completion promises; LOCAL-only for now (dispatch
@@ -430,7 +467,19 @@ async function postBoardThreadParent({ title, question }) {
   const chiefMention = slack.chiefUserId ? `<@${slack.chiefUserId}> ` : "";
   const text = `🧑‍⚖️ ${chiefMention}*Board:* ${title}\n> ${question}\n_Advisors are replying in this thread…_`;
   const out = await runOpenClawArgv(
-    ["message", "send", "--channel", "slack", "--account", "default", "--target", target, "--message", text, "--json"],
+    [
+      "message",
+      "send",
+      "--channel",
+      "slack",
+      "--account",
+      "default",
+      "--target",
+      target,
+      "--message",
+      text,
+      "--json",
+    ],
     { timeout: 15000 },
   );
   if (!out) return null;
@@ -792,6 +841,7 @@ const flightRecorderRoutes = runArchive
 process.nextTick(() => migrateDataDir(DATA_DIR, LEGACY_DATA_DIR));
 fleet.start();
 docker.start();
+dispatchWatchdog.start(); // NOOP stand-in when fleet.dispatchWatchdog.enabled=false
 // OpenClaw-sourced background workers only run when this instance owns the
 // openclaw CLI/data sources (fleet.openclawSources, default true).
 if (OPENCLAW_SOURCES) {
