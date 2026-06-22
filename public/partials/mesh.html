@@ -142,8 +142,83 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* Two-tier host topology: a VPS host group (host summary card on top, its
+     member node cards in a grid below) repeated per physical host. */
+  #mesh-view-section .mesh-hosts {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  #mesh-view-section .mesh-host-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  /* Whole-VPS summary card */
+  #mesh-view-section .mesh-host-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 18px;
+    border-radius: 12px;
+    background: rgba(var(--accent-rgb), 0.06);
+    border: 1px solid rgba(var(--accent-rgb), 0.3);
+  }
+  #mesh-view-section .mesh-host-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  #mesh-view-section .mesh-host-icon {
+    font-size: 1.1rem;
+    flex-shrink: 0;
+  }
+  #mesh-view-section .mesh-host-name {
+    font-weight: 700;
+    font-size: 0.98rem;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #mesh-view-section .mesh-host-tag {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: rgba(var(--accent-rgb), 0.12);
+    border: 1px solid rgba(var(--accent-rgb), 0.35);
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  #mesh-view-section .mesh-host-count {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  #mesh-view-section .mesh-host-vitals {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  #mesh-view-section .mesh-host-no-vitals {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
   /* Node grid */
   #mesh-view-section .mesh-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+  }
+  /* Node grid nested inside a host group (per-host node cards) */
+  #mesh-view-section .mesh-host-nodes {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 12px;
@@ -522,8 +597,9 @@
         </div>
       </div>
 
-      <!-- Registered node grid -->
-      <div class="mesh-grid" id="mesh-grid" hidden></div>
+      <!-- Two-tier topology: per-VPS host summary card + its node cards.
+           Populated by mesh.js (renderNodes → renderHosts). -->
+      <div class="mesh-hosts" id="mesh-grid" hidden></div>
 
       <!-- Empty state (zero registered nodes) -->
       <div class="empty-state" id="mesh-empty-state">

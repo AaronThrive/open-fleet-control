@@ -203,6 +203,35 @@ function formatTs(ts) {
   return Number.isNaN(d.getTime()) ? String(ts) : d.toLocaleString();
 }
 
+/**
+ * Absolute local "Jun 1, 2026, 21:04" for an ISO/sqlite/epoch timestamp; falls
+ * back to the raw string when unparseable, "" when empty. Matches the
+ * formatAbsolute() used in the Cortex / Flight Recorder / Alerts / Tokens views
+ * so the operator can line up the same exact date+time across every view.
+ */
+function formatAbsolute(value) {
+  if (value === null || value === undefined || value === "") return "";
+  let ms;
+  if (typeof value === "number") {
+    ms = Number.isFinite(value) ? value : null;
+  } else {
+    const normalized =
+      typeof value === "string" && /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(value)
+        ? `${value.replace(" ", "T")}Z`
+        : value;
+    const parsed = Date.parse(normalized);
+    ms = Number.isFinite(parsed) ? parsed : null;
+  }
+  if (ms === null) return String(value);
+  return new Date(ms).toLocaleString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch helpers (kanban → agent)
 // ---------------------------------------------------------------------------
@@ -460,6 +489,20 @@ function buildRemoteCard(task) {
     badges.appendChild(buildBadge("kb-badge-stale", t("views.kanban.staleBadge", {}, "STALE")));
   }
   card.appendChild(badges);
+
+  // Same last-activity date+time as local cards, so federated cards line up
+  // with the Flight Recorder and other views.
+  const when = formatAbsolute(task.updated_at || task.created_at);
+  if (when) {
+    const meta = document.createElement("div");
+    meta.className = "kb-card-meta";
+    const time = document.createElement("span");
+    time.className = "kb-card-time";
+    time.textContent = `🕘 ${when}`;
+    time.title = t("views.kanban.lastActivityAt", { when }, "Last activity {when}");
+    meta.appendChild(time);
+    card.appendChild(meta);
+  }
   return card;
 }
 
@@ -606,9 +649,19 @@ function buildCard(task) {
 
   const commentCount = Array.isArray(task.comments) ? task.comments.length : 0;
   const attemptCount = Array.isArray(task.attempts) ? task.attempts.length : 0;
-  if (commentCount > 0 || attemptCount > 0) {
+  // Last-activity timestamp (updated_at, falling back to created_at) so the
+  // operator can line each card up with the Flight Recorder and other views.
+  const when = formatAbsolute(task.updated_at || task.created_at);
+  if (when || commentCount > 0 || attemptCount > 0) {
     const meta = document.createElement("div");
     meta.className = "kb-card-meta";
+    if (when) {
+      const time = document.createElement("span");
+      time.className = "kb-card-time";
+      time.textContent = `🕘 ${when}`;
+      time.title = t("views.kanban.lastActivityAt", { when }, "Last activity {when}");
+      meta.appendChild(time);
+    }
     if (commentCount > 0) {
       const c = document.createElement("span");
       c.textContent = `💬 ${commentCount}`;

@@ -49,6 +49,51 @@ function readJsonFile(filePath) {
 const LCM_STALE_DAYS = 7;
 
 /**
+ * Normalize a caller-supplied date range into validated epoch-ms bounds.
+ *
+ * Accepts { from, to } as epoch ms or ISO/date strings. Either side may be
+ * omitted (open-ended). Returns { from, to } where each is epoch ms or null
+ * (null = unbounded on that side). A null/undefined range, or one that
+ * resolves to no bounds, means "lifetime / all" — the default behavior.
+ *
+ * @throws {Error} when a supplied bound is unparseable or from > to.
+ */
+function normalizeRange(range) {
+  if (!range || typeof range !== "object") return { from: null, to: null };
+  const coerce = (value, label) => {
+    if (value === null || value === undefined || value === "") return null;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) throw new Error(`invalid ${label} bound`);
+      return value;
+    }
+    const ms = parseSqliteUtc(String(value)) ?? Date.parse(String(value));
+    if (!Number.isFinite(ms)) throw new Error(`invalid ${label} bound: ${value}`);
+    return ms;
+  };
+  const from = coerce(range.from, "from");
+  const to = coerce(range.to, "to");
+  if (from !== null && to !== null && from > to) {
+    throw new Error("range from must be <= to");
+  }
+  return { from, to };
+}
+
+/** Whether an epoch-ms instant falls within [from, to] (null bounds = open). */
+function withinRange(ms, from, to) {
+  if (ms === null) return false;
+  if (from !== null && ms < from) return false;
+  if (to !== null && ms > to) return false;
+  return true;
+}
+
+/** Parse a lean-ctx daily "date" ("YYYY-MM-DD") to that day's UTC midnight ms. */
+function parseDailyDate(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const ms = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
  * Parse a sqlite datetime ("YYYY-MM-DD HH:MM:SS", implicitly UTC) into
  * epoch ms; also accepts ISO strings. Returns null when unparseable.
  */
@@ -59,6 +104,15 @@ function parseSqliteUtc(value) {
     : value;
   const ms = Date.parse(normalized);
   return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * Format an epoch-ms instant as a sqlite UTC datetime ("YYYY-MM-DD HH:MM:SS"),
+ * the inverse of parseSqliteUtc. Used to build BETWEEN bounds that compare
+ * correctly against the lcm.db `created_at` column.
+ */
+function toSqliteUtc(ms) {
+  return new Date(ms).toISOString().replace("T", " ").slice(0, 19);
 }
 
 /**
@@ -100,21 +154,46 @@ function createGauges(options = {}) {
       .slice(0, 5);
   }
 
-  function leanCtxGauge() {
+  function leanCtxGauge(range) {
     const label = "lean-ctx (command output compression)";
+    const { from, to } = range;
+    const ranged = from !== null || to !== null;
     try {
       if (!fs.existsSync(paths.leanCtx)) {
         return unavailableGauge("lean-ctx", label, `file not found: ${paths.leanCtx}`);
       }
       const data = readJsonFile(paths.leanCtx);
-      const tokensProcessed = Number(data.total_output_tokens) || 0;
+
+      // Lifetime totals are the default. When a range is active, recompute the
+      // throughput figures from the per-day `daily[]` array (the only
+      // date-broken-out data lean-ctx records) and count only the days that
+      // fall inside [from, to].
+      const daily = Array.isArray(data.daily) ? data.daily : [];
+      let tokensProcessed = Number(data.total_output_tokens) || 0;
+      let totalCommands = data.total_commands ?? 0;
+      let daysTracked = daily.length;
+      if (ranged) {
+        const inWindow = daily.filter((day) =>
+          withinRange(parseDailyDate(day && day.date), from, to),
+        );
+        tokensProcessed = inWindow.reduce((sum, day) => sum + (Number(day.output_tokens) || 0), 0);
+        totalCommands = inWindow.reduce((sum, day) => sum + (Number(day.commands) || 0), 0);
+        daysTracked = inWindow.length;
+      }
+
       const baseDetail = {
-        totalCommands: data.total_commands ?? 0,
+        totalCommands,
         tokensProcessed,
+        // Per-command top consumers are lifetime-only — stats.json has no
+        // per-day command breakdown — so this list is unaffected by the range.
         topCommands: topLeanCtxCommands(data.commands),
         firstUse: data.first_use ?? null,
         lastUse: data.last_use ?? null,
-        daysTracked: Array.isArray(data.daily) ? data.daily.length : 0,
+        daysTracked,
+        ranged,
+        // The cep savings block (below) has no per-day breakdown, so the
+        // savings % always reflects lifetime sessions even under a range.
+        topCommandsLifetime: ranged,
       };
 
       // Genuine before/after sizes only exist in the cep block. The top-level
@@ -131,7 +210,7 @@ function createGauges(options = {}) {
           rawTokens: cepOriginal,
           effectiveTokens: cepCompressed,
           savingsPct: computeSavingsPct(cepOriginal, cepCompressed),
-          detail: { ...baseDetail, savingsSource: "cep" },
+          detail: { ...baseDetail, savingsSource: "cep", savingsLifetime: ranged },
           available: true,
         };
       }
@@ -153,8 +232,17 @@ function createGauges(options = {}) {
     }
   }
 
-  function lcmGauge() {
+  function lcmGauge(range) {
     const label = "lossless-claw (transcript compaction)";
+    const { from, to } = range;
+    const ranged = from !== null || to !== null;
+    // created_at is stored as "YYYY-MM-DD HH:MM:SS" (UTC). That format sorts
+    // lexicographically the same as chronologically, so a BETWEEN on the
+    // equivalent string bounds is a correct date filter. Build the WHERE
+    // fragment + bind params once and reuse it across the summaries aggregate,
+    // the staleness MAX(created_at), and the source-message count.
+    const fromStr = from !== null ? toSqliteUtc(from) : null;
+    const toStr = to !== null ? toSqliteUtc(to) : null;
     let db = null;
     try {
       if (!fs.existsSync(paths.lcmDb)) {
@@ -181,22 +269,49 @@ function createGauges(options = {}) {
               ? "descendant_token_count"
               : null;
           const selectRaw = rawColumn ? `, COALESCE(SUM(${rawColumn}), 0) AS raw` : "";
+
+          // Date filter: only possible when created_at exists. Build a WHERE
+          // fragment + ordered bind params; absent created_at means the range
+          // cannot be honored (reported via detail.rangeApplied below).
+          const hasCreatedAt = columns.includes("created_at");
+          const canRange = ranged && hasCreatedAt;
+          const whereParts = [];
+          const whereParams = [];
+          if (canRange && fromStr !== null) {
+            whereParts.push("created_at >= ?");
+            whereParams.push(fromStr);
+          }
+          if (canRange && toStr !== null) {
+            whereParts.push("created_at <= ?");
+            whereParams.push(toStr);
+          }
+          const whereSql = whereParts.length ? ` WHERE ${whereParts.join(" AND ")}` : "";
+
           const row = db
             .prepare(
-              `SELECT COUNT(*) AS n, COALESCE(SUM(token_count), 0) AS effective${selectRaw} FROM summaries`,
+              `SELECT COUNT(*) AS n, COALESCE(SUM(token_count), 0) AS effective${selectRaw} FROM summaries${whereSql}`,
             )
-            .get();
+            .get(...whereParams);
           const effectiveTokens = Number(row.effective) || 0;
           const rawTokens = rawColumn ? Number(row.raw) || 0 : effectiveTokens;
-          const detail = { summaries: Number(row.n) || 0, rawColumn: rawColumn || "none" };
+          const detail = {
+            summaries: Number(row.n) || 0,
+            rawColumn: rawColumn || "none",
+            ranged,
+            // True when a range was requested AND the schema supports filtering
+            // it; false signals the numbers are still lifetime despite the range.
+            rangeApplied: canRange,
+          };
 
           // Activity detection: lossless-claw may be installed but idle (its
           // contextEngine slot taken by another engine). The newest summary
           // timestamp tells the UI whether these numbers are live or history.
+          // The staleness window is always computed lifetime (newest summary
+          // overall) so "idle since {date}" stays accurate regardless of range.
           detail.lastActivity = null;
           detail.stale = null;
           detail.staleDays = null;
-          if (columns.includes("created_at")) {
+          if (hasCreatedAt) {
             const activity = db.prepare("SELECT MAX(created_at) AS last FROM summaries").get();
             detail.lastActivity = activity?.last ?? null;
             const lastMs = parseSqliteUtc(detail.lastActivity);
@@ -208,7 +323,17 @@ function createGauges(options = {}) {
           }
           if (tables.includes("messages")) {
             try {
-              const messages = db.prepare("SELECT COUNT(*) AS n FROM messages").get();
+              // Apply the same date filter to the source-message count when the
+              // messages table carries created_at and a range is in effect, so
+              // "source messages" tracks the windowed summaries it pairs with.
+              const msgCols = db
+                .prepare("PRAGMA table_info(messages)")
+                .all()
+                .map((col) => col.name);
+              const msgRange = canRange && msgCols.includes("created_at");
+              const messages = db
+                .prepare(`SELECT COUNT(*) AS n FROM messages${msgRange ? whereSql : ""}`)
+                .get(...(msgRange ? whereParams : []));
               detail.messages = Number(messages.n) || 0;
             } catch (e) {
               // messages table unreadable - summaries data is still valid
@@ -267,9 +392,18 @@ function createGauges(options = {}) {
     }
   }
 
-  /** All gauges; each source is isolated so one failure never hides another. */
-  function getGauges() {
-    return [leanCtxGauge(), lcmGauge()];
+  /**
+   * All gauges; each source is isolated so one failure never hides another.
+   *
+   * @param {object} [opts]
+   * @param {object} [opts.range] - { from, to } as epoch ms or ISO/date
+   *   strings; either side may be omitted. Omitted/empty range = lifetime
+   *   totals (the default, unchanged behavior). Validated here so a bad range
+   *   surfaces as a thrown error to the caller rather than a silent miss.
+   */
+  function getGauges(opts = {}) {
+    const range = normalizeRange(opts.range);
+    return [leanCtxGauge(range), lcmGauge(range)];
   }
 
   /**

@@ -113,6 +113,38 @@ function createCortex(options = {}) {
   }
 
   /**
+   * Unified state with the gauge figures scoped to a date window.
+   *
+   * Everything except the gauges (memory/gbrain/health/obsidian/recent) is
+   * date-agnostic, so this reuses the cached/warming base state and overlays
+   * only `gauges` + `gaugeSummary` recomputed for the given range. An empty
+   * or absent range yields the lifetime gauges — identical to getState() — so
+   * the no-param request path is byte-for-byte unchanged.
+   *
+   * @param {object} [range] - { from, to } as epoch ms or ISO/date strings.
+   * @throws when the range is invalid (e.g. from > to) — surfaced as a 400.
+   */
+  async function getStateRanged(range) {
+    const base = await getState();
+    const hasRange =
+      range &&
+      ((range.from !== null && range.from !== undefined && range.from !== "") ||
+        (range.to !== null && range.to !== undefined && range.to !== ""));
+    if (!hasRange) return base;
+
+    // Recompute gauges for the window. getGauges validates the range and is
+    // self-isolating per source, so a single failing source never throws here.
+    const rangedGauges = gauges.getGauges({ range });
+    return {
+      ...base,
+      gauges: rangedGauges,
+      gaugeSummary: summarizeGauges(rangedGauges),
+      // Echo the resolved window so the client can label "showing {range}".
+      gaugeRange: { from: range.from ?? null, to: range.to ?? null },
+    };
+  }
+
+  /**
    * Collect unified state: adapter availability, gauge summary, and memory
    * stats. Each section is independently guarded — a failing adapter
    * reports a reason instead of breaking the whole payload.
@@ -238,6 +270,7 @@ function createCortex(options = {}) {
     gauges,
     // Unified state
     getState,
+    getStateRanged,
     warmup,
     // Memory passthroughs (read-only, gbrain-backed)
     searchMemory: (query, opts) => gbrain.search(query, opts),
@@ -249,8 +282,9 @@ function createCortex(options = {}) {
     healthStats: () => gbrain.healthStats(),
     obsidianHealth: () => gbrain.obsidianHealth(),
     recentUpdates: (limit) => gbrain.recentUpdates(limit),
-    // Gauges passthrough
-    getGauges: () => gauges.getGauges(),
+    // Gauges passthrough. Accepts { range: { from, to } } to scope the gauge
+    // figures to a date window; no opts = lifetime totals (unchanged default).
+    getGauges: (opts) => gauges.getGauges(opts),
   };
 }
 
