@@ -1017,7 +1017,7 @@ async function loadAbout() {
     refs.aboutLine.textContent = t(
       "views.settings.aboutLine",
       { license: about.license },
-      "{license} license — built by Aaron May — based on openclaw-command-center",
+      "{license} license — built by Aaron May",
     );
   }
 }

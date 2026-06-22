@@ -38,6 +38,8 @@ const CANONICAL_ALERT_TYPES = [
   "budgetBreach",
   "orchestrationFailed",
   "dispatchComplete",
+  "dispatchReclaimed",
+  "subscriptionLimit",
   "fleetDigest",
   "ntfy",
   "cron",
