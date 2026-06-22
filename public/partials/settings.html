@@ -704,7 +704,7 @@
           >
             <span class="set-collapse-chevron" aria-hidden="true">▼</span>
             <span class="set-card-title" data-i18n="views.settings.budgetsTitle"
-              >💸 Cost budgets</span
+              >💸 Cost budgets — alert at 80% / 100%</span
             >
           </button>
           <button type="button" class="set-save-btn" id="set-budgets-save">Save budgets</button>
@@ -821,10 +821,13 @@
         </div>
 
         <div class="set-hint" data-i18n="views.settings.budgetsHint">
-          Budgets guard real API spend: Nine-Router provider names (e.g. kimi) plus "openrouter" and
-          "claude-code" (estimated cost — informational for OAuth subscriptions). Warn fires at 80%,
-          critical at 100%, once per day/ISO-week per scope. Provider rows and totals apply on Save
-          budgets.
+          Budgets <strong>alert</strong> — they do not hard-block by default. A warn alert fires at
+          80% and a critical alert at 100% of each limit, once per day/ISO-week per scope (via the
+          budgetBreach rule). New dispatches are only blocked at 100% when "Enforce" is enabled
+          above. Budgets guard real API spend: Nine-Router provider names (e.g. kimi) plus
+          "openrouter" and "claude-code" (estimated cost — informational for OAuth subscriptions).
+          Set a per-provider amount to 0 (or leave it blank) to remove that provider's budget.
+          Provider rows and totals apply on Save budgets.
         </div>
         <div class="set-inline-error" id="set-budgets-error" hidden></div>
       </div>
@@ -863,12 +866,18 @@
           </div>
         </div>
         <div class="set-row" id="set-digest-sinks">
-          <label class="set-toggle"><input type="checkbox" data-sink="slack" /><span>Slack</span></label>
-          <label class="set-toggle"><input type="checkbox" data-sink="ntfy" /><span>ntfy</span></label>
+          <label class="set-toggle"
+            ><input type="checkbox" data-sink="slack" /><span>Slack</span></label
+          >
+          <label class="set-toggle"
+            ><input type="checkbox" data-sink="ntfy" /><span>ntfy</span></label
+          >
           <label class="set-toggle"
             ><input type="checkbox" data-sink="webhooks" /><span>Webhooks</span></label
           >
-          <button type="button" class="set-action-btn" id="set-digest-test">Send test digest</button>
+          <button type="button" class="set-action-btn" id="set-digest-test">
+            Send test digest
+          </button>
         </div>
         <div class="set-hint" data-i18n="views.settings.digestHint">
           Delivers a compact markdown fleet summary through the alert sinks configured above. No
@@ -926,9 +935,7 @@
           <span class="set-card-title" id="set-about-name">ℹ️ Open Fleet Control</span>
           <span class="set-about-version" id="set-about-version"></span>
         </div>
-        <div class="set-muted" id="set-about-line">
-          MIT license — built by Aaron May — based on openclaw-command-center
-        </div>
+        <div class="set-muted" id="set-about-line">MIT license — built by Aaron May</div>
       </div>
     </div>
   </section>

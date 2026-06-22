@@ -125,7 +125,7 @@
     #alerts-view-section .alerts-table-head,
     #alerts-view-section .alerts-row {
       display: grid;
-      grid-template-columns: 110px 92px 150px 170px 1fr 150px;
+      grid-template-columns: 110px 92px 140px 150px 150px 1fr 130px;
       gap: 10px;
       align-items: center;
       padding: 8px 12px;
@@ -194,6 +194,16 @@
       white-space: nowrap;
     }
     #alerts-view-section .alerts-target-empty {
+      color: var(--text-muted);
+    }
+    #alerts-view-section .alerts-task {
+      font-size: 0.8rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #alerts-view-section .alerts-task-empty {
       color: var(--text-muted);
     }
     #alerts-view-section .alerts-message {
@@ -455,15 +465,12 @@
       </div>
       <div class="alerts-filter-field">
         <label for="alerts-filter-type" data-i18n="views.alerts.filterType">Type</label>
+        <!-- Options are populated dynamically by alerts.js from the type values
+             present in the loaded alert data (unioned with the canonical set),
+             so the picker always matches the Type column. Only the "All types"
+             default is static. -->
         <select id="alerts-filter-type">
           <option value="" data-i18n="views.alerts.allTypes">All types</option>
-          <option value="nodeOffline">nodeOffline</option>
-          <option value="nodeUnreachable">nodeUnreachable</option>
-          <option value="nodeRecovered">nodeRecovered</option>
-          <option value="taskFailed">taskFailed</option>
-          <option value="taskStale">taskStale</option>
-          <option value="lessonPending">lessonPending</option>
-          <option value="testAlert">testAlert</option>
         </select>
       </div>
       <div class="alerts-filter-field">
@@ -546,7 +553,8 @@
         <span data-i18n="views.alerts.colTime">Time</span>
         <span data-i18n="views.alerts.colSeverity">Severity</span>
         <span data-i18n="views.alerts.colType">Type</span>
-        <span data-i18n="views.alerts.colTarget">Node / Task</span>
+        <span data-i18n="views.alerts.colNode">Node</span>
+        <span data-i18n="views.alerts.colTask">Task</span>
         <span data-i18n="views.alerts.colMessage">Message</span>
         <span></span>
       </div>

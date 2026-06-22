@@ -16,6 +16,8 @@ const API_BASE = "/api/fleet/cortex";
 const MEMORY_LIST_LIMIT = 1000;
 const MEMORY_CELL_PREVIEW_CHARS = 110;
 const SEARCH_DEBOUNCE_MS = 300;
+// Recent-updates "last 30 days" window, in milliseconds.
+const RECENT_WINDOW_30D_MS = 30 * 24 * 60 * 60 * 1000;
 
 // Module-scope handles cleaned up on every init (the DOM itself is replaced
 // by the view loader, so listeners die with it — only timers/aborts persist).
@@ -477,7 +479,7 @@ function memoryColumns() {
       key: "updatedAt",
       label: t("views.cortex.colWhen", {}, "Updated"),
       sortable: true,
-      render: (row) => el("span", "cx-mem-time", relativeTime(toEpochMs(row.updatedAt)) || "—"),
+      render: (row) => el("span", "cx-mem-time", formatAbsolute(row.updatedAt) || "—"),
     },
   ];
 }
@@ -494,7 +496,7 @@ function buildMemoryDetail(row) {
 
   const meta = el("div", "cx-mem-meta");
   if (row.type) meta.appendChild(el("span", "cx-chip", row.type));
-  const when = relativeTime(toEpochMs(row.updatedAt));
+  const when = formatAbsolute(row.updatedAt);
   if (when) meta.appendChild(el("span", "cx-mem-time", when));
   panel.appendChild(meta);
 
@@ -677,8 +679,10 @@ function renderHealth(root, memoryState, health) {
     h.embeddedCoverage === null || h.embeddedCoverage === undefined
       ? null
       : Number(h.embeddedCoverage);
+  // coverage is a 0–1 ratio (1.0 = 100%). h.healthy is the authoritative flag;
+  // the numeric fallback must compare against the ratio's full mark (1), not 100.
   const fullyEmbedded =
-    h.healthy === true || (coverage !== null && coverage >= 100);
+    h.healthy === true || (coverage !== null && coverage >= 1);
 
   let kind = "down";
   let label = t("views.cortex.healthUnreachable", {}, "gbrain unreachable");
@@ -720,9 +724,12 @@ function renderHealth(root, memoryState, health) {
 
   // Headline coverage verdict, e.g. "1573/1573 embedded — healthy".
   if (coverage !== null || (h.embedded !== undefined && h.embedded !== null)) {
+    // coverage is a 0–1 ratio; render it as a percent (×100), so 1.0 → "100%",
+    // 0.5 → "50%". Keep an integer when the percent is whole, one decimal else.
+    const pct = coverage !== null ? coverage * 100 : null;
     const pctStr =
-      coverage !== null
-        ? t("views.cortex.healthCoveragePct", { pct: coverage.toFixed(coverage % 1 === 0 ? 0 : 1) }, "{pct}% coverage")
+      pct !== null
+        ? t("views.cortex.healthCoveragePct", { pct: pct.toFixed(pct % 1 === 0 ? 0 : 1) }, "{pct}% coverage")
         : "";
     const verdict = fullyEmbedded
       ? t("views.cortex.healthVerdictOk", {}, "healthy")
@@ -851,26 +858,79 @@ function renderRecentUpdates(root, recentUpdates) {
   }
   host.style.display = "";
 
+  const sorted = [...list]
+    .filter(Boolean)
+    .sort((a, b) => (toEpochMs(b?.updatedAt) || 0) - (toEpochMs(a?.updatedAt) || 0));
+
+  // View state is local to this render: the 30-day window toggle and a
+  // client-side "cleared" flag. There is no persistence endpoint, so Clear
+  // just empties the rendered feed until the next reload/refresh.
+  let windowed = false;
+  let cleared = false;
+
   const title = el("div", "cx-card-title");
   title.appendChild(el("span", null, t("views.cortex.recentTitle", {}, "Recent memory updates")));
   title.appendChild(el("span", "hint", t("views.cortex.recentHint", {}, "newest first")));
+
+  // Controls: a 30-day window toggle and a Clear button.
+  const controls = el("div", "cx-recent-controls");
+  const windowBtn = el(
+    "button",
+    "cx-recent-toggle",
+    t("views.cortex.recentWindow30d", {}, "Last 30 days"),
+  );
+  windowBtn.type = "button";
+  const clearBtn = el("button", "cx-recent-clear", t("views.cortex.recentClear", {}, "Clear"));
+  clearBtn.type = "button";
+  controls.appendChild(windowBtn);
+  controls.appendChild(clearBtn);
+  title.appendChild(controls);
   host.appendChild(title);
 
-  const sorted = [...list].sort((a, b) => (toEpochMs(b?.updatedAt) || 0) - (toEpochMs(a?.updatedAt) || 0));
   const feed = el("div", "cx-recent-list");
-  for (const entry of sorted) {
-    if (!entry) continue;
-    const row = el("div", "cx-recent-row");
-    const main = el("div", "cx-recent-main");
-    main.appendChild(
-      el("span", "cx-recent-title-text", entry.title || entry.id || t("views.cortex.emptyMemory", {}, "(untitled)")),
-    );
-    if (entry.type) main.appendChild(el("span", "cx-chip", entry.type));
-    row.appendChild(main);
-    row.appendChild(el("span", "cx-recent-time", formatAbsolute(entry.updatedAt) || "—"));
-    feed.appendChild(row);
-  }
   host.appendChild(feed);
+
+  const paint = () => {
+    clearChildren(feed);
+    if (cleared) {
+      feed.appendChild(el("div", "cx-empty", t("views.cortex.recentCleared", {}, "Cleared")));
+      return;
+    }
+    const cutoff = windowed ? Date.now() - RECENT_WINDOW_30D_MS : null;
+    const shown = sorted.filter((entry) => {
+      if (cutoff === null) return true;
+      const ms = toEpochMs(entry.updatedAt);
+      return ms !== null && ms >= cutoff;
+    });
+    if (shown.length === 0) {
+      feed.appendChild(el("div", "cx-empty", t("views.cortex.recentEmptyWindow", {}, "No updates in this window")));
+      return;
+    }
+    for (const entry of shown) {
+      const row = el("div", "cx-recent-row");
+      const main = el("div", "cx-recent-main");
+      main.appendChild(
+        el("span", "cx-recent-title-text", entry.title || entry.id || t("views.cortex.emptyMemory", {}, "(untitled)")),
+      );
+      if (entry.type) main.appendChild(el("span", "cx-chip", entry.type));
+      row.appendChild(main);
+      row.appendChild(el("span", "cx-recent-time", formatAbsolute(entry.updatedAt) || "—"));
+      feed.appendChild(row);
+    }
+  };
+
+  windowBtn.addEventListener("click", () => {
+    windowed = !windowed;
+    cleared = false;
+    windowBtn.classList.toggle("active", windowed);
+    paint();
+  });
+  clearBtn.addEventListener("click", () => {
+    cleared = true;
+    paint();
+  });
+
+  paint();
 }
 
 /* ------------------------------------------------------------------ */

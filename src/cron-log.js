@@ -151,7 +151,8 @@ function runDedupeKey(run, jobId) {
  * @param {object} run - raw run object from `cron runs --json`
  * @param {object} job - raw job object from `cron list --json`
  * @param {string} dedupeKey - precomputed stable run id
- * @returns {object|null} normalized event, or null if it carries no timestamp
+ * @returns {object|null} normalized event ({source:"cron", type:"cron",
+ *   task:jobName, job, jobId, status, ts, ...}), or null if no timestamp
  */
 function normalizeRun(run, job, dedupeKey) {
   const jobId = pickString(job.id, run.jobId) || null;
@@ -162,8 +163,13 @@ function normalizeRun(run, job, dedupeKey) {
 
   return {
     source: "cron",
+    type: "cron",
     id: dedupeKey,
     job: jobName,
+    // Surface the job name as the alert `task` so the UI Task column shows
+    // e.g. "Daily VPS" rather than leaving cron runs task-less. `job` is kept
+    // for back-compat with existing consumers (src/fleet.js reads e.job).
+    task: jobName,
     jobId,
     status,
     ts,

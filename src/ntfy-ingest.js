@@ -42,10 +42,14 @@ function severityForPriority(priority) {
  * Normalize one ntfy `event === "message"` object into a fleet alert record.
  * ntfy `time` is epoch SECONDS; the record `ts` is epoch MS.
  *
+ * The record `type` is always the constant "ntfy" (the alert origin), NOT the
+ * message title — a title like "Daily VPS" is a human label, not an alert type,
+ * so it is surfaced as the `task` instead (and kept verbatim on `title`).
+ *
  * @param {object} msg - parsed ntfy message line
- * @returns {{source: "ntfy", id: string, type: string, severity: string,
+ * @returns {{source: "ntfy", id: string, type: "ntfy", severity: string,
  *            title: string|null, message: string, ts: number,
- *            node: null, task: null}}
+ *            node: null, task: string|null}}
  */
 function normalizeMessage(msg) {
   const title = typeof msg.title === "string" && msg.title.length > 0 ? msg.title : null;
@@ -53,13 +57,13 @@ function normalizeMessage(msg) {
   return {
     source: "ntfy",
     id: String(msg.id),
-    type: title || "ntfy",
+    type: "ntfy",
     severity: severityForPriority(msg.priority),
     title,
     message: typeof msg.message === "string" ? msg.message : "",
     ts: timeSec !== null ? timeSec * 1000 : Date.now(),
     node: null,
-    task: null,
+    task: title,
   };
 }
 

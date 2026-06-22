@@ -19,6 +19,77 @@ const BILLING_SUBSCRIPTION = "subscription";
 const BILLING_PER_TOKEN = "per-token";
 const DEFAULT_BILLING_MODE = BILLING_PER_TOKEN;
 
+// Default flat-fee subscription plans. Each plan is a flat monthly cost spread
+// across all usage attributed to its provider key(s), with ~$0 marginal token
+// cost (same margin model Claude has always had). Defaults are sensible,
+// overridable list prices — NOT secrets:
+//   - Claude Code Max  → $200/mo (config.billing.claudePlanCost)
+//   - Codex subscription → $200/mo (config.billing.codexPlanCost)
+// `providers` lists the coarse provider keys (see modelToProvider) whose usage
+// is attributed to that plan's flat line.
+const DEFAULT_CLAUDE_PLAN_COST = 200;
+const DEFAULT_CLAUDE_PLAN_NAME = "Claude Code Max";
+const DEFAULT_CODEX_PLAN_COST = 200;
+const DEFAULT_CODEX_PLAN_NAME = "Codex subscription";
+
+// Build the list of flat-fee subscription plans from config.billing.
+//
+// Backward-compatible: if config.billing.claudePlanCost / claudePlanName are
+// set they map into the "claude" plan. A "codex" plan is always added (default
+// DEFAULT_CODEX_PLAN_COST, overridable via config.billing.codexPlanCost /
+// codexPlanName). config.billing.plans (an array of {id,label,planCost,
+// providers}) is honored verbatim when present and takes precedence over the
+// legacy scalar keys, so callers can declare arbitrary plans.
+//
+// Returns an array of normalized plan objects:
+//   { id, label, planCost, providers: string[] }
+function getBillingPlans(config) {
+  const billing = (config && config.billing) || {};
+
+  // Explicit plans[] declaration wins when present and well-formed.
+  if (Array.isArray(billing.plans)) {
+    const plans = billing.plans
+      .filter((p) => p && typeof p === "object")
+      .map((p) => ({
+        id: String(p.id || "").trim() || "plan",
+        label: String(p.label || p.id || "Subscription plan"),
+        planCost: Number.isFinite(Number(p.planCost)) ? Number(p.planCost) : 0,
+        providers: Array.isArray(p.providers)
+          ? p.providers.map((x) => String(x)).filter(Boolean)
+          : [],
+      }));
+    if (plans.length > 0) return plans;
+  }
+
+  // Legacy scalar keys → canonical Claude + Codex plans.
+  const claudeCost = Number.isFinite(Number(billing.claudePlanCost))
+    ? Number(billing.claudePlanCost)
+    : DEFAULT_CLAUDE_PLAN_COST;
+  const codexCost = Number.isFinite(Number(billing.codexPlanCost))
+    ? Number(billing.codexPlanCost)
+    : DEFAULT_CODEX_PLAN_COST;
+
+  return [
+    {
+      id: "claude",
+      label: String(billing.claudePlanName || DEFAULT_CLAUDE_PLAN_NAME),
+      planCost: claudeCost,
+      providers: ["claude-code"],
+    },
+    {
+      id: "codex",
+      label: String(billing.codexPlanName || DEFAULT_CODEX_PLAN_NAME),
+      planCost: codexCost,
+      providers: ["codex"],
+    },
+  ];
+}
+
+// Total flat plan cost across every configured subscription plan.
+function totalPlanCost(plans) {
+  return plans.reduce((sum, plan) => sum + (Number(plan.planCost) || 0), 0);
+}
+
 // Map a raw model id (e.g. "gpt-5.3-codex", "claude-opus-4", "anthropic/…")
 // to a coarse provider key matching the keys used in
 // config.billing.providerBillingModes. Heuristic + backward-compatible:
@@ -112,16 +183,19 @@ async function refreshTokenUsageAsync(getOpenClawDir) {
     const oneDayAgo = now - 24 * 60 * 60 * 1000;
     const threeDaysAgo = now - 3 * 24 * 60 * 60 * 1000;
     const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+    const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
 
     // Track usage for each time window
     const usage24h = emptyUsageBucket();
     const usage3d = emptyUsageBucket();
     const usage7d = emptyUsageBucket();
+    const usage30d = emptyUsageBucket();
 
     // Track usage per model for each time window
     const byModel24h = {};
     const byModel3d = {};
     const byModel7d = {};
+    const byModel30d = {};
 
     // Process files in batches to avoid overwhelming the system
     const batchSize = 50;
@@ -133,8 +207,8 @@ async function refreshTokenUsageAsync(getOpenClawDir) {
           const filePath = path.join(sessionsDir, file);
           try {
             const stat = await fs.promises.stat(filePath);
-            // Skip files not modified in the last 7 days
-            if (stat.mtimeMs < sevenDaysAgo) return;
+            // Skip files not modified in the widest window (30 days)
+            if (stat.mtimeMs < thirtyDaysAgo) return;
 
             const content = await fs.promises.readFile(filePath, "utf8");
             const lines = content.trim().split("\n");
@@ -145,14 +219,15 @@ async function refreshTokenUsageAsync(getOpenClawDir) {
                 const entry = JSON.parse(line);
                 const entryTime = entry.timestamp ? new Date(entry.timestamp).getTime() : 0;
 
-                // Skip entries older than 7 days
-                if (entryTime < sevenDaysAgo) continue;
+                // Skip entries older than the widest window (30 days)
+                if (entryTime < thirtyDaysAgo) continue;
 
                 if (entry.message?.usage) {
                   const u = entry.message.usage;
                   const model = entry.message.model || "unknown";
 
-                  // Add to appropriate buckets (cumulative - 24h is subset of 3d is subset of 7d)
+                  // Add to appropriate buckets (cumulative - each window is a
+                  // subset of the next: 24h ⊂ 3d ⊂ 7d ⊂ 30d)
                   if (entryTime >= oneDayAgo) {
                     addUsageToBucket(usage24h, u);
                     addUsageToModelMap(byModel24h, model, u);
@@ -161,9 +236,13 @@ async function refreshTokenUsageAsync(getOpenClawDir) {
                     addUsageToBucket(usage3d, u);
                     addUsageToModelMap(byModel3d, model, u);
                   }
-                  // Always add to 7d (already filtered above)
-                  addUsageToBucket(usage7d, u);
-                  addUsageToModelMap(byModel7d, model, u);
+                  if (entryTime >= sevenDaysAgo) {
+                    addUsageToBucket(usage7d, u);
+                    addUsageToModelMap(byModel7d, model, u);
+                  }
+                  // Always add to 30d (already filtered above)
+                  addUsageToBucket(usage30d, u);
+                  addUsageToModelMap(byModel30d, model, u);
                 }
               } catch (e) {
                 // Skip invalid lines
@@ -190,17 +269,18 @@ async function refreshTokenUsageAsync(getOpenClawDir) {
     const result = {
       // Primary (24h) for backward compatibility
       ...finalizeBucket(usage24h),
-      // All three windows (with per-model breakdowns)
+      // All four windows (with per-model breakdowns)
       windows: {
         "24h": finalizeBucket(usage24h, byModel24h),
         "3d": finalizeBucket(usage3d, byModel3d),
         "7d": finalizeBucket(usage7d, byModel7d),
+        "30d": finalizeBucket(usage30d, byModel30d),
       },
     };
 
     tokenUsageCache = { data: result, timestamp: Date.now(), refreshing: false };
     console.log(
-      `[Token Usage] Cached: 24h=${usage24h.requests} 3d=${usage3d.requests} 7d=${usage7d.requests} requests`,
+      `[Token Usage] Cached: 24h=${usage24h.requests} 3d=${usage3d.requests} 7d=${usage7d.requests} 30d=${usage30d.requests} requests`,
     );
   } catch (e) {
     console.error("[Token Usage] Refresh error:", e.message);
@@ -249,6 +329,16 @@ function getDailyTokenUsage(getOpenClawDir) {
         tokensWithCache: 0,
       },
       "7d": {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        requests: 0,
+        tokensNoCache: 0,
+        tokensWithCache: 0,
+      },
+      "30d": {
         input: 0,
         output: 0,
         cacheRead: 0,
@@ -316,6 +406,58 @@ function aggregateModelCosts(byModel = {}, rates = TOKEN_RATES, providerBillingM
     hypotheticalTotal: Math.round(hypotheticalTotal * 1e6) / 1e6,
     subscriptionTotal: Math.round(subscriptionTotal * 1e6) / 1e6,
   };
+}
+
+// Attribute a window's per-model usage to the configured flat-fee plans.
+//
+// Each plan line carries the SAME margin treatment Claude has always had: a
+// flat plan cost spread across that plan's usage, ~$0 marginal token cost, and
+// the hypothetical "if billed per-token" projection for that plan's models.
+// Codex-runtime usage (provider "codex") lands on the Codex plan; Claude usage
+// (provider "claude-code") on the Claude plan; per-token providers are never
+// attributed to a flat plan.
+//
+// Returns one row per plan:
+//   { id, label, planCost, providers, hypotheticalCost, marginalCost,
+//     requests, models: [modelId, ...] }
+function aggregatePlanCosts(
+  byModel = {},
+  plans = [],
+  rates = TOKEN_RATES,
+  providerBillingModes = {},
+) {
+  // provider → plan index, for O(1) attribution.
+  const providerToPlan = new Map();
+  plans.forEach((plan, index) => {
+    for (const provider of plan.providers || []) providerToPlan.set(provider, index);
+  });
+
+  const lines = plans.map((plan) => ({
+    id: plan.id,
+    label: plan.label,
+    planCost: Number(plan.planCost) || 0,
+    providers: [...(plan.providers || [])],
+    hypotheticalCost: 0,
+    marginalCost: 0,
+    requests: 0,
+    models: [],
+  }));
+
+  for (const row of summarizeModelUsage(byModel, rates, providerBillingModes)) {
+    const index = providerToPlan.get(row.provider);
+    if (index === undefined) continue;
+    const line = lines[index];
+    line.hypotheticalCost += row.hypotheticalCost;
+    line.marginalCost += row.marginalCost;
+    line.requests += row.requests;
+    line.models.push(row.model);
+  }
+
+  return lines.map((line) => ({
+    ...line,
+    hypotheticalCost: Math.round(line.hypotheticalCost * 1e6) / 1e6,
+    marginalCost: Math.round(line.marginalCost * 1e6) / 1e6,
+  }));
 }
 
 // Summarize a per-model usage map into a sorted array with honest costs.
@@ -388,15 +530,21 @@ function getCostBreakdown(config, getSessions, getOpenClawDir) {
   // Per-token line-item breakdown for 24h (the hypothetical math).
   const costs = calculateCostForBucket(usage);
 
-  // Get plan info from config
-  const planCost = config.billing?.claudePlanCost || 200;
-  const planName = config.billing?.claudePlanName || "Claude Code Max";
+  // Flat-fee subscription plans (Claude Code Max + Codex subscription by
+  // default). Each is rendered as its own flat line; `planCost` is the SUM of
+  // every plan's flat fee (preserves the old single-plan semantics where
+  // actualMonthlySpend = planCost + marginal).
+  const plans = getBillingPlans(config);
+  const planCost = totalPlanCost(plans);
+  // Backward-compatible single plan name: the first (Claude) plan's label.
+  const planName = plans[0]?.label || DEFAULT_CLAUDE_PLAN_NAME;
 
   // Calculate moving averages for each window
   const windowConfigs = {
     "24h": { days: 1, label: "24h" },
     "3d": { days: 3, label: "3dma" },
     "7d": { days: 7, label: "7dma" },
+    "30d": { days: 30, label: "30dma" },
   };
 
   const windows = {};
@@ -410,8 +558,35 @@ function getCostBreakdown(config, getSessions, getOpenClawDir) {
       ? aggregateModelCosts(bucket.byModel, TOKEN_RATES, providerBillingModes)
       : (() => {
           const c = calculateCostForBucket(bucket);
-          return { marginalTotal: c.totalCost, hypotheticalTotal: c.totalCost, subscriptionTotal: 0 };
+          return {
+            marginalTotal: c.totalCost,
+            hypotheticalTotal: c.totalCost,
+            subscriptionTotal: 0,
+          };
         })();
+
+    // Per-plan flat-fee lines: each plan's flat cost spread across its usage,
+    // ~$0 marginal, plus the per-plan hypothetical projection. Codex usage →
+    // Codex plan, Claude usage → Claude plan.
+    const planLines = aggregatePlanCosts(
+      bucket.byModel || {},
+      plans,
+      TOKEN_RATES,
+      providerBillingModes,
+    ).map((line) => {
+      const hypotheticalMonthly = (line.hypotheticalCost / windowConfig.days) * 30;
+      const marginalMonthly = (line.marginalCost / windowConfig.days) * 30;
+      // The flat plan covers this plan's usage; "actual" = flat fee + marginal.
+      const actualMonthlySpend = line.planCost + marginalMonthly;
+      const savings = hypotheticalMonthly - actualMonthlySpend;
+      return {
+        ...line,
+        hypotheticalMonthly,
+        marginalMonthly,
+        actualMonthlySpend,
+        monthlySavings: savings > 0 ? savings : 0,
+      };
+    });
 
     const marginalDailyAvg = split.marginalTotal / windowConfig.days;
     const hypotheticalDailyAvg = split.hypotheticalTotal / windowConfig.days;
@@ -443,8 +618,11 @@ function getCostBreakdown(config, getSessions, getOpenClawDir) {
       // (i.e. the dollars NOT spent because of the flat plan).
       subscriptionCoveredCost: split.subscriptionTotal,
 
-      // Flat plan + real marginal = what is actually paid this month
+      // Flat plan + real marginal = what is actually paid this month.
+      // planCost is the SUM of all plan fees; `plans` is the per-plan
+      // breakdown (one flat-fee line per subscription).
       planCost,
+      plans: planLines,
       actualMonthlySpend,
       monthlySavings,
       savingsPercent:
@@ -507,9 +685,13 @@ function getCostBreakdown(config, getSessions, getOpenClawDir) {
     // HYPOTHETICAL "if billed per-token" projection (the old misleading number)
     hypotheticalCost: primary.hypotheticalCost,
     hypotheticalMonthly: primary.hypotheticalMonthly,
-    // Flat subscription plan — a SEPARATE line, never summed into marginal
+    // Flat subscription plan — a SEPARATE line, never summed into marginal.
+    // planCost is the SUM across all plans; `plans` is the per-plan breakdown
+    // (Claude + Codex by default), each its own flat-fee line with the same
+    // margin model. planName is the first plan's label (backward compatible).
     planCost,
     planName,
+    plans: primary.plans,
     // What is actually paid this month: flat plan + real marginal spend
     actualMonthlySpend: primary.actualMonthlySpend,
 
@@ -597,9 +779,11 @@ function getTokenStats(sessions, capacity, config = {}) {
   const estCost = split24h.hypotheticalTotal; // hypothetical per-token (legacy meaning)
   const marginalCost = split24h.marginalTotal; // real marginal $ (≈0 for subs)
 
-  // Calculate savings vs plan cost (compare monthly to monthly)
-  const planCost = config?.billing?.claudePlanCost ?? 200;
-  const planName = config?.billing?.claudePlanName ?? "Claude Code Max";
+  // Calculate savings vs plan cost (compare monthly to monthly). planCost is
+  // the SUM of every flat-fee subscription plan (Claude + Codex by default).
+  const plans = getBillingPlans(config);
+  const planCost = totalPlanCost(plans);
+  const planName = plans[0]?.label || DEFAULT_CLAUDE_PLAN_NAME;
   const monthlyApiCost = estCost * 30; // HYPOTHETICAL: project per-token daily → monthly
   const marginalMonthly = marginalCost * 30; // REAL marginal monthly spend
   const actualMonthlySpend = planCost + marginalMonthly;
@@ -611,11 +795,12 @@ function getTokenStats(sessions, capacity, config = {}) {
   const avgTokensPerSession = Math.round(total / sessionCount);
   const avgCostPerSession = estCost / sessionCount;
 
-  // Calculate savings for all windows (24h, 3dma, 7dma)
+  // Calculate savings for all windows (24h, 3dma, 7dma, 30dma)
   const windowConfigs = {
     "24h": { days: 1, label: "24h" },
     "3dma": { days: 3, label: "3dma" },
     "7dma": { days: 7, label: "7dma" },
+    "30dma": { days: 30, label: "30dma" },
   };
 
   const savingsWindows = {};
@@ -627,7 +812,11 @@ function getTokenStats(sessions, capacity, config = {}) {
       ? aggregateModelCosts(bucket.byModel, TOKEN_RATES, providerBillingModes)
       : (() => {
           const c = calculateCostForBucket(bucket);
-          return { marginalTotal: c.totalCost, hypotheticalTotal: c.totalCost, subscriptionTotal: 0 };
+          return {
+            marginalTotal: c.totalCost,
+            hypotheticalTotal: c.totalCost,
+            subscriptionTotal: 0,
+          };
         })();
     // dailyAvg/monthlyProjected remain the HYPOTHETICAL per-token figures for
     // backward compatibility; marginal* are the REAL spend.
@@ -720,6 +909,9 @@ module.exports = {
   resolveBillingMode,
   getProviderBillingModes,
   isSubscriptionModel,
+  getBillingPlans,
+  totalPlanCost,
+  aggregatePlanCosts,
   emptyUsageBucket,
   addUsageToBucket,
   addUsageToModelMap,
