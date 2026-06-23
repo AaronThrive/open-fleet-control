@@ -67,7 +67,8 @@ export function filterCronJobs(jobs, active) {
     if (active.status === "enabled" && !enabled) return false;
     if (active.status === "disabled" && enabled) return false;
     if (active.schedule !== "all" && classifySchedule(job) !== active.schedule) return false;
-    const source = job.source === "hermes" ? "hermes" : "openclaw";
+    const source =
+      job.source === "hermes" ? "hermes" : job.source === "host" ? "host" : "openclaw";
     if (active.source !== "all" && source !== active.source) return false;
     if (active.agent !== "all" && (job.agent || "") !== active.agent) return false;
     return true;
@@ -84,9 +85,10 @@ export function toCronRow(job) {
     nextRun: job.nextRun || "—",
     nextRunAtMs: Number.isFinite(job.nextRunAtMs) ? job.nextRunAtMs : null,
     lastStatus: job.lastStatus ? String(job.lastStatus) : "",
+    lastRunAtMs: Number.isFinite(job.lastRunAtMs) ? job.lastRunAtMs : null,
     agent: job.agent || "",
     node: job.node || "",
-    source: job.source === "hermes" ? "hermes" : "openclaw",
+    source: job.source === "hermes" ? "hermes" : job.source === "host" ? "host" : "openclaw",
     enabled: job.enabled !== false,
     job,
   };
@@ -205,6 +207,19 @@ function buildRowActions(els, row) {
 
 function statusBadge(row) {
   const status = row.lastStatus;
+  // Host crontab jobs keep no exit-status record, so "no runs yet" is wrong —
+  // they ARE firing. Show "host cron · last fired <date>" from the log mtime
+  // when known, otherwise "host cron — not tracked". Never "no runs yet".
+  if (!status && row.source === "host") {
+    const last = formatAbsolute(row.lastRunAtMs);
+    return el(
+      "span",
+      "cron-last-status host",
+      last
+        ? t("views.cron.hostLastFired", { when: last }, `host cron · last fired ${last}`)
+        : t("views.cron.hostNotTracked", {}, "host cron — not tracked"),
+    );
+  }
   const cls = status === "ok" || status === "success" ? "ok" : status ? "error" : "unknown";
   return el(
     "span",
@@ -216,7 +231,8 @@ function statusBadge(row) {
 // Plain text (no badge pill) — the source is already a top-level filter, so the
 // decorative badge is redundant noise.
 function sourceCell(row) {
-  return el("span", "cron-source-text", row.source === "hermes" ? "Hermes" : "OpenClaw");
+  const label = row.source === "hermes" ? "Hermes" : row.source === "host" ? "Host" : "OpenClaw";
+  return el("span", "cron-source-text", label);
 }
 
 /** Absolute date + time, e.g. "Jun 25, 2026, 09:00". */
@@ -270,7 +286,10 @@ function buildDetail(row) {
   };
   add(t("views.cron.detailExpression", {}, "Cron expression"), row.schedule, true);
   add(t("views.cron.detailJobId", {}, "Job id"), row.job.id || "—", true);
-  add(t("views.cron.detailSource", {}, "Source"), row.source === "hermes" ? "Hermes" : "OpenClaw");
+  add(
+    t("views.cron.detailSource", {}, "Source"),
+    row.source === "hermes" ? "Hermes" : row.source === "host" ? "Host (system crontab)" : "OpenClaw",
+  );
   add(
     t("views.cron.detailLastStatus", {}, "Last status"),
     row.lastStatus || t("views.cron.neverRan", {}, "no runs yet"),
