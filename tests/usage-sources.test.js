@@ -75,7 +75,7 @@ function writeNineRouterFixture(dbPath) {
   db.close();
 }
 
-function writeHeadroomFixture(statsPath) {
+function writePlanUsageFixture(statsPath) {
   fs.writeFileSync(
     statsPath,
     JSON.stringify({
@@ -85,6 +85,15 @@ function writeHeadroomFixture(statsPath) {
         token_prefix: "sk-ant-x",
       },
       window_tokens: { input: 1, output: 2, cache_reads: 3, cache_writes_total: 4 },
+      codex: {
+        available: true,
+        plan_type: "prolite",
+        five_hour: { utilization_pct: 33, resets_at: "2026-06-10T19:30:00Z" },
+        seven_day: { utilization_pct: 11, resets_at: "2026-06-13T02:00:00Z" },
+        credits: { balance: 7, has_credits: true, unlimited: false },
+        polled_at: new Date(NOW - 60 * 1000).toISOString(),
+        stale: false,
+      },
     }),
   );
 }
@@ -114,13 +123,13 @@ describe("usage-sources aggregator (index)", () => {
     writeClaudeFixture(projectsDir);
     writeCodexFixture(codexDir);
     if (sqlite) writeNineRouterFixture(dbPath);
-    writeHeadroomFixture(statsPath);
+    writePlanUsageFixture(statsPath);
 
     config = {
       claudeProjectsDir: projectsDir,
       codexDir,
       nineRouterDb: dbPath,
-      headroomStats: statsPath,
+      planUsageStats: statsPath,
       openrouterKey: KEY,
       psFn: async () => [{ pid: 1, tty: "pts/0", command: "claude" }],
       fetchFn: openrouterFetch(),
@@ -140,9 +149,9 @@ describe("usage-sources aggregator (index)", () => {
       assert.deepStrictEqual(Object.keys(all).sort(), [
         "claudeCode",
         "codex",
-        "headroom",
         "nineRouter",
         "openrouter",
+        "planUsage",
       ]);
 
       assert.strictEqual(all.claudeCode.available, true);
@@ -158,8 +167,8 @@ describe("usage-sources aggregator (index)", () => {
       assert.strictEqual(all.nineRouter.available, true);
       assert.strictEqual(all.nineRouter.usage.totals.requests, 1);
 
-      assert.strictEqual(all.headroom.available, true);
-      assert.strictEqual(all.headroom.stale, false);
+      assert.strictEqual(all.planUsage.available, true);
+      assert.strictEqual(all.planUsage.stale, false);
 
       assert.strictEqual(all.openrouter.available, true);
       assert.strictEqual(all.openrouter.credits.remaining, 75);
@@ -185,7 +194,7 @@ describe("usage-sources aggregator (index)", () => {
       assert.ok(!JSON.stringify(all).includes(KEY));
       // healthy sources unaffected
       assert.strictEqual(all.claudeCode.available, true);
-      assert.strictEqual(all.headroom.available, true);
+      assert.strictEqual(all.planUsage.available, true);
     });
 
     it("marks everything unavailable on an empty host without throwing", async () => {
@@ -195,13 +204,13 @@ describe("usage-sources aggregator (index)", () => {
         claudeProjectsDir: path.join(empty, "projects"),
         codexDir: path.join(empty, ".codex"),
         nineRouterDb: path.join(empty, "data.sqlite"),
-        headroomStats: path.join(empty, "subscription_state.json"),
+        planUsageStats: path.join(empty, "subscription_state.json"),
       }).getAll();
 
       assert.strictEqual(all.claudeCode.available, false);
       assert.strictEqual(all.codex.available, false);
       assert.strictEqual(all.nineRouter.available, false);
-      assert.strictEqual(all.headroom.available, false);
+      assert.strictEqual(all.planUsage.available, false);
       assert.strictEqual(all.openrouter.available, false);
       for (const source of Object.values(all)) {
         assert.ok(source.reason.length > 0, "every unavailable source carries a reason");
@@ -242,6 +251,11 @@ describe("usage-sources aggregator (index)", () => {
       const subscription = await routes["GET /api/usage/subscription"]();
       assert.strictEqual(subscription.available, true);
       assert.ok(!JSON.stringify(subscription).includes("sk-ant"));
+      // Codex plan usage is folded into the subscription response.
+      assert.strictEqual(subscription.codex.available, true);
+      assert.strictEqual(subscription.codex.planType, "prolite");
+      assert.strictEqual(subscription.codex.fiveHour.utilizationPct, 33);
+      assert.strictEqual(subscription.codex.credits.balance, 7);
 
       const openrouter = await routes["GET /api/usage/openrouter"]();
       assert.strictEqual(openrouter.available, true);
@@ -273,9 +287,9 @@ describe("usage-sources aggregator (index)", () => {
       assert.deepStrictEqual(Object.keys(sources).sort(), [
         "claudeCode",
         "codex",
-        "headroom",
         "nineRouter",
         "openrouter",
+        "planUsage",
       ]);
       assert.strictEqual(sources.claudeCode.source, "claude-code");
       assert.strictEqual(sources.openrouter.available, true);
