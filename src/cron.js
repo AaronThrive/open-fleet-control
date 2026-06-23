@@ -161,6 +161,9 @@ function mapOpenClawJob(job, node) {
     scheduleHuman,
     enabled: job.enabled !== false,
     nextRun: formatNextRun(state.nextRunAtMs),
+    // Raw epoch ms of the next run so the UI can show the actual date + time
+    // (not just the compact "5d" relative form).
+    nextRunAtMs: Number.isFinite(state.nextRunAtMs) ? state.nextRunAtMs : null,
     lastStatus: state.lastStatus ?? state.lastRunStatus ?? null,
     // Epoch ms of the most recent run (null when the job never ran) — feeds
     // the per-agent flight-recorder timeline (cron.run events).
@@ -202,6 +205,7 @@ function mapHermesJob(job, node) {
     scheduleHuman,
     enabled: job.enabled !== false,
     nextRun: formatNextRun(nextRunAtMs),
+    nextRunAtMs,
     lastStatus: job.last_status ?? null,
     lastRunAtMs,
     agent: job.profile || null,

@@ -82,6 +82,7 @@ export function toCronRow(job) {
     scheduleHuman: job.scheduleHuman || job.schedule || "—",
     schedule: job.schedule || "—",
     nextRun: job.nextRun || "—",
+    nextRunAtMs: Number.isFinite(job.nextRunAtMs) ? job.nextRunAtMs : null,
     lastStatus: job.lastStatus ? String(job.lastStatus) : "",
     agent: job.agent || "",
     node: job.node || "",
@@ -212,8 +213,40 @@ function statusBadge(row) {
   );
 }
 
-function sourceBadge(row) {
-  return el("span", "cron-badge source", row.source === "hermes" ? "Hermes" : "OpenClaw");
+// Plain text (no badge pill) — the source is already a top-level filter, so the
+// decorative badge is redundant noise.
+function sourceCell(row) {
+  return el("span", "cron-source-text", row.source === "hermes" ? "Hermes" : "OpenClaw");
+}
+
+/** Absolute date + time, e.g. "Jun 25, 2026, 09:00". */
+function formatAbsolute(ms) {
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toLocaleString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+// Next-run cell: the ACTUAL next run date + time (so runs are easy to line up
+// and check), with the compact relative form ("in 2d") as a small secondary.
+function nextRunCell(row) {
+  const wrap = el("span", "cron-nextrun");
+  const abs = formatAbsolute(row.nextRunAtMs);
+  if (!abs) {
+    wrap.appendChild(el("span", "cron-nextrun-abs", row.nextRun || "—"));
+    return wrap;
+  }
+  wrap.appendChild(el("span", "cron-nextrun-abs", abs));
+  if (row.nextRun && row.nextRun !== "—" && row.nextRun !== "overdue") {
+    wrap.appendChild(el("span", "cron-nextrun-rel", ` · in ${row.nextRun}`));
+  } else if (row.nextRun === "overdue") {
+    wrap.appendChild(el("span", "cron-nextrun-rel overdue", " · overdue"));
+  }
+  return wrap;
 }
 
 function enabledBadge(row) {
@@ -257,7 +290,12 @@ function buildList(els) {
     columns: [
       { key: "name", label: t("views.cron.colName", {}, "Name"), sortable: true },
       { key: "scheduleHuman", label: t("views.cron.colSchedule", {}, "Schedule"), sortable: true },
-      { key: "nextRun", label: t("views.cron.colNextRun", {}, "Next run"), sortable: true },
+      {
+        key: "nextRunAtMs",
+        label: t("views.cron.colNextRun", {}, "Next run"),
+        sortable: true,
+        render: nextRunCell,
+      },
       {
         key: "lastStatus",
         label: t("views.cron.colLastStatus", {}, "Last status"),
@@ -270,7 +308,7 @@ function buildList(els) {
         key: "source",
         label: t("views.cron.colSource", {}, "Source"),
         sortable: true,
-        render: sourceBadge,
+        render: sourceCell,
       },
       {
         key: "enabled",
