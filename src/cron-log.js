@@ -154,7 +154,7 @@ function runDedupeKey(run, jobId) {
  * @returns {object|null} normalized event ({source:"cron", type:"cron",
  *   task:jobName, job, jobId, status, ts, ...}), or null if no timestamp
  */
-function normalizeRun(run, job, dedupeKey) {
+function normalizeRun(run, job, dedupeKey, container) {
   const jobId = pickString(job.id, run.jobId) || null;
   const jobName = pickString(run.jobName, job.name, jobId) || "unknown";
   const status = run.status === "error" ? "error" : "ok";
@@ -166,6 +166,9 @@ function normalizeRun(run, job, dedupeKey) {
     type: "cron",
     id: dedupeKey,
     job: jobName,
+    // The container the scheduler runs in (e.g. "openclaw") is the cron run's
+    // node — so the Alerts Node column shows exactly where it ran, not a dash.
+    node: pickString(container) || null,
     // Surface the job name as the alert `task` so the UI Task column shows
     // e.g. "Daily VPS" rather than leaving cron runs task-less. `job` is kept
     // for back-compat with existing consumers (src/fleet.js reads e.job).
@@ -295,7 +298,7 @@ function createCronLog(options = {}) {
       if (run.action && run.action !== "finished") continue;
       const key = runDedupeKey(run, jobId);
       if (!key || knownRuns.has(key)) continue;
-      const event = normalizeRun(run, job, key);
+      const event = normalizeRun(run, job, key, container);
       if (event) fresh.push(event);
     }
     fresh.sort((a, b) => a.ts - b.ts);
