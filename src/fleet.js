@@ -481,7 +481,9 @@ function createFleetRuntime({ config, broadcast }) {
         topic: ntfySink.topic,
         intervalMs: (ingestCfg.ntfy && ingestCfg.ntfy.intervalMs) || 30000,
         stateFile: path.join(stateDir, "ntfy-ingest.json"),
-        onAlert: (rec) => recordAlert(rec),
+        // ntfy pushes carry no node of their own; they are ingested by THIS
+        // dashboard, so attribute them to the local node instead of a dash.
+        onAlert: (rec) => recordAlert({ ...rec, node: rec.node || selfHostname }),
       })
     : NOOP_POLLER;
   const cronLog = cronIngestEnabled
@@ -493,7 +495,7 @@ function createFleetRuntime({ config, broadcast }) {
             source: "cron",
             type: "cron",
             severity: e.status === "error" ? "warn" : "info",
-            node: null,
+            node: e.node || null,
             task: e.job || null,
             message: `${e.job || "cron"} ${e.status}${e.error ? ": " + e.error : ""}`,
             ts: e.ts,
