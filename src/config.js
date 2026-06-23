@@ -280,8 +280,7 @@ const FLEET_DEFAULTS = {
     codexDir: "~/.codex",
     nineRouterDb: "~/.openclaw/9router/data/db/data.sqlite",
     // Empty = reuse fleet.cortex.planUsageStats (single source of truth for
-    // the plan-usage subscription stats file). The legacy `headroomStats` key
-    // is still honored at wiring time for back-compat.
+    // the plan-usage subscription stats file written by the quota-poller).
     planUsageStats: "",
     // OpenRouter API key for credit/key info. OPENROUTER_API_KEY env var
     // takes precedence at wiring time (src/index.js).
