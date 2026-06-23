@@ -569,4 +569,9 @@ module.exports = {
   forceCliRefresh,
   _resetForTesting,
   _waitForCliRefreshForTesting,
+  // Exported for unit tests — the host-crontab next-run calculator + mapper.
+  cronFieldValues,
+  cronNextRunMs,
+  hostCronLastRunMs,
+  mapHostCronLine,
 };
