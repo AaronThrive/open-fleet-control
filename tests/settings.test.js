@@ -60,10 +60,12 @@ describe("settings module", () => {
         gatewayUrl: "",
         channel: "",
       });
+      // The ntfy topic is a bearer-equivalent secret: the HTTP surface returns
+      // a `topicSet` boolean instead of the literal value (security hardening).
       assert.deepStrictEqual(result.alerts.sinks.ntfy, {
         enabled: false,
         server: "https://ntfy.sh",
-        topic: "",
+        topicSet: false,
       });
       assert.deepStrictEqual(result.alerts.sinks.webhooks, []);
       assert.strictEqual(result.mesh.intervalMs, 15000);
@@ -85,7 +87,9 @@ describe("settings module", () => {
       assert.strictEqual(result.mesh.intervalMs, 60000);
       assert.strictEqual(result.federation.intervalMs, 30000); // untouched default
       assert.strictEqual(result.alerts.enabled, true);
-      assert.strictEqual(result.alerts.sinks.ntfy.topic, "ops");
+      // Topic value is redacted on the HTTP surface → only topicSet is exposed.
+      assert.strictEqual(result.alerts.sinks.ntfy.topicSet, true);
+      assert.strictEqual(result.alerts.sinks.ntfy.topic, undefined);
       assert.strictEqual(result.alerts.sinks.ntfy.server, "https://ntfy.sh"); // default fills in
     });
 
@@ -165,6 +169,50 @@ describe("settings module", () => {
           }),
         /http/,
       );
+    });
+
+    it("rejects SSRF targets (loopback / private / link-local / metadata) for server-fetched URLs", () => {
+      const settings = createSettings({ configPath });
+      const denied = [
+        "http://127.0.0.1/x",
+        "http://localhost/x",
+        "http://0.0.0.0/x",
+        "http://169.254.169.254/latest/meta-data/", // cloud metadata
+        "http://metadata.google.internal/",
+        "http://10.1.2.3/x",
+        "http://172.16.0.1/x",
+        "http://192.168.1.1/x",
+        "http://foo.internal/x",
+        "http://[::1]/x",
+        "http://[fd00::1]/x",
+      ];
+      for (const url of denied) {
+        assert.throws(
+          () => settings.update({ alerts: { sinks: { ntfy: { server: url } } } }),
+          /loopback, private, link-local, or metadata/,
+          `expected ${url} to be rejected`,
+        );
+      }
+    });
+
+    it("applies the SSRF denylist to webhook urls and slack.gatewayUrl too", () => {
+      const settings = createSettings({ configPath });
+      assert.throws(
+        () => settings.update({ alerts: { sinks: { webhooks: { add: [{ url: "http://10.0.0.1/h" }] } } } }),
+        /loopback, private, link-local, or metadata/,
+      );
+      assert.throws(
+        () => settings.update({ alerts: { sinks: { slack: { gatewayUrl: "http://192.168.0.5/g" } } } }),
+        /loopback, private, link-local, or metadata/,
+      );
+    });
+
+    it("still accepts public hostnames for server-fetched URLs", () => {
+      const settings = createSettings({ configPath });
+      const { applied } = settings.update({
+        alerts: { sinks: { ntfy: { enabled: true, server: "https://ntfy.sh" } } },
+      });
+      assert.strictEqual(applied.alerts.sinks.ntfy.server, "https://ntfy.sh");
     });
 
     it("rejects out-of-bounds and non-integer intervals", () => {
@@ -249,7 +297,10 @@ describe("settings module", () => {
       settings.update({ alerts: { rules: { taskFailed: false } } });
 
       const result = settings.get();
-      assert.strictEqual(result.alerts.sinks.ntfy.topic, "ops"); // survived later patches
+      // Topic is redacted on the HTTP surface; topicSet=true proves it survived
+      // the later patches. The literal value persists in the file (asserted via
+      // getAlertsConfig below in the hot-reload test).
+      assert.strictEqual(result.alerts.sinks.ntfy.topicSet, true); // survived later patches
       assert.strictEqual(result.alerts.sinks.slack.channel, "#ops");
       assert.strictEqual(result.alerts.rules.taskFailed, false);
       assert.strictEqual(result.alerts.rules.nodeOffline, true);
@@ -745,9 +796,13 @@ describe("settings module", () => {
           },
         },
       });
-      // Refs are not secrets — returned verbatim for the UI badge.
+      // Refs are not secrets — returned verbatim for the UI badge. slack.gatewayUrl
+      // is exposed in place; the ntfy topic literal is redacted (topicSet) but the
+      // op:// ref is surfaced as topicRef (mirrors the webhook secretRef pattern).
       assert.strictEqual(applied.alerts.sinks.slack.gatewayUrl, "op://Vault/slack-gateway/url");
-      assert.strictEqual(applied.alerts.sinks.ntfy.topic, "op://Vault/ntfy/topic");
+      assert.strictEqual(applied.alerts.sinks.ntfy.topic, undefined);
+      assert.strictEqual(applied.alerts.sinks.ntfy.topicSet, true);
+      assert.strictEqual(applied.alerts.sinks.ntfy.topicRef, "op://Vault/ntfy/topic");
     });
 
     it("still rejects non-ref malformed gateway URLs and topics", () => {

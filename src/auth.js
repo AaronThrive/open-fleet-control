@@ -2,6 +2,24 @@
 // Authentication Module
 // ============================================================================
 
+const crypto = require("crypto");
+
+/**
+ * Constant-time string equality for secret comparisons (tokens). Length is
+ * checked first (timingSafeEqual throws on length mismatch); the early length
+ * return leaks only length, not content, which is acceptable for opaque tokens.
+ * Returns false for any non-string / empty input (fail closed).
+ */
+function timingSafeStrEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length === 0 || b.length === 0) {
+    return false;
+  }
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 // Auth header names
 const AUTH_HEADERS = {
   tailscale: {
@@ -138,7 +156,7 @@ function checkAuth(req, authConfig) {
   if (mode === "token") {
     const authHeader = req.headers["authorization"] || "";
     const token = authHeader.replace(/^Bearer\s+/i, "");
-    if (token && token === authConfig.token) {
+    if (timingSafeStrEqual(token, authConfig.token)) {
       return { authorized: true, user: { type: "token" } };
     }
     return { authorized: false, reason: "Invalid or missing token" };
@@ -222,10 +240,25 @@ function checkAuth(req, authConfig) {
   return { authorized: false, reason: "Unknown auth mode" };
 }
 
+/** Minimal HTML-entity escaper for untrusted values interpolated into the 403 page. */
+function escapeHtml(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function getUnauthorizedPage(reason, user, authConfig) {
-  const userInfo = user
-    ? `<p class="user-info">Detected: ${user.login || user.email || user.ip || "unknown"}</p>`
-    : "";
+  // reason and user.* are attacker-influenceable (e.g. a spoofed
+  // tailscale-user-login is echoed back as `User <x> not in allowlist`). Escape
+  // every interpolated value to prevent reflected XSS — exploitable when
+  // verifyServeOrigin is OFF and the identity header is trusted verbatim.
+  const detected = escapeHtml(user ? user.login || user.email || user.ip || "unknown" : "");
+  const userInfo = user ? `<p class="user-info">Detected: ${detected}</p>` : "";
+  const safeReason = escapeHtml(reason);
+  const safeMode = escapeHtml(authConfig.mode);
 
   return `<!DOCTYPE html>
 <html>
@@ -263,14 +296,14 @@ function getUnauthorizedPage(reason, user, authConfig) {
     <div class="container">
         <div class="icon">🔐</div>
         <h1>Access Denied</h1>
-        <div class="reason">${reason}</div>
+        <div class="reason">${safeReason}</div>
         ${userInfo}
         <div class="instructions">
-            <p>This dashboard requires authentication via <strong>${authConfig.mode}</strong>.</p>
+            <p>This dashboard requires authentication via <strong>${safeMode}</strong>.</p>
             ${authConfig.mode === "tailscale" ? '<p style="margin-top:1rem">Make sure you\'re accessing via your Tailscale URL and your account is in the allowlist.</p>' : ""}
             ${authConfig.mode === "cloudflare" ? '<p style="margin-top:1rem">Make sure you\'re accessing via Cloudflare Access and your email is in the allowlist.</p>' : ""}
         </div>
-        <div class="auth-mode">Auth mode: <code>${authConfig.mode}</code></div>
+        <div class="auth-mode">Auth mode: <code>${safeMode}</code></div>
     </div>
 </body>
 </html>`;
@@ -283,4 +316,6 @@ module.exports = {
   createTailscaleWhois,
   verifyServeLogin,
   isLoopbackAddr,
+  timingSafeStrEqual,
+  escapeHtml,
 };

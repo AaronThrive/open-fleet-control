@@ -125,7 +125,11 @@ describe("op:// refs end-to-end", () => {
       const view = settings.get();
 
       assert.strictEqual(view.alerts.sinks.slack.gatewayUrl, "op://Vault/slack/url");
-      assert.strictEqual(view.alerts.sinks.ntfy.topic, "op://Vault/ntfy/topic");
+      // ntfy topic literal is redacted (bearer-equivalent secret); the op:// ref
+      // is surfaced as topicRef (refs are not secrets) for the UI badge.
+      assert.strictEqual(view.alerts.sinks.ntfy.topic, undefined);
+      assert.strictEqual(view.alerts.sinks.ntfy.topicSet, true);
+      assert.strictEqual(view.alerts.sinks.ntfy.topicRef, "op://Vault/ntfy/topic");
       const webhook = view.alerts.sinks.webhooks[0];
       assert.strictEqual(webhook.hasSecret, true);
       assert.strictEqual(webhook.secretRef, "op://Vault/hook/secret");
@@ -143,8 +147,12 @@ describe("op:// refs end-to-end", () => {
       const { applied } = settings.update({
         alerts: { sinks: { ntfy: { enabled: true, topic: "op://Vault/ntfy/topic" } } },
       });
-      assert.strictEqual(applied.alerts.sinks.ntfy.topic, "op://Vault/ntfy/topic");
+      // HTTP surface: literal redacted, op:// ref echoed as topicRef.
+      assert.strictEqual(applied.alerts.sinks.ntfy.topic, undefined);
+      assert.strictEqual(applied.alerts.sinks.ntfy.topicRef, "op://Vault/ntfy/topic");
 
+      // The config FILE keeps the literal ref (unredacted) so apply-time
+      // resolution still works.
       const persisted = JSON.parse(fs.readFileSync(configPath, "utf8"));
       assert.strictEqual(persisted.fleet.alerts.sinks.ntfy.topic, "op://Vault/ntfy/topic");
 

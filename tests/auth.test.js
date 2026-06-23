@@ -6,6 +6,8 @@ const {
   getUnauthorizedPage,
   createTailscaleWhois,
   verifyServeLogin,
+  timingSafeStrEqual,
+  escapeHtml,
 } = require("../src/auth");
 
 describe("auth module", () => {
@@ -366,6 +368,57 @@ describe("auth module", () => {
     it("includes auth mode in output", () => {
       const html = getUnauthorizedPage("denied", null, { mode: "cloudflare" });
       assert.ok(html.includes("cloudflare"));
+    });
+
+    it("HTML-escapes the reason (reflected XSS defense)", () => {
+      const html = getUnauthorizedPage("<script>alert(1)</script>", null, { mode: "tailscale" });
+      assert.ok(!html.includes("<script>alert(1)</script>"));
+      assert.ok(html.includes("&lt;script&gt;alert(1)&lt;/script&gt;"));
+    });
+
+    it("HTML-escapes a spoofed user.login echoed back", () => {
+      const html = getUnauthorizedPage("nope", { login: '"><img src=x onerror=alert(1)>' }, {
+        mode: "tailscale",
+      });
+      assert.ok(!html.includes("<img src=x"));
+      assert.ok(html.includes("&lt;img src=x"));
+    });
+
+    it("HTML-escapes a malicious auth mode value", () => {
+      const html = getUnauthorizedPage("nope", null, { mode: "<b>x</b>" });
+      assert.ok(!html.includes("<b>x</b>"));
+      assert.ok(html.includes("&lt;b&gt;x&lt;/b&gt;"));
+    });
+  });
+
+  describe("timingSafeStrEqual", () => {
+    it("returns true for equal non-empty strings", () => {
+      assert.strictEqual(timingSafeStrEqual("token-abc", "token-abc"), true);
+    });
+
+    it("returns false for differing strings of equal length", () => {
+      assert.strictEqual(timingSafeStrEqual("token-abc", "token-xyz"), false);
+    });
+
+    it("returns false for differing lengths (no throw)", () => {
+      assert.strictEqual(timingSafeStrEqual("short", "much-longer-token"), false);
+    });
+
+    it("fails closed on empty / non-string inputs", () => {
+      assert.strictEqual(timingSafeStrEqual("", ""), false);
+      assert.strictEqual(timingSafeStrEqual("x", ""), false);
+      assert.strictEqual(timingSafeStrEqual(null, "x"), false);
+      assert.strictEqual(timingSafeStrEqual(undefined, undefined), false);
+    });
+  });
+
+  describe("escapeHtml", () => {
+    it("escapes the five HTML-significant characters", () => {
+      assert.strictEqual(escapeHtml(`<>&"'`), "&lt;&gt;&amp;&quot;&#39;");
+    });
+    it("coerces null/undefined to empty string", () => {
+      assert.strictEqual(escapeHtml(null), "");
+      assert.strictEqual(escapeHtml(undefined), "");
     });
   });
 });

@@ -124,8 +124,9 @@ const { createRunArchive, runEntryToRecord, recordIsFailure } = require("./run-a
 const { createFlightRecorderRoutes, isFlightRecorderRoute } = require("./run-archive-routes");
 const { createSessionControl } = require("./session-control");
 const { createRateLimiter } = require("./rate-limit");
-const { resolveBindHost } = require("./bind-host");
+const { resolveBindHost, assertSecureBindPosture } = require("./bind-host");
 const { createTailscaleWhois, verifyServeLogin } = require("./auth");
+const { securityHeaders, checkCrossOrigin } = require("./http-security");
 
 // ============================================================================
 // CONFIGURATION
@@ -938,12 +939,39 @@ function handleApi(req, res) {
 // HTTP SERVER
 // ============================================================================
 const server = http.createServer((req, res) => {
-  // CORS headers
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  // Security response headers on every response (nosniff, frame-deny,
+  // no-referrer, CSP). The dashboard is same-origin, so the legacy
+  // Access-Control-Allow-Origin:* header is intentionally NOT set — no website
+  // should be able to read authenticated dashboard responses cross-origin.
+  for (const [name, value] of Object.entries(securityHeaders())) {
+    res.setHeader(name, value);
+  }
 
   const urlParts = req.url.split("?");
   const pathname = urlParts[0];
   const query = new URLSearchParams(urlParts[1] || "");
+
+  // CORS preflight: the dashboard is same-origin so we never advertise a
+  // cross-origin allow-list. Answer OPTIONS with 204 and no ACAO header — a
+  // genuine same-origin request never needs a preflight; a cross-origin one
+  // gets no permission and is blocked by the browser.
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  // CSRF / cross-origin guard for state-changing methods. Browser-forged
+  // cross-site requests (riding ambient Serve identity / loopback creds) are
+  // rejected via Sec-Fetch-Site / Origin; non-browser clients (node→node
+  // dispatch, CLI) pass through and authenticate with their own credentials.
+  const csrf = checkCrossOrigin(req);
+  if (!csrf.allowed) {
+    console.log(`[CSRF] Denied: ${csrf.reason} (path: ${pathname}, method: ${req.method})`);
+    res.writeHead(403, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Cross-origin request blocked" }));
+    return;
+  }
 
   // Fast path for health check
   if (pathname === "/api/health") {
@@ -1665,6 +1693,17 @@ function routeRequest(req, res, pathname, query) {
 // interfaces, preserving today's live behavior. An operator sets
 // CONFIG.server.bindHost to "127.0.0.1" (the Serve cutover) to bind loopback.
 const BIND_HOST = resolveBindHost(CONFIG.server.bindHost);
+
+// Secure-posture startup guard (src/bind-host.js): refuse to boot an
+// unauthenticated control plane bound to all interfaces, and loudly warn when
+// running Tailscale mode without Serve-origin verification. assertSecureBindPosture
+// emits warnings itself; a fatal verdict aborts boot before any listener opens.
+const posture = assertSecureBindPosture(AUTH_CONFIG, CONFIG.server.bindHost);
+if (posture.fatal) {
+  for (const err of posture.errors) console.error(`[SECURITY] ${err}`);
+  process.exit(1);
+}
+
 const listenArgs = BIND_HOST ? [PORT, BIND_HOST] : [PORT];
 server.listen(...listenArgs, () => {
   const profile = process.env.OPENCLAW_PROFILE;

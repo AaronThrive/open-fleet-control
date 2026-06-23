@@ -5,6 +5,8 @@
   "server": {
     "port": 3333,
     "host": "localhost",
+    "_bindHostComment": "Bind to loopback only by default — the dashboard is fronted by Tailscale Serve / a reverse proxy, never exposed directly. Set to \"0.0.0.0\" ONLY if you understand the risk and have another auth layer.",
+    "bindHost": "127.0.0.1",
     "trustProxy": false
   },
 
@@ -24,12 +26,18 @@
   },
 
   "auth": {
-    "mode": "none",
+    "_comment": "SECURE BY DEFAULT: mode is \"tailscale\" with Serve-origin verification ON. Add your tailnet logins to allowedUsers (e.g. \"you@example.com\" or \"*@example.com\"). Switching mode to \"none\" while bindHost is all-interfaces is REFUSED at startup (see src/bind-host.js assertSecureBindPosture).",
+    "mode": "tailscale",
     "_modeOptions": "none | token | tailscale | cloudflare | allowlist",
     "token": null,
     "allowedUsers": [],
     "allowedIPs": ["127.0.0.1", "::1"],
-    "publicPaths": ["/api/health", "/api/whoami", "/favicon.ico"]
+    "publicPaths": ["/api/health", "/api/whoami", "/favicon.ico"],
+    "tailscale": {
+      "_comment": "verifyServeOrigin requires every Tailscale identity header to be confirmed via a loopback Serve proxy + `tailscale whois` (fail closed). Keep ON.",
+      "verifyServeOrigin": true,
+      "tailscaledSocket": ""
+    }
   },
 
   "dashboard": {

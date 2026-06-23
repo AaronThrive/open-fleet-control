@@ -203,6 +203,30 @@ describe("dispatchTask", () => {
     assert.ok(closed.attempts[0].ended_at);
   });
 
+  it("rejects an agent id with shell/control metacharacters (allowlist)", () => {
+    const exec = makeExecFn();
+    const dispatch = makeDispatch({ kanban, execFn: exec.fn });
+    const task = kanban.createTask({ title: "T" }, "op");
+    for (const bad of ["dev; rm -rf /", "dev id", "dev$(whoami)", "dev`x`", "dev|cat", "dev\nls", "dev/../x"]) {
+      assert.throws(
+        () => dispatch.dispatchTask(task.id, { agent: bad }),
+        (err) => err.statusCode === 400 && /Invalid agent id/.test(err.message),
+        `expected ${JSON.stringify(bad)} to be rejected`,
+      );
+    }
+    assert.strictEqual(exec.calls.length, 0); // never reached spawn
+  });
+
+  it("accepts well-formed agent ids (word chars, dot, colon, at, hyphen)", async () => {
+    const exec = makeExecFn();
+    const dispatch = makeDispatch({ kanban, execFn: exec.fn });
+    const task = kanban.createTask({ title: "T" }, "op");
+    const result = dispatch.dispatchTask(task.id, { agent: "chief-of-staff.v2" });
+    assert.strictEqual(result.task.attempts[0].agent, "chief-of-staff.v2");
+    exec.release();
+    await result.completion;
+  });
+
   it("does not move a card that is already in 'assigned'", async () => {
     const exec = makeExecFn();
     const dispatch = makeDispatch({ kanban, execFn: exec.fn });

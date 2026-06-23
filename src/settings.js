@@ -223,6 +223,70 @@ function requireBool(value, label) {
   return value;
 }
 
+// SSRF denylist (CWE-918). These operator-supplied URLs (ntfy.server,
+// slack.gatewayUrl, webhook urls) are fetched SERVER-SIDE, so a host pointing
+// at loopback, the link-local cloud-metadata service, or an RFC-1918 private
+// range could be used to reach internal-only services or steal instance
+// credentials. We reject literal IPs in those ranges plus the well-known
+// internal hostnames. (mesh/federation enforce their own https+loopback policy
+// and are intentionally left untouched.)
+const SSRF_DENIED_HOSTNAMES = new Set([
+  "localhost",
+  "metadata.google.internal",
+  "metadata",
+]);
+
+/** True if a dotted-quad IPv4 literal falls in a loopback/private/link-local/unspecified range. */
+function isDeniedIPv4(host) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return false;
+  const o = m.slice(1, 5).map((n) => Number(n));
+  if (o.some((n) => n > 255)) return false;
+  const [a, b] = o;
+  if (a === 0) return true; // 0.0.0.0/8 (incl. 0.0.0.0)
+  if (a === 127) return true; // 127.0.0.0/8 loopback
+  if (a === 10) return true; // 10.0.0.0/8 private
+  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12 private
+  if (a === 192 && b === 168) return true; // 192.168.0.0/16 private
+  if (a === 169 && b === 254) return true; // 169.254.0.0/16 link-local (incl. 169.254.169.254 metadata)
+  return false;
+}
+
+/** True if an IPv6 literal (URL.hostname strips the brackets) is loopback/unspecified/link-local/ULA. */
+function isDeniedIPv6(host) {
+  const h = host.toLowerCase();
+  if (h === "::1" || h === "::") return true; // loopback / unspecified
+  // IPv4-mapped (::ffff:127.0.0.1) — strip the v4 tail and re-check.
+  const mapped = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(h);
+  if (mapped && isDeniedIPv4(mapped[1])) return true;
+  if (h.startsWith("fe80:")) return true; // link-local
+  if (h.startsWith("fc") || h.startsWith("fd")) return true; // fc00::/7 unique-local
+  return false;
+}
+
+/**
+ * Reject a parsed URL whose host resolves (by literal) to a private, loopback,
+ * link-local, metadata, or *.internal target. Throws a 400 badRequest on a hit.
+ */
+function assertSafeUrlHost(parsed, label) {
+  // URL.hostname keeps the [..] brackets for IPv6 literals — strip them so the
+  // IPv6 range checks see the bare address.
+  const host = (parsed.hostname || "")
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/\.$/, "");
+  if (
+    SSRF_DENIED_HOSTNAMES.has(host) ||
+    host.endsWith(".internal") ||
+    isDeniedIPv4(host) ||
+    isDeniedIPv6(host)
+  ) {
+    throw badRequest(
+      `${label} must not point at a loopback, private, link-local, or metadata address`,
+    );
+  }
+}
+
 function requireUrl(value, label, { allowEmpty = false, allowSecretRef = false } = {}) {
   if (typeof value !== "string") throw badRequest(`${label} must be a string`);
   if (value === "") {
@@ -242,6 +306,7 @@ function requireUrl(value, label, { allowEmpty = false, allowSecretRef = false }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     throw badRequest(`${label} must use http:// or https://`);
   }
+  assertSafeUrlHost(parsed, label);
   return value;
 }
 
@@ -914,18 +979,31 @@ function buildEffectiveBudgets(raw, defaults) {
 }
 
 /**
- * Redact secrets for the HTTP surface: webhook secret → hasSecret boolean.
- * When the stored secret is a 1Password ref (op://...), the ref itself is
- * additionally exposed as `secretRef` — refs are not secrets, and the UI
- * uses them for the "1Password" badge.
+ * Redact secrets for the HTTP surface so the GET/applied responses never leak a
+ * bearer-equivalent value to the browser:
+ *   - webhook secret → hasSecret boolean (op:// ref additionally → secretRef).
+ *   - ntfy.topic → `topicSet` boolean. The ntfy topic IS the only access control
+ *     for the push channel — anyone who learns it can publish/subscribe — so it
+ *     is treated as a secret and the literal value is stripped. When the stored
+ *     topic is a 1Password ref (op://...), the ref (not a secret) is returned as
+ *     `topicRef` for the UI badge, mirroring the webhook secretRef behavior.
+ * The UI shows "set / unset" from these booleans rather than the value itself.
  */
 function redact(effective) {
+  const ntfy = effective.alerts.sinks.ntfy || {};
+  const ntfyTopic = typeof ntfy.topic === "string" ? ntfy.topic : "";
+  const { topic: _omitTopic, ...ntfyRest } = ntfy;
   return {
     ...effective,
     alerts: {
       ...effective.alerts,
       sinks: {
         ...effective.alerts.sinks,
+        ntfy: {
+          ...ntfyRest,
+          topicSet: ntfyTopic.length > 0,
+          ...(isSecretRef(ntfyTopic) ? { topicRef: ntfyTopic } : {}),
+        },
         webhooks: effective.alerts.sinks.webhooks.map(({ secret, ...rest }) => ({
           ...rest,
           hasSecret: typeof secret === "string" && secret.length > 0,

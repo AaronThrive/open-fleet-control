@@ -25,7 +25,7 @@
  * resolves to `{ available: false, error, self: null, peers: [] }`.
  */
 
-const { runCmd } = require("./utils");
+const { runCmdSafe } = require("./utils");
 
 const DEFAULT_LOCAL_API_ENDPOINT = "http://127.0.0.1:9002/api/status";
 const STATUS_CACHE_TTL = 10000; // 10 seconds — avoid hammering the daemon
@@ -118,7 +118,10 @@ function normalizeStatus(raw) {
  */
 function createTailscaleAdapter(deps = {}) {
   const {
-    execFn = (cmd) => runCmd(cmd, { timeout: EXEC_TIMEOUT_MS }),
+    // Default runner: execFile (no shell — the command + args are never parsed
+    // by /bin/sh). Signature is (file, args[]) so injected test mocks receive
+    // the same discrete vector. Migrated off the shell-based runCmd footgun.
+    execFn = (file, args = []) => runCmdSafe(file, args, { timeout: EXEC_TIMEOUT_MS }),
     fetchFn = (...args) => globalThis.fetch(...args),
     cacheTtlMs = STATUS_CACHE_TTL,
     negativeCacheTtlMs = NEGATIVE_STATUS_CACHE_TTL,
@@ -147,7 +150,7 @@ function createTailscaleAdapter(deps = {}) {
   }
 
   async function fetchViaCli() {
-    const stdout = await execFn("tailscale status --json");
+    const stdout = await execFn("tailscale", ["status", "--json"]);
     return normalizeStatus(JSON.parse(stdout));
   }
 

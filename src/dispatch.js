@@ -63,6 +63,10 @@ const RESULT_TEXT_MAX = 12 * 1024; // cap full canonical answer stored on the at
 // Statuses the watcher may auto-move FROM; operator-final columns are immune.
 const AUTO_MOVE_SOURCES = Object.freeze(["assigned", "inprogress"]);
 const WATCHER_ACTOR = "dispatch";
+// Strict allowlist for a dispatch agent id (may include an "@node" routing
+// qualifier). The id reaches the execFile arg vector + session key; this keeps
+// any control/metacharacter out as defense-in-depth (execFile already shellless).
+const AGENT_ID_RE = /^[\w.:@-]+$/;
 
 function httpError(statusCode, message) {
   const err = new Error(message);
@@ -555,7 +559,16 @@ function createDispatch(options = {}) {
     if (typeof agent !== "string" || agent.trim().length === 0) {
       throw httpError(400, "Body must include a non-empty 'agent' field");
     }
-    return agent.trim();
+    const trimmed = agent.trim();
+    // Defense-in-depth: the agent id (possibly carrying an "@node" routing
+    // qualifier) flows into the execFile arg vector and the session key. Even
+    // though execFile never invokes a shell, constrain the id to a strict
+    // allowlist so no control/metacharacter can reach the spawn args or be
+    // reflected downstream. Word chars, dot, colon, at-sign, hyphen only.
+    if (!AGENT_ID_RE.test(trimmed)) {
+      throw httpError(400, "Invalid agent id (allowed: letters, digits, _ . : @ -)");
+    }
+    return trimmed;
   }
 
   function ensureAvailable() {

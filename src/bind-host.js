@@ -28,4 +28,55 @@ function resolveBindHost(bindHost) {
   return bindHost.trim();
 }
 
-module.exports = { resolveBindHost };
+/**
+ * Startup secure-posture guard for the resolved auth + bind configuration.
+ *
+ * Refuses to start the dashboard in the one combination that exposes an
+ * unauthenticated control plane to the whole network: auth.mode "none" while
+ * the server binds all interfaces (resolveBindHost → null). A client who copies
+ * the example, flips mode back to "none", and forgets bindHost would otherwise
+ * ship a wide-open fleet console. Also emits a loud warning when running the
+ * Tailscale mode without Serve-origin verification (spoofable identity header).
+ *
+ * Pure + injectable: returns the verdict so it is unit-testable without exiting
+ * the process; the boot site decides whether to throw/exit on `fatal`.
+ *
+ * @param {object} authConfig - resolved CONFIG.auth ({mode, tailscale:{verifyServeOrigin}})
+ * @param {string} [bindHost] - CONFIG.server.bindHost (raw, pre-resolution)
+ * @param {object} [opts]
+ * @param {function} [opts.warn=console.warn] - injected warning sink (testing)
+ * @returns {{fatal: boolean, errors: string[], warnings: string[]}}
+ */
+function assertSecureBindPosture(authConfig, bindHost, { warn = console.warn } = {}) {
+  const errors = [];
+  const warnings = [];
+  const mode = authConfig && typeof authConfig.mode === "string" ? authConfig.mode : "none";
+  const bindsAllInterfaces = resolveBindHost(bindHost) === null;
+
+  if (mode === "none" && bindsAllInterfaces) {
+    errors.push(
+      "REFUSING TO START: auth.mode is \"none\" while the server binds ALL interfaces " +
+        "(server.bindHost is unset/0.0.0.0). This would expose an UNAUTHENTICATED fleet " +
+        "control plane to the entire network. Set auth.mode to \"tailscale\"/\"cloudflare\"/" +
+        "\"token\"/\"allowlist\", or set server.bindHost to \"127.0.0.1\" (loopback only).",
+    );
+  }
+
+  if (mode === "tailscale") {
+    const verify = !!(authConfig && authConfig.tailscale && authConfig.tailscale.verifyServeOrigin);
+    if (!verify) {
+      warnings.push(
+        "SECURITY WARNING: auth.mode is \"tailscale\" but auth.tailscale.verifyServeOrigin is " +
+          "false. The tailscale-user-login identity header is then trusted as-is and can be " +
+          "forged by any direct tailnet connection to the bound port. Set " +
+          "auth.tailscale.verifyServeOrigin=true and bind loopback behind Tailscale Serve.",
+      );
+    }
+  }
+
+  for (const w of warnings) warn(`[SECURITY] ${w}`);
+
+  return { fatal: errors.length > 0, errors, warnings };
+}
+
+module.exports = { resolveBindHost, assertSecureBindPosture };

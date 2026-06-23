@@ -8,7 +8,24 @@
  * dispatch token) and passes them in.
  */
 
+const crypto = require("crypto");
+
 const PRIVILEGED_POST_ACTIONS = new Set(["agent-run"]);
+
+/**
+ * Constant-time equality for the dispatch Bearer token (avoids leaking how many
+ * leading bytes matched via response-time differences). Length-checked; returns
+ * false on any non-string/empty/length-mismatch input (fail closed).
+ */
+function timingSafeStrEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length === 0 || b.length === 0) {
+    return false;
+  }
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
 
 /** Identity from the Tailscale Serve header (fallback "anonymous"). */
 function loginFromReq(req) {
@@ -75,7 +92,8 @@ function guardActionPost(
 
   if (token) {
     const auth = req && req.headers && req.headers["authorization"];
-    if (typeof auth === "string" && auth === `Bearer ${token}`) {
+    const presented = typeof auth === "string" ? auth.replace(/^Bearer\s+/i, "") : "";
+    if (timingSafeStrEqual(presented, token)) {
       return { allowed: true, reason: "token" };
     }
   }
@@ -104,5 +122,6 @@ module.exports = {
   guardActionPost,
   isLocalhostAddr,
   loginFromReq,
+  timingSafeStrEqual,
   PRIVILEGED_POST_ACTIONS,
 };
