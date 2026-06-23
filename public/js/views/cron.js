@@ -6,7 +6,7 @@
  *
  * Data source: GET /api/cron → { cron: [{ id, name, schedule, scheduleHuman,
  * nextRun, enabled, lastStatus, agent, node, source }] } (source is
- * 'openclaw' or 'hermes'), also mirrored in the /api/state `cron` slice
+ * 'openclaw', 'hermes', or 'host'), also mirrored in the /api/state `cron` slice
  * delivered over SSE.
  *
  * Real-time: listens for the `fleet:state` window event (fed by the page's

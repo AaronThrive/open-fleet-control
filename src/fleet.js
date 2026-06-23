@@ -214,6 +214,11 @@ function createFleetRuntime({ config, broadcast }) {
     fire: fireAlert,
   });
 
+  // Stable identity of THIS node — the installer-set Tailscale identity over the
+  // container hostname. Used by the mesh self-node AND to attribute ntfy alerts
+  // (which carry no node of their own) to the local node.
+  const selfHostname = (config.dispatch && config.dispatch.identity) || os.hostname();
+
   const mesh = createMesh({
     stateDir,
     intervalMs: config.mesh.intervalMs,
@@ -223,7 +228,7 @@ function createFleetRuntime({ config, broadcast }) {
     // container hostname — the former is the stable tailnet name seed entries
     // are keyed on. Empty seed = no-op (byte-identical to pre-seed boots).
     seed: config.mesh.seed,
-    selfHostname: (config.dispatch && config.dispatch.identity) || os.hostname(),
+    selfHostname,
     // Locally collected whole-host vitals for the self node's grid card + host
     // summary, so the OC-bot card shows mem/disk/cpu without a tailnet round
     // trip. Cached + non-blocking inside the vitals module.
