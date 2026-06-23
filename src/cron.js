@@ -225,6 +225,94 @@ function mapHermesJob(job, node) {
 
 const HOST_CRONTAB_TIMEOUT_MS = 5000;
 
+// Parse one 5-field cron value (minute/hour/dom/month/dow) into the sorted set
+// of integers it matches within [min,max]. Handles `*`, `*/n`, lists `a,b`,
+// ranges `a-b`, and `a-b/n`. Returns null on anything it can't parse so the
+// caller can bail (no next-run rather than a wrong one).
+function cronFieldValues(field, min, max) {
+  const out = new Set();
+  for (const part of String(field).split(",")) {
+    let [range, stepRaw] = part.split("/");
+    const step = stepRaw ? parseInt(stepRaw, 10) : 1;
+    if (!Number.isInteger(step) || step < 1) return null;
+    let lo = min;
+    let hi = max;
+    if (range !== "*") {
+      const [a, b] = range.split("-");
+      lo = parseInt(a, 10);
+      hi = b !== undefined ? parseInt(b, 10) : a !== undefined ? parseInt(a, 10) : NaN;
+      if (!Number.isInteger(lo) || !Number.isInteger(hi)) return null;
+      if (lo < min || hi > max || lo > hi) return null;
+    }
+    for (let v = lo; v <= hi; v += step) out.add(v);
+  }
+  return out.size ? out : null;
+}
+
+// Compute the next fire time (epoch ms) for a 5-field cron expression, at or
+// after `fromMs`. Minute-stepping evaluator (bounded to ~366 days) — covers
+// every expression a host crontab uses without a dependency. Returns null when
+// the expression can't be parsed or doesn't fire within the horizon.
+function cronNextRunMs(expr, fromMs) {
+  const parts = String(expr || "").trim().split(/\s+/);
+  if (parts.length < 5) return null;
+  const minutes = cronFieldValues(parts[0], 0, 59);
+  const hours = cronFieldValues(parts[1], 0, 23);
+  const doms = cronFieldValues(parts[2], 1, 31);
+  const months = cronFieldValues(parts[3], 1, 12);
+  const dows = cronFieldValues(parts[4], 0, 7); // 0 and 7 both = Sunday
+  if (!minutes || !hours || !doms || !months || !dows) return null;
+  const domRestricted = parts[2] !== "*";
+  const dowRestricted = parts[4] !== "*";
+
+  // Start at the next whole minute (cron fires on minute boundaries).
+  const d = new Date(fromMs);
+  d.setSeconds(0, 0);
+  d.setMinutes(d.getMinutes() + 1);
+  const horizon = fromMs + 366 * 24 * 60 * 60 * 1000;
+
+  while (d.getTime() <= horizon) {
+    const dow = d.getDay(); // 0=Sun..6=Sat
+    const dowMatch = dows.has(dow) || (dow === 0 && dows.has(7));
+    const domMatch = doms.has(d.getDate());
+    // Standard cron rule: when BOTH dom and dow are restricted, either matches.
+    const dayMatch =
+      domRestricted && dowRestricted
+        ? domMatch || dowMatch
+        : (!domRestricted || domMatch) && (!dowRestricted || dowMatch);
+    if (
+      months.has(d.getMonth() + 1) &&
+      dayMatch &&
+      hours.has(d.getHours()) &&
+      minutes.has(d.getMinutes())
+    ) {
+      return d.getTime();
+    }
+    d.setMinutes(d.getMinutes() + 1);
+  }
+  return null;
+}
+
+// A host cron line often redirects output to a log: `… >> /path/log 2>&1`.
+// Use that log's mtime as a best-effort "last fired" timestamp (host cron keeps
+// no run history of its own). Guarded to $HOME, never throws.
+function hostCronLastRunMs(command) {
+  const m = String(command || "").match(/>>?\s*("([^"]+)"|'([^']+)'|(\S+))/);
+  if (!m) return null;
+  let target = m[2] || m[3] || m[4] || "";
+  if (target.startsWith("~/")) target = path.join(os.homedir(), target.slice(2));
+  if (!path.isAbsolute(target)) return null;
+  const resolved = path.resolve(target);
+  // Only read paths under the user's home — never follow a redirect elsewhere.
+  if (!resolved.startsWith(os.homedir() + path.sep)) return null;
+  try {
+    const st = fs.statSync(resolved);
+    return st.isFile() ? Math.round(st.mtimeMs) : null;
+  } catch {
+    return null;
+  }
+}
+
 // Derive a readable name from a cron command line. Picks the basename of the
 // first path-like token (skipping leading `VAR=val` env assignments), strips a
 // common script extension, and falls back to the first token or a truncated
@@ -238,8 +326,15 @@ function hostCronName(command) {
   if (!cmd) return String(command || "").slice(0, 40) || "cron job";
   // Basename of the executable, minus a trailing shell/script extension.
   const base = cmd.split("/").pop() || cmd;
-  const cleaned = base.replace(/\.(sh|py|js|ts|rb|pl)$/i, "");
-  return cleaned || base || cmd;
+  const cleaned = base.replace(/\.(sh|py|js|ts|rb|pl)$/i, "") || base || cmd;
+  // Append the first non-flag argument so multiple invocations of the same
+  // script (e.g. `vps-ntfy-monitor hourly` vs `… daily`) are distinguishable
+  // instead of collapsing to one ambiguous name. Stop at a redirect/pipe.
+  const arg = tokens[i + 1];
+  if (arg && !arg.startsWith("-") && !/^[>|&]/.test(arg) && !arg.includes("/")) {
+    return `${cleaned} ${arg}`;
+  }
+  return cleaned;
 }
 
 // Map a single raw host crontab line into a job record matching the
@@ -259,15 +354,25 @@ function mapHostCronLine(line, index, node) {
   const command = parts.slice(5).join(" ");
   if (!command) return null;
 
+  // Compute the next fire time from the cron expression (host crontab carries
+  // no next-run of its own) so host jobs reach parity with OpenClaw/Hermes.
+  const nextRunAtMs = cronNextRunMs(schedule, Date.now());
+  // Best-effort last-fired from the redirect log's mtime (host cron tracks no
+  // run history; exit status is genuinely unknowable, so lastStatus stays null
+  // and the UI labels host jobs "host cron — not tracked" rather than implying
+  // they never ran).
+  const lastRunAtMs = hostCronLastRunMs(command);
+
   return {
     id: `host-${index}`,
     name: hostCronName(command),
     schedule,
     scheduleHuman: cronToHuman(schedule),
     enabled: true,
-    nextRun: "—",
+    nextRun: formatNextRun(nextRunAtMs),
+    nextRunAtMs,
     lastStatus: null,
-    lastRunAtMs: null,
+    lastRunAtMs,
     command,
     agent: null,
     node,
