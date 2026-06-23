@@ -395,8 +395,15 @@ function populateAlertsSection(settings) {
 
   refs.ntfyEnabled.checked = ntfy.enabled === true;
   refs.ntfyServer.value = ntfy.server || "https://ntfy.sh";
-  refs.ntfyTopic.value = ntfy.topic || "";
-  setOpBadge(refs.ntfyTopicBadge, ntfy.topic);
+  // The ntfy topic is a bearer-equivalent secret and is never returned by the
+  // API (only topicSet/topicRef). Keep the input blank; show whether one is
+  // stored via the placeholder. An empty input on save = leave the stored topic
+  // unchanged (the patch omits `topic`); typing a value replaces it.
+  refs.ntfyTopic.value = "";
+  refs.ntfyTopic.placeholder = ntfy.topicSet
+    ? "•••••••• (set — type to replace)"
+    : "ntfy topic";
+  setOpBadge(refs.ntfyTopicBadge, ntfy.topicRef);
 
   renderWebhooks(Array.isArray(sinks.webhooks) ? sinks.webhooks : []);
 }
@@ -520,7 +527,11 @@ function saveAlerts() {
           ntfy: {
             enabled: refs.ntfyEnabled.checked,
             server: refs.ntfyServer.value.trim() || "https://ntfy.sh",
-            topic: refs.ntfyTopic.value.trim(),
+            // Only send the topic when the user actually typed one — an empty
+            // input means "keep the stored topic" (the API never returns the
+            // value to pre-fill, so blank ≠ clear). To clear a topic, the UI
+            // would send an explicit empty string; we treat blank as no-change.
+            ...(refs.ntfyTopic.value.trim() ? { topic: refs.ntfyTopic.value.trim() } : {}),
           },
         },
       },

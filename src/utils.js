@@ -2,10 +2,11 @@
  * Utility functions shared across modules
  */
 
-const { exec } = require("child_process");
+const { exec, execFile } = require("child_process");
 const path = require("path");
 const { promisify } = require("util");
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const pkg = require(path.join(__dirname, "..", "package.json"));
 
@@ -33,6 +34,39 @@ async function runCmd(cmd, options = {}) {
   };
   try {
     const { stdout } = await execAsync(cmd, opts);
+    return stdout.trim();
+  } catch (e) {
+    if (options.fallback !== undefined) return options.fallback;
+    throw e;
+  }
+}
+
+/**
+ * Run a command WITHOUT a shell (execFile), passing args as a discrete array so
+ * the command and its arguments are never re-parsed by /bin/sh. Use this for
+ * any command whose name or args could ever derive from non-constant input —
+ * it removes the shell-injection footgun that runCmd() (exec) carries. runCmd()
+ * remains for the legitimate shell-pipeline callers (e.g. vitals' `df | tail`).
+ *
+ * @param {string} file - executable name (resolved via PATH below)
+ * @param {string[]} [args] - argument vector (never shell-interpreted)
+ * @param {object} [options] - { timeout, fallback, ... } (same shape as runCmd)
+ * @returns {Promise<string>} trimmed stdout (or options.fallback on error)
+ */
+async function runCmdSafe(file, args = [], options = {}) {
+  const systemPath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+  const envPath = process.env.PATH || "";
+  const opts = {
+    encoding: "utf8",
+    timeout: 10000,
+    env: {
+      ...process.env,
+      PATH: envPath.includes("/usr/sbin") ? envPath : `${systemPath}:${envPath}`,
+    },
+    ...options,
+  };
+  try {
+    const { stdout } = await execFileAsync(file, args, opts);
     return stdout.trim();
   } catch (e) {
     if (options.fallback !== undefined) return options.fallback;
@@ -71,6 +105,7 @@ function formatTokens(n) {
 module.exports = {
   getVersion,
   runCmd,
+  runCmdSafe,
   formatBytes,
   formatTimeAgo,
   formatNumber,
