@@ -159,11 +159,11 @@
       }
     },
     "usage": {
-      "_comment": "LLM usage source paths (supports ~ and $HOME). headroomStats empty = reuse fleet.cortex.headroomStats. openrouterKey: OPENROUTER_API_KEY env var takes precedence.",
+      "_comment": "LLM usage source paths (supports ~ and $HOME). planUsageStats empty = reuse fleet.cortex.planUsageStats; default ~/.local/state/openclaw-quota/subscription_state.json. The legacy headroomStats key is still honored for back-compat. openrouterKey: OPENROUTER_API_KEY env var takes precedence.",
       "claudeProjectsDir": "~/.claude/projects",
       "codexDir": "~/.codex",
       "nineRouterDb": "~/.openclaw/9router/data/db/data.sqlite",
-      "headroomStats": "",
+      "planUsageStats": "",
       "openrouterKey": ""
     },
     "validationGate": {
@@ -171,10 +171,10 @@
       "default": true
     },
     "cortex": {
-      "_comment": "Paths are user-specific; empty string = adapter unavailable. Typical values: gbrainCli ~/gbrain/bin/gbrain, headroomStats ~/.headroom/stats.json, leanCtxStats ~/.lean-ctx/stats.json, lcmDb ~/.lcm/lcm.db. Set enabled=false to disable all cortex CLI probing (availability reports unavailable).",
+      "_comment": "Paths are user-specific; empty string = adapter unavailable. Typical values: gbrainCli ~/gbrain/bin/gbrain, planUsageStats ~/.local/state/openclaw-quota/subscription_state.json, leanCtxStats ~/.lean-ctx/stats.json, lcmDb ~/.lcm/lcm.db. Set enabled=false to disable all cortex CLI probing (availability reports unavailable).",
       "enabled": true,
       "gbrainCli": "",
-      "headroomStats": "",
+      "planUsageStats": "",
       "leanCtxStats": "",
       "lcmDb": ""
     },

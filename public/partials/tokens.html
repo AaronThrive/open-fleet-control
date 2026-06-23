@@ -415,7 +415,7 @@
              `openclaw status --usage`, which drops anthropic (403, missing
              user:profile scope) and rendered a fake 0%. The SAME three figures
              are now shown HONESTLY by the "Claude / Codex plan usage" rings
-             below (sourced live via the Headroom proxy). -->
+             below (sourced live via the plan-usage poller). -->
         <div class="vitals-grid">
           <!-- Codex (5h + daily plan-limit utilization, both live). The old
                "tasks today" sub-stat was hardcoded 0 (no session telemetry in
@@ -480,10 +480,10 @@
       <div class="lvx-cards" id="lvx-bg-gauges"></div>
     </div>
 
-    <!-- ============ Claude / Codex plan usage (observed via Headroom) ======
+    <!-- ============ Claude / Codex plan usage (observed via plan-usage poller)
          These rings are the OPERATOR's Claude plan-limit utilization (5h /
          weekly all-models / weekly Sonnet). They are LIVE and accurate — the
-         data is observed through the Headroom proxy, which is why they work
+         data is observed through the plan-usage poller, which is why they work
          where the retired `openclaw status --usage` gauges did not. -->
     <div class="vitals-panel lvx-panel" id="lvx-sub-panel" hidden>
       <div class="vitals-header">
@@ -494,7 +494,7 @@
         </div>
       </div>
       <div class="lvx-status" id="lvx-sub-source-note" style="font-style: italic">
-        Plan-limit utilization — observed via the Headroom proxy.
+        Plan-limit utilization — observed via the plan-usage poller.
       </div>
       <div class="lvx-status warn" id="lvx-sub-status" hidden></div>
       <div class="lvx-flex-split">
@@ -537,6 +537,54 @@
             <div class="vital-detail-item">
               <span class="vital-detail-value" id="lvx-sub-extra-pct">-</span>
               <span class="vital-detail-label">used</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ Codex (OpenAI) plan usage ============
+           Same gauge component as the Claude rings above, sourced from the
+           top-level `codex` block of the plan-usage poller's state file. When
+           the block is absent/unavailable/stale the rings show a clean "—"
+           rather than a fake 0%. -->
+      <div class="lvx-or-subtitle" style="margin-top: 12px" id="lvx-cdx-subtitle">
+        ⚡ Codex (OpenAI) plan usage
+        <span class="lvx-badge stale" id="lvx-cdx-stale" hidden>STALE</span>
+        <span style="font-weight: 400; text-transform: none; letter-spacing: 0"
+          ><span id="lvx-cdx-plan">-</span></span
+        >
+      </div>
+      <div class="lvx-status warn" id="lvx-cdx-status" hidden></div>
+      <div class="lvx-flex-split" id="lvx-cdx-body">
+        <div class="vital-card lvx-rings" style="flex: 2 1 280px; justify-content: space-around">
+          <div class="lvx-ring-card">
+            <div class="lvx-ring" id="lvx-cdx-5h-ring">
+              <div class="lvx-ring-inner" id="lvx-cdx-5h-pct">-</div>
+            </div>
+            <div class="lvx-ring-label" title="Codex 5-hour rolling plan limit">Codex 5h limit</div>
+            <div class="lvx-ring-reset" id="lvx-cdx-5h-reset">-</div>
+          </div>
+          <div class="lvx-ring-card">
+            <div class="lvx-ring" id="lvx-cdx-7d-ring">
+              <div class="lvx-ring-inner" id="lvx-cdx-7d-pct">-</div>
+            </div>
+            <div class="lvx-ring-label" title="Codex weekly plan limit">Codex weekly</div>
+            <div class="lvx-ring-reset" id="lvx-cdx-7d-reset">-</div>
+          </div>
+        </div>
+        <div class="vital-card" id="lvx-cdx-credits-card">
+          <div class="vital-header">
+            <span class="vital-label">💳 <span>Codex credits</span></span>
+            <span class="vital-value" id="lvx-cdx-credits-balance">-</span>
+          </div>
+          <div class="vital-detail">
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-cdx-credits-state">-</span>
+              <span class="vital-detail-label">status</span>
+            </div>
+            <div class="vital-detail-item">
+              <span class="vital-detail-value" id="lvx-cdx-plan-type">-</span>
+              <span class="vital-detail-label">plan</span>
             </div>
           </div>
         </div>

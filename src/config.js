@@ -270,7 +270,7 @@ const FLEET_DEFAULTS = {
   cortex: {
     enabled: true,
     gbrainCli: "",
-    headroomStats: "",
+    planUsageStats: "",
     leanCtxStats: "",
     lcmDb: "",
   },
@@ -279,9 +279,10 @@ const FLEET_DEFAULTS = {
     claudeProjectsDir: "~/.claude/projects",
     codexDir: "~/.codex",
     nineRouterDb: "~/.openclaw/9router/data/db/data.sqlite",
-    // Empty = reuse fleet.cortex.headroomStats (single source of truth for
-    // the headroom subscription stats file).
-    headroomStats: "",
+    // Empty = reuse fleet.cortex.planUsageStats (single source of truth for
+    // the plan-usage subscription stats file). The legacy `headroomStats` key
+    // is still honored at wiring time for back-compat.
+    planUsageStats: "",
     // OpenRouter API key for credit/key info. OPENROUTER_API_KEY env var
     // takes precedence at wiring time (src/index.js).
     openrouterKey: "",
@@ -593,9 +594,16 @@ function buildFleetConfig(fileFleet) {
   }
 
   // Usage source paths get the same ~/$HOME expansion as cortex paths
-  // (openrouterKey is a secret, not a path — leave it untouched).
+  // (openrouterKey is a secret, not a path — leave it untouched). The legacy
+  // `headroomStats` key is expanded too so back-compat configs still resolve ~.
   const resolvedUsage = { ...fleet.usage };
-  for (const key of ["claudeProjectsDir", "codexDir", "nineRouterDb", "headroomStats"]) {
+  for (const key of [
+    "claudeProjectsDir",
+    "codexDir",
+    "nineRouterDb",
+    "planUsageStats",
+    "headroomStats",
+  ]) {
     if (typeof resolvedUsage[key] === "string" && resolvedUsage[key].length > 0) {
       resolvedUsage[key] = expandPath(resolvedUsage[key]);
     }
