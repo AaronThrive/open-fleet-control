@@ -65,7 +65,8 @@ const KNOWN_KEYS = new Set([
   "errorType",
   "needsSync",
   "subscription",
-  "headroom",
+  "planUsage",
+  "plan-usage",
   "claudeCode",
   "claude-code",
   "nineRouter",
@@ -620,26 +621,26 @@ export function sourceRowsFrom(sources) {
     note: src.nineRouter?.reason || null,
   });
 
-  // Headroom is a PLAN-QUOTA observation (the operator's Claude plan-limit
+  // Plan usage is a PLAN-QUOTA observation (the operator's Claude plan-limit
   // utilization), NOT a per-token spend source. Its raw token figure is a
   // weighted quota count that is not comparable to the other rows' token totals
   // and must never be summed as cost — so we keep the row for visibility but
   // null the tokens/cost columns and label it as a quota observation in the
   // note. The actual numbers live in the "Claude / Codex Plan Usage" rings.
-  const headroom = src.headroom;
-  const headroomRaw = headroom?.available ? Number(headroom.windowTokens?.totalRaw) || 0 : null;
+  const planUsage = src.planUsage;
+  const planUsageRaw = planUsage?.available ? Number(planUsage.windowTokens?.totalRaw) || 0 : null;
   rows.push({
-    id: "headroom",
-    source: "Headroom (plan quota)",
-    status: headroom?.available ? (headroom.stale ? "stale" : "available") : "unavailable",
+    id: "planUsage",
+    source: "Plan quota",
+    status: planUsage?.available ? (planUsage.stale ? "stale" : "available") : "unavailable",
     tokens: null,
     requests: null,
     cost: null,
     costKind: null,
     note:
-      headroom?.reason ||
-      (headroomRaw !== null
-        ? `plan-quota observation — ${formatTokens(headroomRaw)} weighted tokens (see plan-usage rings; not a token cost)`
+      planUsage?.reason ||
+      (planUsageRaw !== null
+        ? `plan-quota observation — ${formatTokens(planUsageRaw)} weighted tokens (see plan-usage rings; not a token cost)`
         : "plan-quota observation (see Claude / Codex Plan Usage rings)"),
   });
 
@@ -778,7 +779,7 @@ function renderUsage(els, data) {
   // The 3 Claude plan-limit gauges that read `openclaw status --usage` (which
   // 403s on the missing user:profile scope and rendered a fake 0%) were
   // RETIRED. The honest Claude/Codex plan-limit figures now come from the
-  // Headroom rings (renderSubscription). So the anthropic auth error is no
+  // plan-usage rings (renderSubscription). So the anthropic auth error is no
   // longer a blocking banner here — keep the banner only when the whole
   // llm-usage payload is an auth error AND no honest source exists.
   els.auth.hidden = true;
@@ -959,9 +960,119 @@ function setRing(ringEl, pctEl, resetEl, slice) {
   }
 }
 
+/** Seconds until `resetsAt` (epoch seconds or ISO string), or null. */
+function secondsUntil(resetsAt) {
+  if (resetsAt === null || resetsAt === undefined || resetsAt === "") return null;
+  let ms;
+  if (typeof resetsAt === "number") {
+    // Heuristic: < 1e12 means epoch SECONDS, else epoch MILLISECONDS.
+    ms = resetsAt < 1e12 ? resetsAt * 1000 : resetsAt;
+  } else {
+    const asNum = Number(resetsAt);
+    ms = Number.isFinite(asNum)
+      ? asNum < 1e12
+        ? asNum * 1000
+        : asNum
+      : new Date(resetsAt).getTime();
+  }
+  if (!Number.isFinite(ms)) return null;
+  return Math.max(0, Math.round((ms - Date.now()) / 1000));
+}
+
+/**
+ * Codex ring setter. Unlike the Claude rings, Codex windows carry only
+ * `utilizationPct` + `resetsAt` (no secondsToReset). When `unavailable` is
+ * true (no data / stale) we render an honest "—" and a neutral ring rather
+ * than a fake 0%.
+ */
+function setCodexRing(ringEl, pctEl, resetEl, slice, unavailable) {
+  const pct = Number(slice?.utilizationPct);
+  const known = !unavailable && Number.isFinite(pct);
+  const safe = known ? Math.min(100, Math.max(0, pct)) : 0;
+  if (ringEl) {
+    ringEl.style.setProperty("--pct", `${safe}`);
+    ringEl.classList.toggle("crit", known && safe > 80);
+    ringEl.classList.toggle("warn", known && safe > 50 && safe <= 80);
+  }
+  if (pctEl) pctEl.textContent = known ? `${pct}%` : "—";
+  if (resetEl) {
+    if (unavailable) {
+      resetEl.textContent = "—";
+      return;
+    }
+    const countdown = fmtCountdown(secondsUntil(slice?.resetsAt));
+    resetEl.textContent =
+      countdown === "-"
+        ? t("views.llmUsage.noReset", {}, "no reset pending")
+        : t("views.llmUsage.resetsIn", { time: countdown }, "resets in {time}");
+  }
+}
+
+/**
+ * Render the Codex plan-usage rings + credits from the `codex` block folded
+ * into the subscription response. Degrades to a clean unavailable/stale state
+ * (no fake 0%) when the block is missing, unavailable, or stale.
+ */
+function renderCodexPlan(els, codex) {
+  if (!els.cdxBody) return;
+
+  const available = !!(codex && codex.available);
+  const stale = !!(codex && codex.stale);
+  // "Unavailable" for ring purposes = no data OR stale data.
+  const unavailable = !available || stale;
+
+  if (els.cdxStale) els.cdxStale.hidden = !(available && stale);
+  if (els.cdxStatus) {
+    if (!available) {
+      els.cdxStatus.hidden = false;
+      els.cdxStatus.textContent = t(
+        "views.llmUsage.codexUnavailable",
+        { reason: (codex && codex.reason) || "unknown" },
+        "Codex plan usage unavailable: {reason}",
+      );
+    } else {
+      els.cdxStatus.hidden = true;
+    }
+  }
+
+  const planType = available && codex.planType ? String(codex.planType) : null;
+  setText(els, "cdxPlan", planType ? `· ${planType}` : "");
+  setText(els, "cdxPlanType", planType || "—");
+
+  setCodexRing(els.cdx5hRing, els.cdx5hPct, els.cdx5hReset, codex?.fiveHour, unavailable);
+  setCodexRing(els.cdx7dRing, els.cdx7dPct, els.cdx7dReset, codex?.sevenDay, unavailable);
+
+  const credits = available ? codex.credits : null;
+  if (!credits) {
+    setText(els, "cdxCreditsBalance", "—");
+    setText(els, "cdxCreditsState", available ? "—" : "unavailable");
+  } else if (credits.unlimited) {
+    setText(els, "cdxCreditsBalance", "∞");
+    setText(els, "cdxCreditsState", t("views.llmUsage.codexUnlimited", {}, "unlimited"));
+  } else {
+    setText(
+      els,
+      "cdxCreditsBalance",
+      Number.isFinite(Number(credits.balance)) ? fmtNum(credits.balance) : "—",
+    );
+    setText(
+      els,
+      "cdxCreditsState",
+      credits.hasCredits
+        ? t("views.llmUsage.codexHasCredits", {}, "available")
+        : t("views.llmUsage.codexNoCredits", {}, "depleted"),
+    );
+  }
+}
+
 function renderSubscription(els, data) {
   if (!data || !els.subPanel) return;
   els.subPanel.hidden = false;
+
+  // Codex plan usage is folded into the subscription response and is
+  // independent of the Claude windows — render it even if Claude is
+  // unavailable, so a Codex-only host still shows its rings.
+  renderCodexPlan(els, data.codex);
 
   if (data.available === false) {
     els.subStatus.hidden = false;
@@ -1509,6 +1620,20 @@ export function init(container) {
     subTokTotal: container.querySelector("#lvx-sub-tok-total"),
     subModelTable: container.querySelector("#lvx-sub-model-table"),
     subModels: container.querySelector("#lvx-sub-models"),
+    // Codex (OpenAI) plan usage — folded into the subscription response
+    cdxBody: container.querySelector("#lvx-cdx-body"),
+    cdxStatus: container.querySelector("#lvx-cdx-status"),
+    cdxStale: container.querySelector("#lvx-cdx-stale"),
+    cdxPlan: container.querySelector("#lvx-cdx-plan"),
+    cdxPlanType: container.querySelector("#lvx-cdx-plan-type"),
+    cdx5hRing: container.querySelector("#lvx-cdx-5h-ring"),
+    cdx5hPct: container.querySelector("#lvx-cdx-5h-pct"),
+    cdx5hReset: container.querySelector("#lvx-cdx-5h-reset"),
+    cdx7dRing: container.querySelector("#lvx-cdx-7d-ring"),
+    cdx7dPct: container.querySelector("#lvx-cdx-7d-pct"),
+    cdx7dReset: container.querySelector("#lvx-cdx-7d-reset"),
+    cdxCreditsBalance: container.querySelector("#lvx-cdx-credits-balance"),
+    cdxCreditsState: container.querySelector("#lvx-cdx-credits-state"),
     // Terminal sessions (Claude Code)
     ccPanel: container.querySelector("#lvx-cc-panel"),
     ccStatus: container.querySelector("#lvx-cc-status"),
