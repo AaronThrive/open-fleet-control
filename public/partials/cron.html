@@ -40,10 +40,20 @@
       border-radius: 10px;
       white-space: nowrap;
     }
-    #cron-view-section .cron-badge.source {
+    /* Source is shown as plain text (no badge) — it is already a top filter. */
+    #cron-view-section .cron-source-text {
       color: var(--text-muted);
-      background: var(--bg);
-      border: 1px solid rgba(128, 128, 128, 0.3);
+    }
+    /* Next run shows the actual date + time, with a small muted relative form. */
+    #cron-view-section .cron-nextrun-abs {
+      white-space: nowrap;
+    }
+    #cron-view-section .cron-nextrun-rel {
+      color: var(--text-muted);
+      font-size: 0.85em;
+    }
+    #cron-view-section .cron-nextrun-rel.overdue {
+      color: var(--danger, #d9534f);
     }
     #cron-view-section .cron-filter-empty {
       color: var(--text-muted);
