@@ -2,7 +2,7 @@
  * Usage sources aggregator — instantiates the five backend usage adapters
  * from a single config object and exposes:
  *
- *   - sources:  { claudeCode, codex, nineRouter, headroom, openrouter }
+ *   - sources:  { claudeCode, codex, nineRouter, planUsage, openrouter }
  *   - getAll(): parallel snapshot of every source, individually try/caught
  *               so one broken source never hides the others
  *   - routes:   plain async handlers the orchestrator can wire into the
@@ -25,7 +25,7 @@ const path = require("path");
 const { createClaudeCodeSource } = require("./claude-code");
 const { createCodexSource } = require("./codex");
 const { createNineRouterSource } = require("./nine-router");
-const { createHeadroomSource } = require("./headroom");
+const { createPlanUsageSource } = require("./plan-usage");
 const { createOpenRouterSource } = require("./openrouter");
 
 const DEFAULT_SESSION_LIMIT = 10;
@@ -61,7 +61,7 @@ async function safe(promise) {
  * @param {string} [config.claudeProjectsDir] - default ~/.claude/projects
  * @param {string} [config.codexDir] - default ~/.codex
  * @param {string} [config.nineRouterDb] - default ~/.openclaw/9router/data/db/data.sqlite
- * @param {string} [config.headroomStats] - default ~/.headroom/subscription_state.json
+ * @param {string} [config.planUsageStats] - default ~/.local/state/openclaw-quota/subscription_state.json
  * @param {string} [config.openrouterKey] - OpenRouter API key (no env fallback here;
  *                                          the orchestrator wires it from env/config).
  *                                          May be an op://vault/item/field 1Password
@@ -91,8 +91,8 @@ function createUsageSources(config = {}) {
     dbPath: config.nineRouterDb,
     sqliteLoader: config.sqliteLoader,
   });
-  const headroom = createHeadroomSource({
-    statsPath: config.headroomStats,
+  const planUsage = createPlanUsageSource({
+    statsPath: config.planUsageStats,
     nowFn: config.nowFn,
   });
   const openrouter = createOpenRouterSource({
@@ -101,7 +101,7 @@ function createUsageSources(config = {}) {
     secrets: config.secrets,
   });
 
-  const sources = { claudeCode, codex, nineRouter, headroom, openrouter };
+  const sources = { claudeCode, codex, nineRouter, planUsage, openrouter };
 
   async function claudeCodeSnapshot(params = {}) {
     const status = claudeCode.describe();
@@ -151,21 +151,34 @@ function createUsageSources(config = {}) {
    * @param {object} [params] - { sinceMs, limit, days }
    */
   async function getAll(params = {}) {
-    const [claudeCodeData, codexData, nineRouterData, headroomData, openrouterData] =
+    const [claudeCodeData, codexData, nineRouterData, planUsageData, openrouterData] =
       await Promise.all([
         safe(claudeCodeSnapshot(params)),
         safe(codexSnapshot(params)),
         safe(nineRouterSnapshot(params)),
-        safe(headroom.getSubscription()),
+        safe(planUsage.getSubscription()),
         safe(openrouterSnapshot()),
       ]);
     return {
       claudeCode: claudeCodeData,
       codex: codexData,
       nineRouter: nineRouterData,
-      headroom: headroomData,
+      planUsage: planUsageData,
       openrouter: openrouterData,
     };
+  }
+
+  /**
+   * Subscription snapshot folded with the Codex plan-usage block. Both come
+   * from the same plan-usage state file; the `codex` field degrades to
+   * { available:false } independently of the Claude windows.
+   */
+  async function subscriptionSnapshot() {
+    const [sub, codexPlan] = await Promise.all([
+      safe(planUsage.getSubscription()),
+      safe(planUsage.getCodex()),
+    ]);
+    return { ...sub, codex: codexPlan };
   }
 
   function paramsFromQuery(query) {
@@ -183,7 +196,7 @@ function createUsageSources(config = {}) {
     "GET /api/usage/codex": async (ctx = {}) => safe(codexSnapshot(paramsFromQuery(ctx.query))),
     "GET /api/usage/nine-router": async (ctx = {}) =>
       safe(nineRouterSnapshot(paramsFromQuery(ctx.query))),
-    "GET /api/usage/subscription": async () => safe(headroom.getSubscription()),
+    "GET /api/usage/subscription": async () => safe(subscriptionSnapshot()),
     "GET /api/usage/openrouter": async () => safe(openrouterSnapshot()),
   };
 

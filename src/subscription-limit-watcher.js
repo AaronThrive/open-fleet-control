@@ -17,18 +17,16 @@
  *   getProviderWindows() => [
  *     { provider, window, utilizationPct, capPct?, resetsAt?, stale }
  *   ]
- * The orchestrator adapts the usage-sources (src/usage-sources/headroom.js for
- * Claude; the Codex source when/if it exposes quota) into that flat shape.
+ * The orchestrator adapts the usage-sources (src/usage-sources/plan-usage.js
+ * for Claude; the Codex source when/if it exposes quota) into that flat shape.
  *
  * IMPORTANT — STALE DATA DEPENDENCY:
- * The Claude windows come from ~/.headroom/subscription_state.json, which is
- * written by Headroom's in-proxy subscription tracker. That file is currently
- * STALE (the running :8787 proxy is not refreshing it — see the Job 2 Headroom
- * diagnosis). The headroom source already exposes a `stale` flag (data polled
- * more than 30 min ago). This watcher MUST NOT fire false criticals off a
- * multi-day-old snapshot: any window marked `stale` is SKIPPED (no alert,
- * counted as skippedStale) so the latch state is never advanced from rotten
- * data. Adapters are expected to propagate `stale` truthfully.
+ * The Claude windows come from the plan-usage poller's subscription_state.json.
+ * The plan-usage source exposes a `stale` flag (data polled more than 30 min
+ * ago). This watcher MUST NOT fire false criticals off a multi-day-old
+ * snapshot: any window marked `stale` is SKIPPED (no alert, counted as
+ * skippedStale) so the latch state is never advanced from rotten data.
+ * Adapters are expected to propagate `stale` truthfully.
  */
 
 const DEFAULT_WARN_PCT = 80;

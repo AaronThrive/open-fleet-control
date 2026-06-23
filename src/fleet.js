@@ -373,15 +373,14 @@ function createFleetRuntime({ config, broadcast }) {
   // through the normal alert engine when Codex/Claude cross 80%/95% of a
   // subscription/rate-limit window. Like budgets, the provider windows are
   // INJECTED by the orchestrator via setSubscriptionWindowsProvider() because
-  // the usage-sources (src/usage-sources/headroom.js, etc.) are instantiated in
-  // src/index.js — until wired, the provider returns [] and the watcher no-ops.
+  // the usage-sources (src/usage-sources/plan-usage.js, etc.) are instantiated
+  // in src/index.js — until wired, the provider returns [] and the watcher
+  // no-ops.
   //
-  // NOTE: the Claude windows ultimately come from
-  // ~/.headroom/subscription_state.json, which is currently STALE (the live
-  // :8787 Headroom proxy is not refreshing it — see the Job 2 diagnosis). The
-  // watcher SKIPS any window the headroom source marks `stale`, so a multi-day
-  // old snapshot can never fire a false critical. The injected provider must
-  // propagate that `stale` flag truthfully.
+  // NOTE: the Claude windows ultimately come from the plan-usage poller's
+  // subscription_state.json. The watcher SKIPS any window the plan-usage source
+  // marks `stale`, so a multi-day old snapshot can never fire a false critical.
+  // The injected provider must propagate that `stale` flag truthfully.
   let subscriptionWindowsProvider = null;
   const subscriptionLimitsCfg = config.subscriptionLimits || {};
   const subscriptionLimitsEnabled = subscriptionLimitsCfg.enabled === true;

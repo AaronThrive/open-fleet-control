@@ -3,11 +3,21 @@ const assert = require("node:assert");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { createHeadroomSource } = require("../src/usage-sources/headroom");
+const { createPlanUsageSource } = require("../src/usage-sources/plan-usage");
 
 const POLLED_AT = "2026-06-10T15:40:43Z";
 const POLLED_MS = Date.parse(POLLED_AT);
 const MINUTE = 60 * 1000;
+
+const CODEX_BLOCK = {
+  available: true,
+  plan_type: "prolite",
+  five_hour: { utilization_pct: 42, resets_at: "2026-06-10T19:30:00Z" },
+  seven_day: { utilization_pct: 18, resets_at: Math.floor(POLLED_MS / 1000) + 86400 },
+  credits: { balance: 12.5, has_credits: true, unlimited: false },
+  polled_at: POLLED_AT,
+  stale: false,
+};
 
 const FIXTURE = {
   latest: {
@@ -55,14 +65,15 @@ const FIXTURE = {
       },
     },
   },
+  codex: CODEX_BLOCK,
 };
 
-describe("usage-sources/headroom", () => {
+describe("usage-sources/plan-usage", () => {
   let tmpDir;
   let statsPath;
 
   before(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "usage-headroom-test-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "usage-plan-usage-test-"));
     statsPath = path.join(tmpDir, "subscription_state.json");
     fs.writeFileSync(statsPath, JSON.stringify(FIXTURE));
   });
@@ -72,7 +83,7 @@ describe("usage-sources/headroom", () => {
   });
 
   it("reports unavailable for a missing file without throwing", async () => {
-    const source = createHeadroomSource({ statsPath: path.join(tmpDir, "nope.json") });
+    const source = createPlanUsageSource({ statsPath: path.join(tmpDir, "nope.json") });
     assert.strictEqual(source.available, false);
     assert.ok(source.reason.includes("file not found"));
     const sub = await source.getSubscription();
@@ -82,14 +93,14 @@ describe("usage-sources/headroom", () => {
   it("reports unavailable for corrupt JSON", async () => {
     const corrupt = path.join(tmpDir, "corrupt.json");
     fs.writeFileSync(corrupt, "{nope");
-    const sub = await createHeadroomSource({ statsPath: corrupt }).getSubscription();
+    const sub = await createPlanUsageSource({ statsPath: corrupt }).getSubscription();
     assert.strictEqual(sub.available, false);
     assert.ok(sub.reason.includes("unreadable"));
   });
 
   describe("getSubscription()", () => {
     it("normalizes windows, extra usage, window tokens, and by-model", async () => {
-      const source = createHeadroomSource({ statsPath, nowFn: () => POLLED_MS + 5 * MINUTE });
+      const source = createPlanUsageSource({ statsPath, nowFn: () => POLLED_MS + 5 * MINUTE });
       const sub = await source.getSubscription();
 
       assert.strictEqual(sub.available, true);
@@ -127,13 +138,13 @@ describe("usage-sources/headroom", () => {
     });
 
     it("flags fresh data as not stale and >30min-old data as stale", async () => {
-      const fresh = await createHeadroomSource({
+      const fresh = await createPlanUsageSource({
         statsPath,
         nowFn: () => POLLED_MS + 29 * MINUTE,
       }).getSubscription();
       assert.strictEqual(fresh.stale, false);
 
-      const stale = await createHeadroomSource({
+      const stale = await createPlanUsageSource({
         statsPath,
         nowFn: () => POLLED_MS + 31 * MINUTE,
       }).getSubscription();
@@ -143,14 +154,14 @@ describe("usage-sources/headroom", () => {
     it("treats a missing/unparseable polled_at as stale", async () => {
       const noPoll = path.join(tmpDir, "no-poll.json");
       fs.writeFileSync(noPoll, JSON.stringify({ latest: {}, window_tokens: {} }));
-      const sub = await createHeadroomSource({ statsPath: noPoll }).getSubscription();
+      const sub = await createPlanUsageSource({ statsPath: noPoll }).getSubscription();
       assert.strictEqual(sub.available, true);
       assert.strictEqual(sub.stale, true);
       assert.strictEqual(sub.polledAt, null);
     });
 
     it("NEVER returns the token_prefix key material", async () => {
-      const sub = await createHeadroomSource({ statsPath }).getSubscription();
+      const sub = await createPlanUsageSource({ statsPath }).getSubscription();
       const serialized = JSON.stringify(sub);
       assert.ok(!serialized.includes("sk-ant"), "token prefix leaked into output");
       assert.ok(!serialized.includes("token_prefix"));
@@ -159,7 +170,7 @@ describe("usage-sources/headroom", () => {
     it("tolerates missing sections with nulls instead of throwing", async () => {
       const sparse = path.join(tmpDir, "sparse.json");
       fs.writeFileSync(sparse, JSON.stringify({ latest: { polled_at: POLLED_AT } }));
-      const sub = await createHeadroomSource({
+      const sub = await createPlanUsageSource({
         statsPath: sparse,
         nowFn: () => POLLED_MS,
       }).getSubscription();
@@ -168,6 +179,71 @@ describe("usage-sources/headroom", () => {
       assert.strictEqual(sub.extraUsage, null);
       assert.deepStrictEqual(sub.byModel, {});
       assert.strictEqual(sub.windowTokens.totalRaw, 0);
+    });
+  });
+
+  describe("getCodex()", () => {
+    it("normalizes the codex block snake_case -> camelCase", async () => {
+      const codex = await createPlanUsageSource({
+        statsPath,
+        nowFn: () => POLLED_MS,
+      }).getCodex();
+
+      assert.strictEqual(codex.available, true);
+      assert.strictEqual(codex.planType, "prolite");
+      assert.deepStrictEqual(codex.fiveHour, {
+        utilizationPct: 42,
+        resetsAt: "2026-06-10T19:30:00Z",
+      });
+      assert.strictEqual(codex.sevenDay.utilizationPct, 18);
+      assert.deepStrictEqual(codex.credits, {
+        balance: 12.5,
+        hasCredits: true,
+        unlimited: false,
+      });
+      assert.strictEqual(codex.polledAt, POLLED_AT);
+      assert.strictEqual(codex.stale, false);
+    });
+
+    it("degrades gracefully when the codex block is absent", async () => {
+      const noCodex = path.join(tmpDir, "no-codex.json");
+      fs.writeFileSync(noCodex, JSON.stringify({ latest: { polled_at: POLLED_AT } }));
+      const codex = await createPlanUsageSource({ statsPath: noCodex }).getCodex();
+      assert.strictEqual(codex.available, false);
+      assert.ok(codex.reason.includes("no codex block"));
+    });
+
+    it("reports unavailable when the codex poller flags available:false", async () => {
+      const off = path.join(tmpDir, "codex-off.json");
+      fs.writeFileSync(off, JSON.stringify({ codex: { available: false } }));
+      const codex = await createPlanUsageSource({ statsPath: off }).getCodex();
+      assert.strictEqual(codex.available, false);
+    });
+
+    it("honors an explicit stale flag and falls back to age otherwise", async () => {
+      const explicit = await createPlanUsageSource({
+        statsPath,
+        nowFn: () => POLLED_MS + 31 * MINUTE, // old, but block says stale:false
+      }).getCodex();
+      assert.strictEqual(explicit.stale, false);
+
+      const noFlag = path.join(tmpDir, "codex-noflag.json");
+      fs.writeFileSync(
+        noFlag,
+        JSON.stringify({ codex: { available: true, polled_at: POLLED_AT } }),
+      );
+      const derived = await createPlanUsageSource({
+        statsPath: noFlag,
+        nowFn: () => POLLED_MS + 31 * MINUTE,
+      }).getCodex();
+      assert.strictEqual(derived.stale, true);
+    });
+
+    it("returns unavailable for a missing file without throwing", async () => {
+      const codex = await createPlanUsageSource({
+        statsPath: path.join(tmpDir, "nope-codex.json"),
+      }).getCodex();
+      assert.strictEqual(codex.available, false);
     });
   });
 });

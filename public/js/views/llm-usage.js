@@ -9,7 +9,7 @@
  *                               routing, ...future adapter keys }
  *  - GET /api/routing-stats → { total_requests, by_model, avg_latency_ms }
  *
- * Unknown top-level keys in /api/llm-usage (e.g. headroom, nine-router,
+ * Unknown top-level keys in /api/llm-usage (e.g. plan-usage, nine-router,
  * openrouter adapters built in parallel) are rendered as generic cards and
  * never break the view when absent or oddly shaped.
  *
@@ -37,7 +37,8 @@ const KNOWN_KEYS = new Set([
   "needsSync",
   // Sources with dedicated sections — never double-render generically.
   "subscription",
-  "headroom",
+  "planUsage",
+  "plan-usage",
   "claudeCode",
   "claude-code",
   "nineRouter",
@@ -234,7 +235,7 @@ function renderUsage(els, data) {
 }
 
 /**
- * Render any unknown top-level usage sources (future adapters: headroom,
+ * Render any unknown top-level usage sources (future adapters: plan-usage,
  * nine-router, openrouter, ...) as generic key/value cards.
  */
 function renderExtraSources(els, data) {

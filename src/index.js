@@ -609,12 +609,21 @@ const cronRoutes = createCronRoutes({
 });
 
 // Usage sources — read-only adapters over Claude Code / Codex / 9Router /
-// Headroom / OpenRouter usage data (paths configurable via fleet.usage).
+// plan-usage poller / OpenRouter usage data (paths configurable via fleet.usage).
+//
+// Back-compat: the plan-usage stats path was historically named `headroomStats`
+// (under both fleet.usage and fleet.cortex). Existing dashboard.local.json files
+// may still carry that key, so we honor either name (planUsageStats preferred).
+const planUsageStats =
+  CONFIG.fleet.usage.planUsageStats ||
+  CONFIG.fleet.usage.headroomStats ||
+  CONFIG.fleet.cortex.planUsageStats ||
+  CONFIG.fleet.cortex.headroomStats;
 const usageSources = createUsageSources({
   claudeProjectsDir: CONFIG.fleet.usage.claudeProjectsDir,
   codexDir: CONFIG.fleet.usage.codexDir,
   nineRouterDb: CONFIG.fleet.usage.nineRouterDb,
-  headroomStats: CONFIG.fleet.usage.headroomStats || CONFIG.fleet.cortex.headroomStats,
+  planUsageStats,
   openrouterKey: process.env.OPENROUTER_API_KEY || CONFIG.fleet.usage.openrouterKey,
 });
 
@@ -626,20 +635,19 @@ const usageSources = createUsageSources({
 fleet.setUsageProvider(createUsageProvider({ usageSources }));
 
 // Subscription / rate-limit alerting source (src/subscription-limit-watcher.js):
-// flatten the Headroom subscription windows (Claude 5h / 7d / Sonnet sub-limit)
+// flatten the plan-usage subscription windows (Claude 5h / 7d / Sonnet sub-limit)
 // into plan-utilization rows so the watcher can alert near plan caps. The
-// `stale` flag is propagated truthfully — when the Headroom snapshot is stale
-// (see the known container-mount issue keeping it frozen) the watcher SKIPS the
-// window rather than firing a false critical off old data. No-op unless
-// fleet.subscriptionLimits.enabled is true.
+// `stale` flag is propagated truthfully — when the plan-usage snapshot is stale
+// the watcher SKIPS the window rather than firing a false critical off old data.
+// No-op unless fleet.subscriptionLimits.enabled is true.
 fleet.setSubscriptionWindowsProvider(async () => {
-  const headroom = usageSources.sources && usageSources.sources.headroom;
-  if (!headroom || !headroom.available || typeof headroom.getSubscription !== "function") {
+  const planUsage = usageSources.sources && usageSources.sources.planUsage;
+  if (!planUsage || !planUsage.available || typeof planUsage.getSubscription !== "function") {
     return [];
   }
   let sub;
   try {
-    sub = await headroom.getSubscription();
+    sub = await planUsage.getSubscription();
   } catch {
     return [];
   }

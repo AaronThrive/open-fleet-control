@@ -198,7 +198,7 @@ describe("tokens view row builders", () => {
           available: true,
           usage: { totals: { requests: 7, totalTokens: 1950, cost: 0.53 } },
         },
-        headroom: { available: true, stale: true, windowTokens: { totalRaw: 5000 } },
+        planUsage: { available: true, stale: true, windowTokens: { totalRaw: 5000 } },
         openrouter: { available: true, credits: { totalUsage: 42.5, remaining: 7.5 } },
       });
 
@@ -211,13 +211,13 @@ describe("tokens view row builders", () => {
       assert.strictEqual(byId.codex.tokens, null);
       assert.strictEqual(byId["nine-router"].cost, 0.53);
       assert.strictEqual(byId["nine-router"].costKind, "reported");
-      assert.strictEqual(byId.headroom.status, "stale");
-      // Headroom is a plan-quota observation, not a token-cost source: its
+      assert.strictEqual(byId.planUsage.status, "stale");
+      // Plan usage is a plan-quota observation, not a token-cost source: its
       // tokens/cost columns are nulled and the weighted figure moves to the
       // note so it's never read as a comparable token count or summed as cost.
-      assert.strictEqual(byId.headroom.tokens, null);
-      assert.ok(byId.headroom.note.includes("plan-quota"));
-      assert.ok(byId.headroom.note.includes("5.0k"));
+      assert.strictEqual(byId.planUsage.tokens, null);
+      assert.ok(byId.planUsage.note.includes("plan-quota"));
+      assert.ok(byId.planUsage.note.includes("5.0k"));
       assert.strictEqual(byId.openrouter.cost, 42.5);
       assert.strictEqual(byId.openrouter.costKind, "lifetime");
       assert.ok(byId.openrouter.note.includes("7.50"));
