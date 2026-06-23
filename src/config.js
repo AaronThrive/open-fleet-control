@@ -595,14 +595,12 @@ function buildFleetConfig(fileFleet) {
 
   // Usage source paths get the same ~/$HOME expansion as cortex paths
   // (openrouterKey is a secret, not a path — leave it untouched). The legacy
-  // `headroomStats` key is expanded too so back-compat configs still resolve ~.
   const resolvedUsage = { ...fleet.usage };
   for (const key of [
     "claudeProjectsDir",
     "codexDir",
     "nineRouterDb",
     "planUsageStats",
-    "headroomStats",
   ]) {
     if (typeof resolvedUsage[key] === "string" && resolvedUsage[key].length > 0) {
       resolvedUsage[key] = expandPath(resolvedUsage[key]);

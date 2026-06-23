@@ -159,7 +159,7 @@
       }
     },
     "usage": {
-      "_comment": "LLM usage source paths (supports ~ and $HOME). planUsageStats empty = reuse fleet.cortex.planUsageStats; default ~/.local/state/openclaw-quota/subscription_state.json. The legacy headroomStats key is still honored for back-compat. openrouterKey: OPENROUTER_API_KEY env var takes precedence.",
+      "_comment": "LLM usage source paths (supports ~ and $HOME). planUsageStats empty = reuse fleet.cortex.planUsageStats; default ~/.local/state/openclaw-quota/subscription_state.json (written by the standalone quota-poller). openrouterKey: OPENROUTER_API_KEY env var takes precedence.",
       "claudeProjectsDir": "~/.claude/projects",
       "codexDir": "~/.codex",
       "nineRouterDb": "~/.openclaw/9router/data/db/data.sqlite",

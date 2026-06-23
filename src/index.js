@@ -610,15 +610,10 @@ const cronRoutes = createCronRoutes({
 
 // Usage sources — read-only adapters over Claude Code / Codex / 9Router /
 // plan-usage poller / OpenRouter usage data (paths configurable via fleet.usage).
-//
-// Back-compat: the plan-usage stats path was historically named `headroomStats`
-// (under both fleet.usage and fleet.cortex). Existing dashboard.local.json files
-// may still carry that key, so we honor either name (planUsageStats preferred).
+// The plan-usage gauges read the file written by the standalone quota-poller
+// (~/.local/state/openclaw-quota/subscription_state.json).
 const planUsageStats =
-  CONFIG.fleet.usage.planUsageStats ||
-  CONFIG.fleet.usage.headroomStats ||
-  CONFIG.fleet.cortex.planUsageStats ||
-  CONFIG.fleet.cortex.headroomStats;
+  CONFIG.fleet.usage.planUsageStats || CONFIG.fleet.cortex.planUsageStats;
 const usageSources = createUsageSources({
   claudeProjectsDir: CONFIG.fleet.usage.claudeProjectsDir,
   codexDir: CONFIG.fleet.usage.codexDir,
