@@ -24,6 +24,49 @@ const { execFile } = require("child_process");
 const CLI_CACHE_TTL_MS = 60000;
 const CLI_TIMEOUT_MS = 30000;
 
+// ---------------------------------------------------------------------------
+// Live last-run overlay. The `cron list --json` snapshot's state.lastRunAtMs
+// lags badly (a job running every 30 min can show a days-old timestamp). The
+// cron-run poller (src/cron-log.js) observes the REAL last run every couple of
+// minutes; fleet.js wires its accessor in here so getCronJobs can overlay the
+// fresher value. Defaults to a no-op until injected — getCronJobs works fine
+// without the poller (it just sees the lagging snapshot, as before).
+// ---------------------------------------------------------------------------
+let latestRunSource = null; // (jobId) => { lastRunAtMs, lastStatus } | null
+
+/**
+ * Inject the poller's per-job latest-run accessor. Called once by fleet.js with
+ * the cron-log instance's getLatestRun. Passing null clears it.
+ * @param {function|null} fn - (jobId:string) => {lastRunAtMs, lastStatus}|null
+ */
+function setLatestRunSource(fn) {
+  latestRunSource = typeof fn === "function" ? fn : null;
+}
+
+/**
+ * Overlay the poller's fresher last-run onto a mapped job when it is NEWER than
+ * the snapshot's lastRunAtMs (or the snapshot has none). Returns a NEW job — the
+ * input is never mutated. The single missing join between the live poll path and
+ * the table.
+ */
+function overlayLatestRun(job) {
+  if (!latestRunSource || !job || !job.id) return job;
+  let latest = null;
+  try {
+    latest = latestRunSource(job.id);
+  } catch {
+    return job; // a bad source must never break the table
+  }
+  if (!latest || !Number.isFinite(latest.lastRunAtMs)) return job;
+  const snapshotMs = Number.isFinite(job.lastRunAtMs) ? job.lastRunAtMs : null;
+  if (snapshotMs !== null && snapshotMs >= latest.lastRunAtMs) return job;
+  return {
+    ...job,
+    lastRunAtMs: latest.lastRunAtMs,
+    lastStatus: latest.lastStatus ?? job.lastStatus ?? null,
+  };
+}
+
 // Convert cron expression to human-readable text
 function cronToHuman(expr) {
   if (!expr || expr === "—") return null;
@@ -313,6 +356,119 @@ function hostCronLastRunMs(command) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Real host last-fired from the system journal. The mtime heuristic above only
+// works when a job redirects to a log under $HOME; many do not. The cron daemon
+// logs every execution to the journal, e.g.:
+//   Jun 24 16:10:01 oc-bot-1 CRON[3421306]: (broclaw2) CMD (<full command>)
+// We read a bounded window once per getCronJobs() call, parse each CMD line to
+// epoch ms, and match the newest line whose CMD contains a host job's command.
+// Dependency-free, never throws, bounded window + reverse scan for the newest
+// match. Falls back to hostCronLastRunMs (log mtime) when the journal is
+// unavailable or yields no match — e.g. if systemd hardening blocks journalctl.
+// ---------------------------------------------------------------------------
+
+const HOST_JOURNAL_SINCE = "7 days ago";
+const HOST_JOURNAL_TIMEOUT_MS = 5000;
+const HOST_JOURNAL_MAX_BUFFER = 16 * 1024 * 1024;
+// `MMM D HH:MM:SS host CRON[pid]: (user) CMD (the command)` — capture the
+// leading timestamp and the parenthesized command body.
+const CRON_JOURNAL_LINE_RE = /^(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s.*\bCMD\s*\((.*)\)\s*$/;
+
+const MONTHS = {
+  Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+  Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+};
+
+// Parse a syslog-style timestamp (`Jun 24 16:10:01`, no year) to epoch ms,
+// assuming the current year and rolling back a year when that lands in the
+// future (handles a December log read in early January). Returns null on any
+// parse failure — never throws.
+function parseCronJournalTs(stamp, nowMs) {
+  const m = String(stamp || "").match(/^(\w{3})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})$/);
+  if (!m) return null;
+  const month = MONTHS[m[1]];
+  if (month === undefined) return null;
+  const day = parseInt(m[2], 10);
+  const hour = parseInt(m[3], 10);
+  const min = parseInt(m[4], 10);
+  const sec = parseInt(m[5], 10);
+  const now = new Date(nowMs);
+  let candidate = new Date(now.getFullYear(), month, day, hour, min, sec).getTime();
+  // A timestamp comfortably in the future means it belongs to the prior year.
+  if (candidate > nowMs + 24 * 60 * 60 * 1000) {
+    candidate = new Date(now.getFullYear() - 1, month, day, hour, min, sec).getTime();
+  }
+  return Number.isFinite(candidate) ? candidate : null;
+}
+
+// Default journal reader: one bounded `journalctl _COMM=cron` read. Returns the
+// raw stdout, or "" when journalctl is unavailable / blocked / empty.
+function defaultCronJournalReader() {
+  const { execFileSync } = require("child_process");
+  try {
+    return execFileSync(
+      "journalctl",
+      ["_COMM=cron", "--since", HOST_JOURNAL_SINCE, "--no-pager"],
+      {
+        encoding: "utf8",
+        timeout: HOST_JOURNAL_TIMEOUT_MS,
+        maxBuffer: HOST_JOURNAL_MAX_BUFFER,
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+  } catch {
+    // journalctl missing, permission denied (systemd hardening), or timeout.
+    return "";
+  }
+}
+
+let cronJournalReader = defaultCronJournalReader;
+
+// Parse the journal stdout into [{ cmd, ts }] in file order (oldest-first, as
+// journalctl prints chronologically). Never throws; unparseable lines drop out.
+function parseCronJournal(raw, nowMs) {
+  const out = [];
+  if (!raw || typeof raw !== "string") return out;
+  const now = Number.isFinite(nowMs) ? nowMs : Date.now();
+  for (const line of raw.split("\n")) {
+    const m = line.match(CRON_JOURNAL_LINE_RE);
+    if (!m) continue;
+    const ts = parseCronJournalTs(m[1], now);
+    if (ts === null) continue;
+    out.push({ cmd: m[2], ts });
+  }
+  return out;
+}
+
+// Read + parse the journal once. Returns [] (not null) on any failure so the
+// caller can always iterate. The reader itself swallows errors; this is the
+// single shell-out per getCronJobs() call.
+function readCronJournal(nowMs) {
+  let raw = "";
+  try {
+    raw = cronJournalReader() || "";
+  } catch {
+    return [];
+  }
+  return parseCronJournal(raw, nowMs);
+}
+
+// Newest journal entry whose CMD contains this host job's command string, as
+// epoch ms — or null when no entry matches. Reverse-scans the parsed (oldest-
+// first) entries so the first containment hit is the most recent run.
+function journalLastRunMs(command, journal) {
+  const needle = String(command || "").trim();
+  if (!needle || !Array.isArray(journal) || journal.length === 0) return null;
+  for (let i = journal.length - 1; i >= 0; i--) {
+    const entry = journal[i];
+    if (entry && typeof entry.cmd === "string" && entry.cmd.includes(needle)) {
+      return Number.isFinite(entry.ts) ? entry.ts : null;
+    }
+  }
+  return null;
+}
+
 // Derive a readable name from a cron command line. Picks the basename of the
 // first path-like token (skipping leading `VAR=val` env assignments), strips a
 // common script extension, and falls back to the first token or a truncated
@@ -340,7 +496,10 @@ function hostCronName(command) {
 // Map a single raw host crontab line into a job record matching the
 // openclaw/hermes shape. Returns null for lines that are not real jobs
 // (blank, comment, or `VAR=value` environment assignments).
-function mapHostCronLine(line, index, node) {
+//
+// `journal` is the once-per-call parsed cron journal (see readCronJournal);
+// the real last-fired comes from there, falling back to the redirect-log mtime.
+function mapHostCronLine(line, index, node, journal) {
   const trimmed = String(line || "").trim();
   if (!trimmed || trimmed.startsWith("#")) return null;
 
@@ -357,11 +516,13 @@ function mapHostCronLine(line, index, node) {
   // Compute the next fire time from the cron expression (host crontab carries
   // no next-run of its own) so host jobs reach parity with OpenClaw/Hermes.
   const nextRunAtMs = cronNextRunMs(schedule, Date.now());
-  // Best-effort last-fired from the redirect log's mtime (host cron tracks no
-  // run history; exit status is genuinely unknowable, so lastStatus stays null
-  // and the UI labels host jobs "host cron — not tracked" rather than implying
-  // they never ran).
-  const lastRunAtMs = hostCronLastRunMs(command);
+  // Real last-fired from the system journal (the cron daemon logs every run),
+  // falling back to the redirect log's mtime when the journal is unavailable
+  // (e.g. systemd hardening blocks journalctl) or carries no matching line.
+  // Exit status is still unknowable from either source, so lastStatus stays
+  // null and the UI labels host jobs "host cron · last fired <date>" rather
+  // than implying they never ran.
+  const lastRunAtMs = journalLastRunMs(command, journal) ?? hostCronLastRunMs(command);
 
   return {
     id: `host-${index}`,
@@ -401,6 +562,8 @@ function defaultHostCrontabReader() {
 let hostCrontabReader = defaultHostCrontabReader;
 
 // Parse the host crontab into mapped job records. Defensive: never throws.
+// Reads the cron journal ONCE here (not per-job) and threads it into each line
+// mapper so real last-fired times are resolved with a single shell-out.
 function getHostCronJobs(node) {
   let raw = "";
   try {
@@ -408,9 +571,10 @@ function getHostCronJobs(node) {
   } catch {
     return [];
   }
+  const journal = readCronJournal(Date.now());
   return String(raw)
     .split("\n")
-    .map((line, i) => mapHostCronLine(line, i, node))
+    .map((line, i) => mapHostCronLine(line, i, node, journal))
     .filter((job) => job !== null);
 }
 
@@ -507,7 +671,10 @@ function getCronJobs(getOpenClawDir, opts = {}) {
 
   let openclawJobs = [];
   try {
-    openclawJobs = getOpenClawRawJobs(getOpenClawDir).map((j) => mapOpenClawJob(j, node));
+    openclawJobs = getOpenClawRawJobs(getOpenClawDir)
+      .map((j) => mapOpenClawJob(j, node))
+      // Overlay the poller's live last-run on top of the lagging CLI snapshot.
+      .map(overlayLatestRun);
   } catch (e) {
     console.error("Failed to get cron:", e.message);
   }
@@ -551,11 +718,15 @@ function forceCliRefresh() {
  * @param {object} [options]
  * @param {function} [options.cliRunner] - replacement async runner returning CLI stdout
  * @param {function} [options.hostCrontabReader] - replacement sync reader returning `crontab -l` stdout
+ * @param {function} [options.cronJournalReader] - replacement sync reader returning `journalctl` stdout
+ * @param {function} [options.latestRunSource] - replacement poller last-run accessor
  */
 function _resetForTesting(options = {}) {
   cliCache = { rawJobs: null, fetchedAt: 0, refreshing: false, promise: null };
   cliRunner = options.cliRunner || defaultCliRunner;
   hostCrontabReader = options.hostCrontabReader || defaultHostCrontabReader;
+  cronJournalReader = options.cronJournalReader || defaultCronJournalReader;
+  latestRunSource = typeof options.latestRunSource === "function" ? options.latestRunSource : null;
 }
 
 /** Await any in-flight background CLI refresh (tests only). */
@@ -567,6 +738,8 @@ module.exports = {
   cronToHuman,
   getCronJobs,
   forceCliRefresh,
+  // Inject the cron-run poller's live last-run accessor (wired by src/fleet.js).
+  setLatestRunSource,
   _resetForTesting,
   _waitForCliRefreshForTesting,
   // Exported for unit tests — the host-crontab next-run calculator + mapper.
@@ -574,4 +747,8 @@ module.exports = {
   cronNextRunMs,
   hostCronLastRunMs,
   mapHostCronLine,
+  // Exported for unit tests — the journal-backed host last-fired resolver.
+  parseCronJournal,
+  parseCronJournalTs,
+  journalLastRunMs,
 };

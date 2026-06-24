@@ -94,6 +94,57 @@
       color: var(--accent);
     }
 
+    /* ---- Toolbar (clear-done + date filter) ---- */
+    .kb-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .kb-toolbar-filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .kb-toolbar-spacer {
+      flex: 1 1 auto;
+    }
+    .kb-date-field {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .kb-date-field label {
+      font-size: 0.68rem;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .kb-date-field input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.78rem;
+      padding: 5px 8px;
+      font-family: inherit;
+    }
+    .kb-toolbar-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-muted);
+      font-size: 0.74rem;
+      font-weight: 600;
+      padding: 6px 12px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .kb-toolbar-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
     /* ---- Inline new-task form ---- */
     .kb-newform {
       display: flex;
@@ -186,6 +237,8 @@
       box-shadow: 0 0 14px rgba(var(--accent-rgb), 0.55);
     }
     .kb-add-btn:focus-visible,
+    .kb-toolbar-btn:focus-visible,
+    .kb-date-field input:focus-visible,
     .kb-newform-actions button:focus-visible,
     .kb-drawer-close:focus-visible,
     .kb-comment-submit:focus-visible,
@@ -788,6 +841,28 @@
 
     <div class="kb-legend" id="kb-legend" hidden></div>
     <div class="kb-fed-notice" id="kb-fed-notice" hidden></div>
+
+    <div class="kb-toolbar" id="kb-toolbar">
+      <div class="kb-toolbar-filters">
+        <div class="kb-date-field">
+          <label for="kb-filter-since" data-i18n="views.kanban.filterSince">From</label>
+          <input type="date" id="kb-filter-since" />
+        </div>
+        <div class="kb-date-field">
+          <label for="kb-filter-until" data-i18n="views.kanban.filterUntil">To</label>
+          <input type="date" id="kb-filter-until" />
+        </div>
+      </div>
+      <div class="kb-toolbar-spacer"></div>
+      <button
+        type="button"
+        class="kb-toolbar-btn"
+        id="kb-clear-done"
+        data-i18n="views.kanban.clearDone"
+      >
+        Clear done
+      </button>
+    </div>
 
     <div class="kb-loading" id="kb-loading" data-i18n="views.kanban.loading">Loading board...</div>
 

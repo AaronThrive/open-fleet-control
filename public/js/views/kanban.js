@@ -71,6 +71,7 @@ const state = {
   drawerReturnTaskId: null, // card to refocus when the drawer closes
   dispatch: null, // GET /api/fleet/kanban/dispatch status ({available, ...})
   dispatchModalTaskId: null, // card pending confirmation in the dispatch modal
+  dateFilter: { since: null, until: null }, // client-side card date range (ISO yyyy-mm-dd | null)
   refs: {},
 };
 
@@ -174,10 +175,26 @@ function cardEl(taskId) {
   );
 }
 
+/**
+ * Whether a task falls inside the active date range (on updated_at || created_at).
+ * No range set → always true. The `until` bound is inclusive of the whole day.
+ */
+function inDateRange(task) {
+  const { since, until } = state.dateFilter;
+  if (!since && !until) return true;
+  const stamp = task.updated_at || task.created_at;
+  if (!stamp) return false;
+  const ms = Date.parse(stamp);
+  if (Number.isNaN(ms)) return false;
+  if (since && ms < Date.parse(`${since}T00:00:00`)) return false;
+  if (until && ms > Date.parse(`${until}T23:59:59.999`)) return false;
+  return true;
+}
+
 /** Tasks of one column, in render order (shared by renderBoard + keyboard moves). */
 function sortedColumn(status) {
   return state.tasks
-    .filter((t) => t.status === status)
+    .filter((t) => t.status === status && inDateRange(t))
     .sort((a, b) => a.order - b.order || (a.created_at < b.created_at ? -1 : 1));
 }
 
@@ -340,7 +357,7 @@ function originRank(key) {
 /** Remote tasks of one column: legend order first, then remote column order. */
 function remoteSortedColumn(status) {
   return state.remoteTasks
-    .filter((task) => task.status === status)
+    .filter((task) => task.status === status && inDateRange(task))
     .sort((a, b) => originRank(a.origin) - originRank(b.origin) || (a.order ?? 0) - (b.order ?? 0));
 }
 
@@ -687,8 +704,8 @@ function renderCounts() {
     const colEl = state.refs.board.querySelector(`.kb-col[data-status="${col.status}"]`);
     if (!colEl) continue;
     const n =
-      state.tasks.filter((t) => t.status === col.status).length +
-      state.remoteTasks.filter((t) => t.status === col.status).length;
+      state.tasks.filter((t) => t.status === col.status && inDateRange(t)).length +
+      state.remoteTasks.filter((t) => t.status === col.status && inDateRange(t)).length;
     colEl.querySelector(".kb-count").textContent = String(n);
   }
 }
@@ -1590,6 +1607,31 @@ async function deleteOpenTask() {
   }
 }
 
+async function clearDoneTasks() {
+  const confirmText = t(
+    "views.kanban.confirmClearDone",
+    {},
+    "Clear all done tasks? This removes every card in the Done column.",
+  );
+  if (!window.confirm(confirmText)) return;
+  try {
+    const result = await api("POST", "/clear-done");
+    const count = result?.count ?? 0;
+    await refreshBoard();
+    announce(
+      t(
+        "views.kanban.clearDoneAnnounce",
+        { count },
+        "Done column cleared ({count} removed)",
+      ),
+    );
+  } catch (err) {
+    toast(
+      t("views.kanban.clearDoneFailed", { message: err.message }, "Clear done failed: {message}"),
+    );
+  }
+}
+
 function bindDrawerEvents() {
   const { drawer, backdrop } = state.refs;
   drawer.querySelector("#kb-drawer-close").addEventListener("click", closeDrawer);
@@ -1767,6 +1809,9 @@ export function init(containerEl) {
     fedNotice: containerEl.querySelector("#kb-fed-notice"),
     dispatchModal: containerEl.querySelector("#kb-dispatch-modal"),
     dispatchBackdrop: containerEl.querySelector("#kb-dispatch-backdrop"),
+    clearDoneBtn: containerEl.querySelector("#kb-clear-done"),
+    filterSince: containerEl.querySelector("#kb-filter-since"),
+    filterUntil: containerEl.querySelector("#kb-filter-until"),
   };
   if (!state.refs.board) {
     console.error("[Kanban] Partial markup missing #kanban-board");
@@ -1783,6 +1828,18 @@ export function init(containerEl) {
     state.refs.emptyState.hidden = true;
     state.refs.board.hidden = false;
     toggleNewForm("inbox", true);
+  });
+
+  // Toolbar: clear-done + date-range filter (client-side; state persists per visit).
+  state.dateFilter = { since: null, until: null };
+  state.refs.clearDoneBtn?.addEventListener("click", clearDoneTasks);
+  state.refs.filterSince?.addEventListener("change", () => {
+    state.dateFilter = { ...state.dateFilter, since: state.refs.filterSince.value || null };
+    renderBoard();
+  });
+  state.refs.filterUntil?.addEventListener("change", () => {
+    state.dateFilter = { ...state.dateFilter, until: state.refs.filterUntil.value || null };
+    renderBoard();
   });
 
   ensureEventSource();

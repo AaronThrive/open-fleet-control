@@ -130,7 +130,12 @@ function countFlapCycles(entries) {
  *            perDay: Array<{date: string, total: number, critical: number, warn: number, info: number}>,
  *            flaps: Array<{rule: string, node: string, cycles: number}>,
  *            topNodes: Array<{node: string, count: number}>,
- *            topRules: Array<{type: string, count: number}>}}
+ *            topRules: Array<{type: string, count: number}>,
+ *            distinctTypes: Array<string>}}
+ *
+ * `distinctTypes` is the sorted unique set of every `rec.type` across the FULL
+ * history (independent of the analytics window) — the authoritative list of
+ * alert types ever seen, used to drive the Type filter dropdown drift-free.
  */
 function computeAlertAnalytics(entries, { now = Date.now(), days = ANALYTICS_DEFAULT_DAYS } = {}) {
   const windowDays = clampAnalyticsDays(days);
@@ -154,8 +159,14 @@ function computeAlertAnalytics(entries, { now = Date.now(), days = ANALYTICS_DEF
   const inWindow = [];
   const nodeCounts = new Map();
   const ruleCounts = new Map();
+  // Every distinct type ever seen — across the FULL history, not just the
+  // window — so the Type filter never goes stale as new types appear.
+  const allTypes = new Set();
   for (const rec of Array.isArray(entries) ? entries : []) {
     if (!rec || typeof rec !== "object") continue;
+    if (typeof rec.type === "string" && rec.type.length > 0) {
+      allTypes.add(rec.type);
+    }
     if (!Number.isFinite(rec.ts) || rec.ts < since || rec.ts > reference) continue;
     inWindow.push(rec);
 
@@ -181,6 +192,7 @@ function computeAlertAnalytics(entries, { now = Date.now(), days = ANALYTICS_DEF
     flaps: countFlapCycles(inWindow),
     topNodes: topCounts(nodeCounts, "node", ANALYTICS_TOP_LIMIT),
     topRules: topCounts(ruleCounts, "type", ANALYTICS_TOP_LIMIT),
+    distinctTypes: [...allTypes].sort((a, b) => a.localeCompare(b)),
   };
 }
 

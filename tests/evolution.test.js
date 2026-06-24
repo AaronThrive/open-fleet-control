@@ -104,6 +104,50 @@ describe("evolution module", () => {
     });
   });
 
+  describe("content-level dedup", () => {
+    it("returns the existing lesson instead of appending a duplicate", () => {
+      const evolution = makeEvolution();
+      const first = evolution.addLesson({
+        title: "Always run the watchdog",
+        body: "Stale tasks hide failures.",
+        author: "a1",
+      });
+      // Same normalized title + body (extra whitespace/casing must not matter).
+      const second = evolution.addLesson({
+        title: "  Always Run The Watchdog ",
+        body: "Stale tasks   hide failures.",
+        author: "a2",
+      });
+
+      // No new id minted; the existing lesson is returned.
+      assert.strictEqual(second.id, first.id);
+
+      // Exactly ONE section in the ledger.
+      const lessons = evolution.listLessons();
+      assert.strictEqual(lessons.length, 1);
+      assert.strictEqual(lessons[0].id, first.id);
+
+      // Only one pending-queue entry.
+      assert.strictEqual(evolution.getState().pending.length, 1);
+    });
+
+    it("does not multiply the vault file or approved block on duplicate auto-approve", () => {
+      const vault = path.join(tmpDir, "vault", "lessons");
+      const evolution = makeEvolution({ lessonsVaultDir: vault });
+      evolution.setGate(false, "admin");
+
+      evolution.addLesson({ title: "Dup", body: "Same body." });
+      evolution.addLesson({ title: "Dup", body: "Same body." });
+      evolution.addLesson({ title: "dup", body: "same  body." }); // normalized-equal
+
+      // Single approved block, single vault file.
+      const approved = approvedContent();
+      assert.strictEqual((approved.match(/## \[LESSON\] /g) || []).length, 1);
+      const files = fs.readdirSync(vault).filter((f) => f.endsWith(".md"));
+      assert.strictEqual(files.length, 1);
+    });
+  });
+
   describe("approve()", () => {
     it("rewrites only the status line, preserving the rest byte-for-byte", () => {
       const evolution = makeEvolution();
@@ -199,8 +243,21 @@ describe("evolution module", () => {
     function vaultDir() {
       return path.join(tmpDir, "vault", "lessons");
     }
-    function vaultFile(id) {
-      return path.join(vaultDir(), `${id}.md`);
+    // The vault filename is keyed on a STABLE content slug (title+body hash),
+    // NOT the random lesson id — this is the dedup fix that makes re-mirroring
+    // the same lesson OVERWRITE rather than mint a new file. Tests resolve the
+    // single written markdown file by scanning the vault dir.
+    function vaultFiles() {
+      if (!fs.existsSync(vaultDir())) return [];
+      return fs
+        .readdirSync(vaultDir())
+        .filter((f) => f.endsWith(".md"))
+        .map((f) => path.join(vaultDir(), f));
+    }
+    function onlyVaultFile() {
+      const files = vaultFiles();
+      assert.strictEqual(files.length, 1, `expected exactly one vault file, got ${files.length}`);
+      return files[0];
     }
 
     it("writes a frontmatter markdown file when a lesson is approved via approve()", () => {
@@ -212,12 +269,14 @@ describe("evolution module", () => {
       });
 
       // Pending: nothing written to the vault yet.
-      assert.strictEqual(fs.existsSync(vaultFile(lesson.id)), false);
+      assert.strictEqual(vaultFiles().length, 0);
 
       evolution.approve(lesson.id, "reviewer");
 
-      const file = vaultFile(lesson.id);
+      const file = onlyVaultFile();
       assert.ok(fs.existsSync(file), "expected the vault markdown file to exist");
+      // Filename is content-keyed (stable slug), not the random id.
+      assert.ok(!path.basename(file).startsWith(lesson.id), "filename must not be keyed on the id");
       const content = fs.readFileSync(file, "utf8");
       const expected =
         "---\n" +
@@ -238,7 +297,7 @@ describe("evolution module", () => {
       const lesson = evolution.addLesson({ title: "Fast", body: "Ship it.", author: "bot" });
 
       assert.strictEqual(lesson.status, "approved");
-      const content = fs.readFileSync(vaultFile(lesson.id), "utf8");
+      const content = fs.readFileSync(onlyVaultFile(), "utf8");
       assert.ok(content.startsWith("---\ntype: lesson\n"));
       assert.ok(content.includes(`id: ${lesson.id}\n`));
       assert.ok(content.includes("title: Fast\n"));
