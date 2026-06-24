@@ -28,6 +28,13 @@ const fleetConfig = {
   logsDir: path.join(tmpDir, "logs"),
   briefsDir: path.join(tmpDir, "briefs"),
   workspaceDir: path.join(tmpDir, "workspace"),
+  // CRITICAL test isolation: FLEET_CONFIG_JSON deep-merges over config/
+  // dashboard.local.json, which sets evolution.lessonsVaultDir to the operator's
+  // LIVE Obsidian vault. Without this override, every approved/auto-approved
+  // lesson in these tests would mint a real markdown file in the live vault
+  // (this is exactly how the "Always run the watchdog" duplicate flood happened).
+  // Pin the vault mirror at a temp dir so tests never touch the real vault.
+  evolution: { lessonsVaultDir: path.join(tmpDir, "vault", "lessons") },
   // seed:[] is explicit for the same reason the alert sinks below are: FLEET_CONFIG_JSON
   // deep-merges over config/dashboard.local.json, so omitting it would inherit the
   // operator's live fleet.mesh.seed (extra auto-registered nodes) and break the count assert.

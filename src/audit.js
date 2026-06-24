@@ -6,7 +6,8 @@
  * header (the caller passes it through); it defaults to "anonymous".
  *
  * Allowed actions (the documented enum — anything else is rejected):
- *   task.create, task.move, task.update, task.delete, task.comment,
+ *   task.create, task.move, task.update, task.delete, task.clear_done,
+ *   task.comment,
  *   brief.write, brief.delete,
  *   lesson.add, lesson.approve, lesson.reject, gate.toggle,
  *   node.register, node.unregister,
@@ -35,6 +36,7 @@ const AUDIT_ACTIONS = [
   "task.move",
   "task.update",
   "task.delete",
+  "task.clear_done",
   "task.comment",
   "brief.write",
   "brief.delete",

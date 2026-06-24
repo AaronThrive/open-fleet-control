@@ -205,33 +205,28 @@ function buildRowActions(els, row) {
 /* Detail-list configuration                                           */
 /* ------------------------------------------------------------------ */
 
-function statusBadge(row) {
-  const status = row.lastStatus;
-  // Host crontab jobs keep no exit-status record, so "no runs yet" is wrong —
-  // they ARE firing. Show "host cron · last fired <date>" from the log mtime
-  // when known, otherwise "host cron — not tracked". Never "no runs yet".
-  if (!status && row.source === "host") {
-    const last = formatAbsolute(row.lastRunAtMs);
-    return el(
-      "span",
-      "cron-last-status host",
-      last
-        ? t("views.cron.hostLastFired", { when: last }, `host cron · last fired ${last}`)
-        : t("views.cron.hostNotTracked", {}, "host cron — not tracked"),
-    );
-  }
-  const cls = status === "ok" || status === "success" ? "ok" : status ? "error" : "unknown";
+// Last-fired cell: the ACTUAL last run date + time (overlaid from the live cron
+// poller for native jobs, from the system journal for host jobs), or "no runs
+// yet" when the job has genuinely never fired. Mirrors nextRunCell.
+function lastRunCell(row) {
+  const abs = formatAbsolute(row.lastRunAtMs);
   return el(
     "span",
-    `cron-last-status ${cls}`,
-    status ? status : t("views.cron.neverRan", {}, "no runs yet"),
+    "cron-lastrun",
+    abs || t("views.cron.neverRan", {}, "no runs yet"),
   );
 }
 
 // Plain text (no badge pill) — the source is already a top-level filter, so the
-// decorative badge is redundant noise.
+// decorative badge is redundant noise. Labels are explicit about where a job
+// runs: "Host" (system crontab) vs "Native (OpenClaw)" / "Native (Hermes)".
 function sourceCell(row) {
-  const label = row.source === "hermes" ? "Hermes" : row.source === "host" ? "Host" : "OpenClaw";
+  const label =
+    row.source === "hermes"
+      ? "Native (Hermes)"
+      : row.source === "host"
+        ? "Host"
+        : "Native (OpenClaw)";
   return el("span", "cron-source-text", label);
 }
 
@@ -316,10 +311,10 @@ function buildList(els) {
         render: nextRunCell,
       },
       {
-        key: "lastStatus",
-        label: t("views.cron.colLastStatus", {}, "Last status"),
+        key: "lastRunAtMs",
+        label: t("views.cron.colLastFired", {}, "Last fired"),
         sortable: true,
-        render: statusBadge,
+        render: lastRunCell,
       },
       { key: "agent", label: t("views.cron.colAgent", {}, "Agent"), sortable: true },
       { key: "node", label: t("views.cron.colNode", {}, "Node"), sortable: true },

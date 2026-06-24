@@ -24,10 +24,11 @@ const AUTO_REFRESH_MS = 60000;
 const SSE_REFRESH_DEBOUNCE_MS = 400;
 const SSE_URL = "/api/events";
 const NODE_RULES = ["nodeOffline", "nodeUnreachable"];
-// Canonical alert types known to be emitted across the fleet. The Type filter is
-// populated dynamically from the loaded data (so it always matches the Type
-// column), unioned with this stable baseline so common types stay selectable
-// even before any such alert is present in the current window.
+// Last-resort fallback baseline for the Type filter, used only for the first
+// paint before the backend analytics (analytics.distinctTypes — the authoritative
+// list of every type ever seen) loads. The dropdown is otherwise backend-driven
+// and unioned with the currently-loaded records, so it never drifts as new alert
+// types are added; this hardcoded list is no longer the source of truth.
 const CANONICAL_ALERT_TYPES = [
   "nodeOffline",
   "nodeUnreachable",
@@ -63,6 +64,7 @@ let eventSource = null; // module-level singleton, survives revisits
 let requestSeq = 0;
 let activeEls = null; // els of the current visit (used by SSE handler)
 let lastAlerts = []; // most recent server payload, kept for client-side re-filter
+let backendTypes = []; // analytics.distinctTypes — every type ever seen, backend-driven
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -288,10 +290,14 @@ function renderUnreadCount(els, alerts) {
 }
 
 /**
- * Rebuild the Type filter <option>s from the distinct `type` values present in
- * the loaded alerts, unioned with the canonical baseline set, so the picker
- * always matches the Type column. The leading "All types" default is preserved,
- * as is the current selection (even if it falls outside the rebuilt set).
+ * Rebuild the Type filter <option>s from the UNION of: the backend-driven
+ * `distinctTypes` (every type ever seen, from /api/fleet/alerts/analytics), the
+ * distinct `type` values present in the currently-loaded alerts, and the
+ * canonical baseline (a last-resort fallback that only matters before analytics
+ * loads on first paint). This keeps the picker drift-free — it always covers
+ * every type the history has ever recorded plus the live Type column. The
+ * leading "All types" default is preserved, as is the current selection (even if
+ * it falls outside the rebuilt set).
  */
 function syncTypeOptions(els, alerts) {
   const select = els.type;
@@ -299,9 +305,9 @@ function syncTypeOptions(els, alerts) {
   const fromData = alerts
     .map((a) => (typeof a.type === "string" ? a.type : ""))
     .filter((tp) => tp.length > 0);
-  const distinct = [...new Set([...CANONICAL_ALERT_TYPES, ...fromData])].sort((a, b) =>
-    a.localeCompare(b),
-  );
+  const distinct = [
+    ...new Set([...backendTypes, ...fromData, ...CANONICAL_ALERT_TYPES]),
+  ].sort((a, b) => a.localeCompare(b));
   // Keep the static first option (All types); rebuild the rest.
   const allOption = select.querySelector('option[value=""]');
   const options = [];
@@ -557,6 +563,12 @@ async function loadAnalytics(els) {
     if (!ok || !payload || !Array.isArray(payload.perDay)) {
       els.analytics.hidden = true;
       return;
+    }
+    // Capture the authoritative type list and refresh the Type filter so it
+    // reflects every type ever seen, not just the loaded window.
+    if (Array.isArray(payload.distinctTypes)) {
+      backendTypes = payload.distinctTypes.filter((tp) => typeof tp === "string" && tp.length > 0);
+      syncTypeOptions(els, lastAlerts);
     }
     renderAnalytics(els, payload);
   } catch (error) {

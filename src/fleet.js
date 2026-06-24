@@ -33,6 +33,7 @@ const { createDigest } = require("./digest");
 const { createDigestsStore } = require("./digests-store");
 const { createNtfyIngest } = require("./ntfy-ingest");
 const { createCronLog } = require("./cron-log");
+const { setLatestRunSource } = require("./cron");
 const { defaultSecrets } = require("./secrets");
 
 const CORTEX_SUMMARY_TTL_MS = 60000;
@@ -507,6 +508,15 @@ function createFleetRuntime({ config, broadcast }) {
           }),
       })
     : NOOP_POLLER;
+
+  // Overlay join: feed the cron-run poller's live last-run map into the cron
+  // module so getCronJobs() shows the REAL "Last fired" time instead of the
+  // lagging `cron list --json` snapshot. recordAlert (above) still drives the
+  // Alerts timeline; this is the SECOND consumer of the same observed runs.
+  // Only registered when the poller is actually running (it owns the map).
+  if (cronIngestEnabled && typeof cronLog.getLatestRun === "function") {
+    setLatestRunSource((jobId) => cronLog.getLatestRun(jobId));
+  }
 
   // ---------------------------------------------------------------------
   // Lifecycle

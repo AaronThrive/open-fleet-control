@@ -111,6 +111,36 @@ function parseLedger(content) {
 }
 
 /**
+ * Normalize a string for content-level dedup comparison: collapse internal
+ * whitespace runs to a single space, trim, and lowercase. Two lessons whose
+ * titles (and bodies) normalize to the same value are considered duplicates
+ * regardless of casing or incidental whitespace.
+ */
+function normalizeForDedup(value) {
+  return String(value == null ? "" : value)
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Stable, filesystem-safe slug derived from the dedup key (normalized
+ * title + body). Keying the vault filename on this — rather than the random
+ * lesson id — makes re-mirroring the same lesson OVERWRITE the existing file
+ * instead of minting a fresh one. A short hash suffix preserves uniqueness
+ * when the slugged prefix collides or is empty.
+ */
+function vaultSlug(title, body) {
+  const key = `${normalizeForDedup(title)}\n${normalizeForDedup(body)}`;
+  const hash = crypto.createHash("sha256").update(key, "utf8").digest("hex").slice(0, 12);
+  const prefix = normalizeForDedup(title)
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  return prefix ? `${prefix}-${hash}` : `lesson-${hash}`;
+}
+
+/**
  * Format a lesson as a ledger section (without leading separator).
  */
 function formatSection({ title, status, id, author, ts, body }) {
@@ -132,6 +162,33 @@ function appendBlock(filePath, block) {
     prefix = existing.endsWith("\n") ? "\n" : "\n\n";
   }
   atomicWriteFileSync(filePath, existing + prefix + block);
+}
+
+/**
+ * Append a lesson's content block to a merged markdown file, but ONLY if an
+ * identical block (same normalized title + body) is not already present.
+ * Idempotent: re-approving or re-recording the same lesson does not multiply
+ * entries in lessons_learned.approved.md.
+ */
+function appendApprovedBlockOnce(filePath, title, body) {
+  let existing = "";
+  try {
+    existing = fs.readFileSync(filePath, "utf8");
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+  }
+  const titleKey = normalizeForDedup(title);
+  const bodyKey = normalizeForDedup(body);
+  // The approved file uses a lighter "## [LESSON] <title>\n\n<body>" shape
+  // (no metadata lines), so compare on raw blocks split by the header.
+  const blocks = existing.split(/(?=^## \[LESSON\] )/m);
+  const duplicate = blocks.some((block) => {
+    const m = block.match(/^## \[LESSON\] ([^\n]*)\n+([\s\S]*)$/);
+    if (!m) return false;
+    return normalizeForDedup(m[1]) === titleKey && normalizeForDedup(m[2]) === bodyKey;
+  });
+  if (duplicate) return;
+  appendBlock(filePath, `## [LESSON] ${title}\n\n${body}\n`);
 }
 
 /**
@@ -190,7 +247,10 @@ function createEvolution({ workspaceDir, stateDir, onChange, getGateDefault, les
         `ts: ${lesson.ts}\n` +
         "status: approved\n" +
         "---\n\n";
-      const filePath = path.join(vaultDir, `${lesson.id}.md`);
+      // Key the filename on a STABLE slug/hash of the lesson content (title +
+      // body), NOT the random id. Re-mirroring the same lesson therefore
+      // OVERWRITES the existing file instead of creating a duplicate per call.
+      const filePath = path.join(vaultDir, `${vaultSlug(lesson.title, lesson.body)}.md`);
       fs.mkdirSync(vaultDir, { recursive: true });
       atomicWriteFileSync(filePath, frontmatter + lesson.body + "\n");
     } catch (e) {
@@ -284,6 +344,36 @@ function createEvolution({ workspaceDir, stateDir, onChange, getGateDefault, les
         : "unknown";
 
     const { sections } = readLedger();
+
+    // Content-level dedup: if a lesson with the same normalized title AND body
+    // already exists in the ledger, return it instead of minting a duplicate.
+    // Dedup key = normalize(title) + normalize(body). This is the guard that
+    // stops identical lessons from multiplying through the vault → gbrain pipe.
+    const incomingTitleKey = normalizeForDedup(title);
+    const incomingBodyKey = normalizeForDedup(body.replace(/\s+$/, ""));
+    const duplicate = sections.find(
+      (s) =>
+        !s.parseError &&
+        normalizeForDedup(s.title) === incomingTitleKey &&
+        normalizeForDedup(s.body) === incomingBodyKey,
+    );
+    if (duplicate) {
+      const existing = {
+        id: duplicate.id,
+        title: duplicate.title,
+        status: duplicate.status,
+        author: duplicate.author,
+        ts: duplicate.ts,
+        body: duplicate.body,
+      };
+      // Re-mirror so an already-approved duplicate stays in sync; mirrorToVault
+      // keys on the stable content slug, so this OVERWRITES rather than adds.
+      if (existing.status === "approved") {
+        mirrorToVault(existing);
+      }
+      return existing;
+    }
+
     const existingIds = new Set(sections.filter((s) => !s.parseError).map((s) => s.id));
     const state = loadState();
     const gate = state.gate;
@@ -300,7 +390,8 @@ function createEvolution({ workspaceDir, stateDir, onChange, getGateDefault, les
 
     if (lesson.status === "approved") {
       // Gate OFF: auto-approve — merge into the active approved file too.
-      appendBlock(approvedPath, `## [LESSON] ${lesson.title}\n\n${lesson.body}\n`);
+      // Guarded so an identical lesson never multiplies entries.
+      appendApprovedBlockOnce(approvedPath, lesson.title, lesson.body);
       mirrorToVault(lesson);
       saveState(state);
     } else {
@@ -363,7 +454,8 @@ function createEvolution({ workspaceDir, stateDir, onChange, getGateDefault, les
     atomicWriteFileSync(ledgerPath, newContent);
 
     if (toStatus === "approved") {
-      appendBlock(approvedPath, `## [LESSON] ${section.title}\n\n${section.body}\n`);
+      // Existence guard: do not re-append an identical block on re-approval.
+      appendApprovedBlockOnce(approvedPath, section.title, section.body);
       mirrorToVault({
         id,
         title: section.title,

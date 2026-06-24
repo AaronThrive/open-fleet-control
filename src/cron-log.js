@@ -254,6 +254,23 @@ function createCronLog(options = {}) {
   let lastPollAt = null;
   let lastError = null;
 
+  // ---------------------------------------------------------------------
+  // Latest-run overlay map — jobId -> { lastRunAtMs, lastStatus }. This is the
+  // REAL, freshly-polled last run per job, kept in memory so the cron table
+  // (src/cron.js getCronJobs) can overlay it on top of the lagging
+  // `cron list --json` state snapshot. Updated on every observed run, not just
+  // newly-emitted ones, so the overlay is correct even after a restart re-reads
+  // the persisted dedupe set (which suppresses re-emission but not observation).
+  // ---------------------------------------------------------------------
+  const latestRuns = new Map();
+
+  function recordLatest(jobId, ts, status) {
+    if (!jobId || !Number.isFinite(ts)) return;
+    const prev = latestRuns.get(jobId);
+    if (prev && Number.isFinite(prev.lastRunAtMs) && prev.lastRunAtMs >= ts) return;
+    latestRuns.set(jobId, { lastRunAtMs: ts, lastStatus: status || null });
+  }
+
   function emit(event) {
     if (typeof onRun !== "function") return;
     try {
@@ -296,6 +313,12 @@ function createCronLog(options = {}) {
     for (const run of extractRuns(parsed)) {
       // A run logs "started" then "finished" entries — only log completions.
       if (run.action && run.action !== "finished") continue;
+      // Overlay map: record the latest run for EVERY completion we observe,
+      // before the dedupe gate — a restart re-reads the persisted seen-set and
+      // would otherwise never repopulate the overlay for already-emitted runs.
+      const ts = toEpochMs(run.finishedAt, run.startedAt, run.ts);
+      const status = run.status === "error" ? "error" : "ok";
+      recordLatest(jobId, ts, status);
       const key = runDedupeKey(run, jobId);
       if (!key || knownRuns.has(key)) continue;
       const event = normalizeRun(run, job, key, container);
@@ -367,7 +390,28 @@ function createCronLog(options = {}) {
     return { running, lastPollAt, knownRuns: knownRuns.size, lastError };
   }
 
-  return { start, stop, getState, _pollOnce };
+  /**
+   * Latest observed run for one job, or null when none seen this process.
+   * @param {string} jobId
+   * @returns {{lastRunAtMs:number, lastStatus:(string|null)}|null}
+   */
+  function getLatestRun(jobId) {
+    if (!jobId) return null;
+    return latestRuns.get(jobId) || null;
+  }
+
+  /**
+   * Snapshot of the whole overlay map (jobId -> {lastRunAtMs, lastStatus}) as a
+   * plain object. A copy — callers must not mutate the internal map.
+   * @returns {Object<string, {lastRunAtMs:number, lastStatus:(string|null)}>}
+   */
+  function getLatestRuns() {
+    const out = {};
+    for (const [jobId, v] of latestRuns) out[jobId] = { ...v };
+    return out;
+  }
+
+  return { start, stop, getState, getLatestRun, getLatestRuns, _pollOnce };
 }
 
 module.exports = {

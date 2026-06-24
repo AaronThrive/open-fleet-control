@@ -880,6 +880,14 @@ function createFleetRoutes({
       );
       return true;
     }
+    if (segments[1] === "clear-done" && segments.length === 2 && method === "POST") {
+      const user = guardMutation(req, res);
+      if (!user) return true;
+      const count = fleet.kanban.clearDone(user);
+      recordAudit(user, "task.clear_done", null, { count });
+      json(res, 200, { success: true, count });
+      return true;
+    }
     if (segments[1] !== "tasks") return false;
 
     if (segments.length === 2 && method === "POST") {

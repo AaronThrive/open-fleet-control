@@ -332,6 +332,28 @@ function createKanban(options = {}) {
     return removed;
   }
 
+  /**
+   * Clear every task in the Done column in a single write.
+   *
+   * Hard-delete: matching tasks are filtered out (recoverable via the safe
+   * store's timestamped backups). One immutable store.write, one SSE event.
+   * @param {string} actor - who performed the action
+   * @returns {number} the number of tasks removed
+   */
+  function clearDone(actor) {
+    const board = readBoard();
+    const removed = board.tasks.filter((t) => t.status === schema.STATUS.DONE);
+    if (removed.length === 0) return 0;
+    store.write({
+      ...board,
+      updated_at: nowIso(),
+      tasks: board.tasks.filter((t) => t.status !== schema.STATUS.DONE),
+    });
+    for (const task of removed) staleTaskIds.delete(task.id);
+    emit("board.done_cleared", { actor, count: removed.length });
+    return removed.length;
+  }
+
   /** Replace the derived stale set (used by the watchdog; not persisted). */
   function setStaleTaskIds(ids) {
     staleTaskIds.clear();
@@ -363,6 +385,7 @@ function createKanban(options = {}) {
     claimTask,
     updateAttempt,
     deleteTask,
+    clearDone,
     setStaleTaskIds,
     watch,
   };
